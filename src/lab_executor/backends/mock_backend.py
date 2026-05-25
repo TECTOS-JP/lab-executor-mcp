@@ -1,11 +1,15 @@
-"""v1.11: MockBackend adapter (lab-executor-mcp 側 / PyVISA 不要)
+"""MockBackend — PyVISA 非依存 backend for lab-executor-mcp (v2.0)
 
-`InstrumentBackend` Protocol を満たす mock 実装。`MockVisaManager` を
-包み、benchmark / dry-run / CI で PyVISA 非依存の動作を可能にする。
+`InstrumentBackend` Protocol を満たす **lab-executor-mcp 同梱** の
+mock 実装。benchmark / dry-run / CI で実機 backend が不要な経路に使う。
 
-v2.0 では lab-executor-mcp 側に移送される (PyVISA 不要なため)。
+実機との通信が必要な場合は外部 backend package (`visa-mcp` 等) を
+別途 install して、`PyVisaBackend` を runtime に注入する。
 
-詳細: `docs/separation/notes.md`
+内部の `MockVisaManager` は v1.x からの legacy internal name で、
+public 名は `MockBackend`。利用者は `MockBackend` のみ意識すればよい。
+
+詳細: `docs/v2_migration.md` / `docs/backend_abstraction.md`
 """
 from __future__ import annotations
 from typing import TYPE_CHECKING

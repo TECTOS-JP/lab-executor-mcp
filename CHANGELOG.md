@@ -1,5 +1,80 @@
 # 変更履歴
 
+## v2.0.0-rc3 — rc2 レビュー応答 (`.gitattributes` LF / README CLI status / mock_backend docstring)
+
+合言葉: **「Windows CRLF artifact を消し、レビュアーの raw viewer の
+mis-report を二度と起こさせない」**
+
+rc2 external review の P0/P1 を反映した patch。public API / dependency /
+extension pack 形式すべて不変。
+
+### 調査結果 (rc2 P0: raw 改行問題)
+
+レビュアーは `pyproject.toml` 等を「1 行」と report していたが、
+**実体は LF / multi-line で正常**:
+
+| File | git blob LF count |
+|------|------------------:|
+| `pyproject.toml` | 46 |
+| `.github/workflows/ci.yml` | 79 |
+| `README.md` | 42 |
+| `docs/v2_migration.md` | 129 |
+| `src/lab_executor/backends/base.py` | 64 |
+| `src/lab_executor/backends/mock_backend.py` | 77 |
+| `tests/test_v200_split.py` | 73 |
+
+検証方法:
+
+```bash
+git clone --depth 1 --branch v2.0.0-rc2 \
+    https://github.com/TECTOS-JP/lab-executor-mcp.git rc2-check
+cd rc2-check
+python -c "import tomllib; tomllib.loads(open('pyproject.toml').read())"
+# → OK
+python -c "import yaml; yaml.safe_load(open('.github/workflows/ci.yml'))"
+# → OK
+python -m compileall src tests
+# → OK
+```
+
+原因: Windows checkout (autocrlf=true) によって working tree の
+file が CRLF 化される。レビュアーの viewer はおそらく **`\n` not
+preceded by `\r`** を line count とみなしており、純 CRLF file を
+「1 line」と mis-report していたと推測される。
+
+### rc3 で打った対策
+
+- **`.gitattributes` 追加**: `* text=auto eol=lf` + 主要拡張子
+  (`*.py` / `*.toml` / `*.yaml` / `*.yml` / `*.json` / `*.md` 等) に
+  `eol=lf` を強制。これで Windows checkout でも file は LF となり、
+  raw viewer の counter 仕様に関わらず正しく line を見せる
+- **P1**: `README.md` に **CLI status in v2.0** section を追加
+  (lab-executor CLI の minimal 範囲 + serve は placeholder + v2.1+
+  で段階 port 予定を明記)
+- **P1**: `src/lab_executor/backends/mock_backend.py` docstring を
+  **v2.0 lab-executor-mcp 同梱 backend** として書き直し
+  (v1.11 内部準備の文脈を削除、`MockVisaManager` は legacy internal
+  と整理)
+
+### tests
+
+- 全 smoke test 7 件 (rc1 から不変): pass
+- `compileall src tests`: OK
+- `lab-executor --version` / `--help`: OK
+- TOML / YAML parse: OK
+
+### 互換性
+
+- MCP tool / DSL schema / extension pack: 不変
+- API / CLI / pyproject 構造: 不変
+- `.gitattributes` 追加のみ (動作影響ゼロ、行末文字の固定のみ)
+
+### 次フェーズ
+
+`v2.0.0-rc3` レビュー後に `v2.0.0` 正式 release。並走して
+`visa-mcp v2.0.0-rc1` (shim 化 + `lab-executor-mcp >= 2.0` 依存追加)
+着手予定。
+
 ## v2.0.0-rc2 — rc1 レビュー応答
 
 合言葉: **「rc1 で抜けていた CLI entry point と CI gate を埋める」**
