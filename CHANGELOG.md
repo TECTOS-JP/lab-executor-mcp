@@ -1,5 +1,51 @@
 # 変更履歴
 
+## v2.0.0-rc4 — rc3 レビュー応答 (multiline guard / CLI 文言整合 / serve placeholder test)
+
+合言葉: **「正式 v2.0.0 直前の最後の peripheral 整備」**
+
+rc3 external review (P1) を反映した patch。public API / dependency /
+extension pack 形式すべて不変。
+
+### 変更点
+
+- **P0** (`tests/test_v200_split.py`):
+  - `test_critical_files_are_multiline_and_lf_only` 追加。
+    `pyproject.toml` / `ci.yml` / README / docs / 主要 .py が
+    10 行以上 + CR 文字 0 件であることを CI で固定 (`.gitattributes`
+    の効果を gate 化)
+  - `test_lab_executor_serve_is_placeholder` 追加。
+    `lab-executor serve` が exit code 2 + stderr に `v2.1` を含むこと
+    を固定 (未実装なのに success と誤解されないようにする)
+  - `test_lab_executor_cli_version` 追加
+- **P1** (`docs/v2_migration.md`):
+  - CLI section を README と整合。「v2.0 では Python API は
+    `lab_executor` 推奨、CLI は visa-mcp shim 経由を推奨、`lab-executor`
+    CLI 完全 port は v2.1+」と明示
+  - `lab-executor serve` は placeholder と明示
+  - 既存利用者は v2.0 で CLI を切り替える必要が無いことを明文化
+
+### tests
+
+- smoke test 7 件 → **10 件** に増加 (全て pass)
+- TOML / YAML parse: OK
+- compileall src tests: OK
+
+### 互換性
+
+- MCP tool / DSL schema / extension pack: 不変
+- public API / package 構造: 不変
+
+### 正式 v2.0.0 への残タスク
+
+このレビューサイクル後、以下を経て `v2.0.0` 正式 release へ進む:
+
+1. v2.0.0-rc4 GitHub Actions 全 job green 確認
+2. tag clone + wheel install + pytest の検証結果を v2.0.0 release note
+   に明記
+3. 並走: `visa-mcp v2.0.0-rc1` (shim package 化、
+   `lab-executor-mcp >= 2.0` 依存追加) 着手
+
 ## v2.0.0-rc3 — rc2 レビュー応答 (`.gitattributes` LF / README CLI status / mock_backend docstring)
 
 合言葉: **「Windows CRLF artifact を消し、レビュアーの raw viewer の

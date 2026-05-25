@@ -80,12 +80,32 @@ v2.0 では `~/.visa-mcp/extensions/` を継続使用する。v2.1 以降で
 
 ## CLI
 
+v2.0 では **Python API / MCP tool surface は `lab_executor` package に
+移行する**が、**CLI の完全 port は v2.1 以降**。v2.0 時点での推奨:
+
+```
+API / package:   lab_executor を推奨
+CLI:             lab-executor は minimal (--version / --help /
+                 validate instrument のみ)
+                 既存 CLI 操作は visa-mcp shim 経由を推奨
+```
+
 | v1.x | v2.0 推奨 | v2.0 互換 |
 |------|-----------|----------|
-| `visa-mcp serve` | `visa-mcp serve` (互換) | ✓ |
-| `visa-mcp validate ...` | `lab-executor validate ...` | `visa-mcp validate` も動作 (warning) |
-| `visa-mcp extension ...` | `lab-executor extension ...` | 同上 |
-| `visa-mcp instrument ...` | `lab-executor instrument ...` | 同上 |
+| `visa-mcp serve` | **`visa-mcp serve`** (実機 backend 込み) | ✓ (推奨経路) |
+| `lab-executor serve` | — | **placeholder** (v2.1 で MCP server 実装予定) |
+| `visa-mcp validate ...` | `lab-executor validate instrument` または `visa-mcp validate ...` (互換) | ✓ |
+| `visa-mcp extension ...` | **`visa-mcp extension ...`** (shim 経由を推奨) | v2.1 で `lab-executor extension ...` を port |
+| `visa-mcp instrument ...` | **`visa-mcp instrument ...`** (shim 経由を推奨) | v2.1 で `lab-executor instrument ...` を port |
+
+つまり v2.0 では:
+
+- **新規 / 推奨 import**: `from lab_executor.* import ...`
+- **CLI 利用**: `visa-mcp <subcommand>` (shim 互換維持) を継続使用
+- **MCP server 起動**: `visa-mcp serve` (実機 backend 含む完全互換)
+
+`lab-executor` CLI 完全 port は v2.1+ で段階対応する。利用者は v2.0
+の段階で CLI を切り替える必要はない。
 
 ## DSL schema
 
