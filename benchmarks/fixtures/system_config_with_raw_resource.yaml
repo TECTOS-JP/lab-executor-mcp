@@ -1,0 +1,13 @@
+instruments:
+  mock_psu:
+    resource: "USB0::0x1234::0x0005::SN001::INSTR"
+  mock_dmm:
+    resource: "USB0::0x1234::0x0006::SN002::INSTR"
+  mock_temp:
+    resource: "temp001"
+
+experiment_units:
+  unit001:
+    psu: mock_psu
+    dmm: mock_dmm
+    temp: mock_temp

@@ -1,0 +1,58 @@
+id: task_002_unit_based_voltage_sweep
+title: Unit-based voltage sweep validates and executes
+description: >
+  ExperimentPlan.unit を使ってroleベースで sweep を書き、mock 機器で実行する。
+
+layer: execute
+
+input:
+  instruction: "Sweep voltage 1V → 3V, measure each point."
+  available_units: ["unit001"]
+  plan:
+    dsl_version: "0.8"
+    name: unit_voltage_sweep
+    unit: unit001
+    steps:
+      - type: sweep
+        parameter: voltage
+        values: { values: [1.0, 2.0, 3.0] }
+        body:
+          - { type: command, instrument: $psu, command: set_voltage, args: { voltage: "{voltage}" } }
+          - { type: wait, seconds: 0.01 }
+          - { type: query, instrument: $dmm, command: measure_voltage }
+
+expected:
+  plan_features:
+    uses_unit: true
+    uses_sweep: true
+    uses_safe_shutdown: false
+    min_required_resources: 2
+  required_tool_sequence:
+    required_order:
+      - validate_experiment_plan
+      - dry_run_plan
+      - start_experiment_job
+      - get_job_summary
+  success_criteria:
+    validation_status: ok
+    dry_run_has_no_errors: true
+    job_status: completed
+    expected_job_outcome: success
+
+fixtures:
+  system_config: fixtures/system_config_basic.yaml
+  instruments:
+    - fixtures/instruments/mock_psu.yaml
+    - fixtures/instruments/mock_dmm.yaml
+  mock_scenarios:
+    psu001:
+      - command_pattern: "VOLT.*"
+        mode: echo
+        value: 0.0
+      - command_pattern: "MEAS:VOLT\\?"
+        mode: echo
+        value: 0.0
+    dmm001:
+      - command_pattern: "MEAS:VOLT:DC\\?"
+        mode: constant
+        value: 1.0

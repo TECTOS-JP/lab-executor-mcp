@@ -1,0 +1,21 @@
+metadata:
+  manufacturer: visa-mcp
+  model: MockDMM
+  description: Reference mock digital multimeter
+  category: dmm
+  support_level: tested
+  tested_interfaces: ["mock"]
+  definition_version: "0.9.2"
+commands:
+  measure_voltage:
+    scpi: "MEAS:VOLT:DC?"
+    type: query
+    polling_safe: true
+  measure_current:
+    scpi: "MEAS:CURR:DC?"
+    type: query
+    polling_safe: true
+state_query:
+  voltage:
+    command: measure_voltage
+    unit: V

@@ -1,0 +1,119 @@
+{
+  "$defs": {
+    "BusConfig": {
+      "description": "バス単位の同時アクセス制限",
+      "properties": {
+        "max_concurrency": {
+          "default": 1,
+          "title": "Max Concurrency",
+          "type": "integer"
+        },
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        }
+      },
+      "title": "BusConfig",
+      "type": "object"
+    },
+    "ExperimentUnit": {
+      "description": "1 つの実験対象に紐づく機器セット (map_recipe の bindings に展開)\n\n例:\n  unit001:\n    psu: psu001\n    temp: temp001\n    dmm: dmm001",
+      "properties": {
+        "bindings": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Bindings",
+          "type": "object"
+        },
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        }
+      },
+      "title": "ExperimentUnit",
+      "type": "object"
+    },
+    "InstrumentBinding": {
+      "description": "logical alias → resource_name のバインディング + 物理 bus 帰属",
+      "properties": {
+        "resource": {
+          "title": "Resource",
+          "type": "string"
+        },
+        "bus": {
+          "default": "",
+          "title": "Bus",
+          "type": "string"
+        },
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        }
+      },
+      "required": [
+        "resource"
+      ],
+      "title": "InstrumentBinding",
+      "type": "object"
+    },
+    "InstrumentGroup": {
+      "description": "同種機器の集合 (start_group_query_job の対象)",
+      "properties": {
+        "members": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Members",
+          "type": "array"
+        },
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        }
+      },
+      "title": "InstrumentGroup",
+      "type": "object"
+    }
+  },
+  "description": "system_config root (v1.0 stable. 詳細互換保証は docs/v1_stability_policy.md 参照。 一部 experimental fields は v1.x 内で変更可能。)",
+  "properties": {
+    "instruments": {
+      "additionalProperties": {
+        "$ref": "#/$defs/InstrumentBinding"
+      },
+      "title": "Instruments",
+      "type": "object"
+    },
+    "buses": {
+      "additionalProperties": {
+        "$ref": "#/$defs/BusConfig"
+      },
+      "title": "Buses",
+      "type": "object"
+    },
+    "instrument_groups": {
+      "additionalProperties": {
+        "$ref": "#/$defs/InstrumentGroup"
+      },
+      "title": "Instrument Groups",
+      "type": "object"
+    },
+    "experiment_units": {
+      "additionalProperties": {
+        "$ref": "#/$defs/ExperimentUnit"
+      },
+      "title": "Experiment Units",
+      "type": "object"
+    }
+  },
+  "title": "System Configuration (_system.yaml) (v1.0 stable)",
+  "type": "object",
+  "$id": "https://tectos-jp.github.io/visa-mcp/schemas/system_config.schema.v1.json",
+  "x-visa-mcp-status": "stable",
+  "x-compatibility": "v1.x-compatible"
+}

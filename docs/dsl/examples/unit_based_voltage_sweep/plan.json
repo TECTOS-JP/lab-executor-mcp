@@ -1,0 +1,29 @@
+{
+  "dsl_version": "0.8",
+  "name": "unit_based_voltage_sweep",
+  "description": "experiment_unit 'unit001' を参照し、role $psu / $dmm を経由して電圧スイープを行う例 (v0.8.3)",
+  "unit": "unit001",
+  "steps": [
+    {
+      "type": "sweep",
+      "parameter": "voltage",
+      "values": { "values": [1.0, 2.0, 3.0, 4.0, 5.0] },
+      "body": [
+        {
+          "type": "command",
+          "instrument": "$psu",
+          "command": "set_voltage",
+          "args": { "voltage": "{voltage}" }
+        },
+        { "type": "wait", "seconds": 0.5 },
+        {
+          "type": "query",
+          "instrument": "$dmm",
+          "command": "measure_voltage",
+          "save_as": "v_meas"
+        }
+      ]
+    },
+    { "type": "safe_shutdown" }
+  ]
+}

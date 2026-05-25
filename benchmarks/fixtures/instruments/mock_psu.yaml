@@ -1,0 +1,38 @@
+metadata:
+  manufacturer: MockVendor
+  model: MockPSU
+  category: power_supply
+  description: Mock DC power supply for benchmarks (v0.9.0)
+commands:
+  set_voltage:
+    scpi: "VOLT {voltage}"
+    type: write
+    parameters:
+      - { name: voltage, type: float, range: [0, 30] }
+    verify:
+      readback_command: query_voltage
+      arg_key: voltage
+      tolerance: 0.05
+  set_output:
+    scpi: "OUTP {state}"
+    type: write
+    parameters:
+      - { name: state, type: enum, enum: ["ON", "OFF"] }
+  query_voltage:
+    scpi: "MEAS:VOLT?"
+    type: query
+    polling_safe: true
+  query_output:
+    scpi: "OUTP?"
+    type: query
+    polling_safe: true
+state_query:
+  voltage:
+    command: query_voltage
+    unit: V
+  output:
+    command: query_output
+    unit: ""
+safe_shutdown:
+  - command: set_output
+    args: { state: "OFF" }

@@ -1,0 +1,33 @@
+id: repair_004_raw_resource_with_unit
+title: Repair raw_resource_used_with_unit warning
+layer: repair
+description: >
+  broken_plan が unit 指定にも関わらず raw VISA resource を直接使い
+  raw_resource_used_with_unit warning が出る。repaired_plan は $role を使う。
+
+fixtures:
+  system_config: fixtures/system_config_with_raw_resource.yaml
+  instruments:
+    - fixtures/instruments/mock_psu.yaml
+    - fixtures/instruments/mock_dmm.yaml
+
+broken_plan:
+  dsl_version: "0.8"
+  unit: unit001
+  steps:
+    - { type: query, instrument: "USB0::0x1234::0x0006::SN002::INSTR", command: measure_voltage }
+
+repaired_plan:
+  dsl_version: "0.8"
+  unit: unit001
+  steps:
+    - { type: query, instrument: $dmm, command: measure_voltage }
+
+expected_failure:
+  phase: dry_run
+  error_class: raw_resource_used_with_unit
+
+expected_repair:
+  repair_actions: ["use_role_reference"]
+  must_not: ["override_safety"]
+  layer: dry_run

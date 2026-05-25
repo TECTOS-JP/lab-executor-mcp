@@ -1,0 +1,34 @@
+id: repair_001_unknown_command
+title: Repair unknown command in DSL plan
+layer: repair
+description: >
+  broken_plan が "set_volt" (typo) を使い unknown_command で validate 失敗する。
+  repaired_plan は "set_voltage" に修正されており validate / dry-run を通る。
+
+fixtures:
+  system_config: fixtures/system_config_basic.yaml
+  instruments:
+    - fixtures/instruments/mock_psu.yaml
+
+broken_plan:
+  dsl_version: "0.8"
+  name: broken_unknown_command
+  bindings: { psu: mock_psu }
+  steps:
+    - { type: command, instrument: $psu, command: set_volt, args: { voltage: 3.0 } }
+
+repaired_plan:
+  dsl_version: "0.8"
+  name: repaired_unknown_command
+  bindings: { psu: mock_psu }
+  steps:
+    - { type: command, instrument: $psu, command: set_voltage, args: { voltage: 3.0 } }
+
+expected_failure:
+  phase: validate
+  error_class: unknown_command
+
+expected_repair:
+  repair_actions: ["replace_command"]
+  must_not: ["unsafe_send_command"]
+  layer: dry_run

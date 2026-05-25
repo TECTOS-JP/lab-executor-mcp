@@ -1,0 +1,46 @@
+extension_id: visa-mcp.mock.basic
+name: Basic Mock Definition Pack
+version: 0.1.0
+type: definition_pack
+visa_mcp_compatibility: ">=1.2,<2.0"
+description: >
+  Reference definition pack for visa-mcp v1.2. Bundles mock PSU / DMM
+  definitions plus 1 benchmark task. Used in tests and as a starting
+  template for external contributors.
+author: "visa-mcp"
+homepage: "https://github.com/TECTOS-JP/visa-mcp"
+license: "MIT"
+
+contents:
+  instruments:
+    - instruments/mock_psu.yaml
+    - instruments/mock_dmm.yaml
+  benchmarks:
+    - benchmarks/task_001.yaml
+
+stability:
+  support_level: tested
+  executable_code: false
+
+# v1.6: catalog metadata (任意) - pack 選定 / 比較用
+catalog:
+  summary: "Mock PSU/DMM definitions + 1 benchmark task for visa-mcp."
+  description: >
+    Reference definition pack used by visa-mcp tests and as a starting
+    template for external contributors. No real hardware I/O.
+  authors:
+    - { name: "visa-mcp" }
+  license: "MIT"
+  homepage: "https://github.com/TECTOS-JP/visa-mcp"
+  tags:
+    - mock
+    - benchmark
+    - reference
+  categories:
+    - instrument-definitions
+    - benchmarks
+  target_users:
+    - developers
+    - benchmark-authors
+  safety_notes:
+    - "Mock instruments only. No real hardware I/O."

@@ -1,0 +1,57 @@
+id: task_003_template_override_run
+title: Template + parameters/unit override executes
+description: >
+  保存済み template に parameters override を適用して実行する。
+  template_source が永続化されるところまでは tests/test_dsl_v083.py で検証済み、
+  ここでは「override + 実行が成功するか」を見る。
+
+layer: execute
+
+input:
+  instruction: "Use voltage_sweep_basic template with voltage=2.0"
+  template_name: voltage_sweep_basic
+  template_override:
+    parameters:
+      voltage: 2.0
+
+expected:
+  plan_features:
+    uses_unit: true
+    uses_template_override: true
+  required_tool_sequence:
+    required_order:
+      - validate_experiment_plan
+      - dry_run_plan
+      - start_experiment_job
+  success_criteria:
+    validation_status: ok
+    job_status: completed
+    expected_job_outcome: success
+
+fixtures:
+  system_config: fixtures/system_config_basic.yaml
+  instruments:
+    - fixtures/instruments/mock_psu.yaml
+    - fixtures/instruments/mock_dmm.yaml
+  mock_scenarios:
+    psu001:
+      - command_pattern: "VOLT.*"
+        mode: echo
+      - command_pattern: "MEAS:VOLT\\?"
+        mode: echo
+    dmm001:
+      - command_pattern: "MEAS:VOLT:DC\\?"
+        mode: constant
+        value: 2.0
+  templates:
+    - name: voltage_sweep_basic
+      dsl_version: "0.8"
+      plan:
+        dsl_version: "0.8"
+        name: voltage_sweep_basic
+        unit: unit001
+        variables: { voltage: 1.0 }
+        steps:
+          - { type: command, instrument: $psu, command: set_voltage, args: { voltage: "{voltage}" } }
+          - { type: wait, seconds: 0.01 }
+          - { type: query, instrument: $dmm, command: measure_voltage }

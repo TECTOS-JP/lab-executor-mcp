@@ -1,0 +1,47 @@
+{
+  "dsl_version": "0.8",
+  "name": "voltage_sweep_with_wait_for_stable",
+  "description": "電圧 sweep + 温度が安定してから測定",
+  "bindings": {
+    "psu": "psu001",
+    "dmm": "dmm001",
+    "temp": "temp001"
+  },
+  "steps": [
+    {
+      "type": "sweep",
+      "parameter": "voltage",
+      "values": {
+        "start": 1.0,
+        "stop": 3.0,
+        "step": 1.0
+      },
+      "body": [
+        {
+          "type": "command",
+          "instrument": "$psu",
+          "command": "set_voltage",
+          "args": {
+            "voltage": "{voltage}"
+          }
+        },
+        {
+          "type": "wait_for_stable",
+          "instrument": "$temp",
+          "command": "measure_temperature",
+          "tolerance": 0.2,
+          "window_s": 30,
+          "interval_s": 5,
+          "timeout_s": 300,
+          "min_samples": 3,
+          "value_path": "temperature"
+        },
+        {
+          "type": "query",
+          "instrument": "$dmm",
+          "command": "measure_voltage"
+        }
+      ]
+    }
+  ]
+}

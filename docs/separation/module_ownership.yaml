@@ -1,0 +1,384 @@
+# Module Ownership Manifest (v1.11.1, split rehearsal ready)
+#
+# v6 ロードマップ Phase A: 分離準備の **machine-readable source of truth**。
+# v1.10 で全 module を分類、v1.11 で backend adapter 実体化 +
+# `KNOWN_V111_TO_RESOLVE = 0` 達成 + split_rehearsal 追加、v2.0 で
+# 実際に `git filter-repo` する。
+#
+# owners:
+#   lab-executor-mcp  ← runtime + 機器定義エコシステム (backend 非依存)
+#   visa-mcp          ← PyVISA backend / 通信透過 layer
+#   split             ← layer 内で 2 つに分割する必要がある
+#   shared            ← Protocol / 共通 schema、両 repo が同じ source を見る
+#                       (実態は lab-executor-mcp 側に置き、visa-mcp は import)
+#
+# CI で「未分類 module が無いこと」を test_v1_10_review.py が保証する。
+#
+# 関連: docs/separation/notes.md / docs/separation/split_manifest.yaml
+# / docs/separation/dependency_graph.md
+
+modules:
+  # ==================================================
+  # Top-level package metadata
+  # ==================================================
+  visa_mcp:
+    owner: split
+    reason: >
+      Top-level package. v2.0 では `visa_mcp` を shim package にし
+      (旧 import path を warning 付きで `lab_executor` に re-export)、
+      実体 (`__version__` 等) は両 repo それぞれが持つ。
+    lab_executor_part:
+      - "lab-executor-mcp が `lab_executor.__init__` を持つ"
+    visa_mcp_part:
+      - "visa-mcp は shim `visa_mcp.__init__` で DeprecationWarning"
+
+  visa_mcp.stability:
+    owner: lab-executor-mcp
+    reason: Stable / Experimental MCP tool 一覧 (backend 非依存)
+
+  # ==================================================
+  # Backend layer (visa-mcp 側)
+  # ==================================================
+  visa_mcp.visa_manager:
+    owner: visa-mcp
+    reason: PyVISA resource open/close, query/write transport, IDN, errors
+
+  visa_mcp.bus_manager:
+    owner: visa-mcp
+    reason: GPIB bus semaphore / VISA bus 単位の排他制御 (PyVISA 依存)
+
+  visa_mcp.session_manager:
+    owner: visa-mcp
+    reason: VISA session 管理 (PyVisaBackend 寄り)
+
+  visa_mcp.backends:
+    owner: shared
+    reason: >
+      InstrumentBackend Protocol を置く package。v1.11 で
+      `PyVisaBackend` / `MockBackend` adapter を実体化する予定。
+      Protocol 定義は lab-executor-mcp が source of truth。
+
+  visa_mcp.backends.base:
+    owner: shared
+    reason: InstrumentBackend Protocol 本体
+
+  visa_mcp.backends.pyvisa_backend:
+    owner: visa-mcp
+    reason: >
+      v1.11 で実体化した PyVisaBackend adapter。VisaManager を内部に持ち
+      InstrumentBackend Protocol を満たす。v2.0 では visa-mcp 側に残る。
+
+  visa_mcp.backends.mock_backend:
+    owner: lab-executor-mcp
+    reason: >
+      v1.11 で実体化した MockBackend adapter。MockVisaManager を内部に持ち
+      InstrumentBackend Protocol を満たす。PyVISA 非依存なので v2.0 では
+      lab-executor-mcp 側へ移送される。
+
+  # ==================================================
+  # Runtime (lab-executor-mcp)
+  # ==================================================
+  visa_mcp.audit:
+    owner: lab-executor-mcp
+    reason: SQLite audit log + lock helpers (backend 非依存)
+
+  visa_mcp.observation:
+    owner: lab-executor-mcp
+    reason: timeline / live_view / summary (backend 非依存)
+
+  visa_mcp.response_envelope:
+    owner: lab-executor-mcp
+    reason: response envelope helpers (backend 非依存)
+
+  visa_mcp.safety:
+    owner: lab-executor-mcp
+    reason: 安全制約評価 (YAML 解釈、PyVISA 不要)
+
+  visa_mcp.state_query:
+    owner: lab-executor-mcp
+    reason: describe_instrument / get_state ヘルパ
+
+  visa_mcp.system_config:
+    owner: lab-executor-mcp
+    reason: _system.yaml ロード / unit / bindings (backend 非依存)
+
+  visa_mcp.polling_executor:
+    owner: lab-executor-mcp
+    reason: wait_for_condition / wait_for_stable executor
+
+  visa_mcp.recipe_executor:
+    owner: split
+    reason: >
+      recipe execution の制御フローは runtime 側だが、実 SCPI 送受信
+      呼び出しは backend layer。v1.11 で ir_runner.py (lab-executor) と
+      visa_transport 呼び出し点を adapter 経由化する。
+    lab_executor_part:
+      - "step flow control (loop / wait / barrier)"
+      - "args resolution / safety 評価"
+    visa_mcp_part:
+      - "InstrumentBackend Protocol 経由で呼ぶ送受信"
+
+  visa_mcp.step_executor:
+    owner: split
+    reason: >
+      step 単位の実行。v1.11 で `step_executor/ir_runner.py`
+      (lab-executor) と `step_executor/visa_transport.py` (visa-mcp)
+      に分割予定。
+    lab_executor_part:
+      - "IR-based step dispatch"
+      - "verify / read-back orchestration"
+    visa_mcp_part:
+      - "actual visa write / query 呼び出し (adapter 経由化済みなら lab 側のみ)"
+
+  # ==================================================
+  # DSL / Plan / Compiler
+  # ==================================================
+  visa_mcp.dsl:
+    owner: lab-executor-mcp
+    reason: DSL schema / validator / compiler / dry-run (backend 非依存)
+
+  visa_mcp.dsl.compiler:
+    owner: lab-executor-mcp
+    reason: DSL → Plan IR
+  visa_mcp.dsl.schema:
+    owner: lab-executor-mcp
+    reason: ExperimentPlan Pydantic schema
+  visa_mcp.dsl.template:
+    owner: lab-executor-mcp
+    reason: template override / from_template
+
+  visa_mcp.experiment_ir:
+    owner: lab-executor-mcp
+    reason: Plan IR (backend 非依存)
+  visa_mcp.experiment_ir.plan:
+    owner: lab-executor-mcp
+    reason: Plan IR
+  visa_mcp.experiment_ir.step:
+    owner: lab-executor-mcp
+    reason: Step IR
+
+  # ==================================================
+  # Job / scheduler / state machine
+  # ==================================================
+  visa_mcp.job:
+    owner: lab-executor-mcp
+    reason: Job manager / scheduler / state machine / store (backend 非依存)
+  visa_mcp.job.manager:
+    owner: lab-executor-mcp
+  visa_mcp.job.scheduler:
+    owner: lab-executor-mcp
+  visa_mcp.job.state_machine:
+    owner: lab-executor-mcp
+  visa_mcp.job.store:
+    owner: lab-executor-mcp
+    reason: SQLite metadata persistence
+
+  visa_mcp.group:
+    owner: lab-executor-mcp
+    reason: Group / Map / Barrier (backend 非依存)
+  visa_mcp.group.barrier:
+    owner: lab-executor-mcp
+  visa_mcp.group.executor:
+    owner: lab-executor-mcp
+  visa_mcp.group.resolver:
+    owner: lab-executor-mcp
+  visa_mcp.group.target:
+    owner: lab-executor-mcp
+
+  # ==================================================
+  # Registry / definition pack ecosystem
+  # ==================================================
+  visa_mcp.registry:
+    owner: split
+    reason: >
+      v1.9 までに instrument validation / plan validation / benchmark
+      validation / system config validation / registry INDEX lint /
+      strict checks / OUTPUT_CAPABLE_CATEGORIES / CATEGORY_ALIASES が
+      1 file に同居している。v1.11 で `registry/{index,
+      instrument_validation, strict_checks, plan_validation,
+      benchmark_validation, category_policy}.py` に分割し、すべて
+      lab-executor-mcp 側へ移す方針。
+    lab_executor_part:
+      - "全 sub-module (v1.11 で分割後)"
+    visa_mcp_part: []
+
+  visa_mcp.instrument_registry:
+    owner: lab-executor-mcp
+    reason: 機器定義 YAML registry (schema 解釈中心、backend 非依存)
+
+  visa_mcp.response_parser:
+    owner: lab-executor-mcp
+    reason: response_format 解釈 (YAML 側のロジック、backend 非依存)
+
+  visa_mcp.models:
+    owner: lab-executor-mcp
+    reason: Pydantic schema (instrument / metadata)
+  visa_mcp.models.instrument_def:
+    owner: lab-executor-mcp
+
+  # ==================================================
+  # Definition pack ecosystem (v1.2-v1.8 で追加した全部)
+  # ==================================================
+  visa_mcp.extension:
+    owner: lab-executor-mcp
+    reason: extension manifest validation (v1.2)
+  visa_mcp.extension_install:
+    owner: lab-executor-mcp
+    reason: local install / overlay registry (v1.3)
+  visa_mcp.extension_integrity:
+    owner: lab-executor-mcp
+    reason: check / inspect / uninstall dry-run (v1.4)
+  visa_mcp.extension_packaging:
+    owner: lab-executor-mcp
+    reason: package / verify-package (v1.5)
+  visa_mcp.extension_catalog:
+    owner: lab-executor-mcp
+    reason: catalog / quality_signals / inspect-package (v1.6)
+  visa_mcp.extension_authoring:
+    owner: lab-executor-mcp
+    reason: init / doctor / package --dry-run (v1.7)
+  visa_mcp.instrument_authoring:
+    owner: lab-executor-mcp
+    reason: scaffold / add-instrument / promote-check (v1.8 + v1.9)
+
+  # ==================================================
+  # Testing (benchmark + mock)
+  # ==================================================
+  visa_mcp.testing:
+    owner: lab-executor-mcp
+    reason: benchmark / mock instruments (backend 非依存、PyVISA 不要)
+  visa_mcp.testing.benchmark_runner:
+    owner: lab-executor-mcp
+  visa_mcp.testing.benchmark_task:
+    owner: lab-executor-mcp
+  visa_mcp.testing.mock_instruments:
+    owner: lab-executor-mcp
+    reason: >
+      MockBackend 候補。lazy import で visa_mcp.visa_manager から
+      VisaTimeoutError 互換を取るが、v1.11 で adapter 経由 (共通 error
+      Protocol) に書き直す予定。
+
+  # ==================================================
+  # MCP server / tool surface
+  # ==================================================
+  visa_mcp.server:
+    owner: split
+    reason: >
+      MCP server entry point。tool registration 自体 (DSL / Job /
+      Observation / Extension / Audit) は lab-executor-mcp に移す。
+      visa-mcp 側は backend を注入して同じ server を起動する **wrapper**
+      を持つ。
+    lab_executor_part:
+      - "MCP tool definitions / registration"
+      - "stable / experimental tool surface"
+    visa_mcp_part:
+      - "compatibility wrapper: PyVisaBackend を inject して serve"
+
+  visa_mcp.cli:
+    owner: split
+    reason: >
+      v1.x の `visa-mcp` CLI には backend 系 (`extract_pdf` / `serve`
+      / raw VISA 系) と runtime 系 (validate / extension / instrument /
+      registry overlay) が混在。v2.0 で:
+        - lab-executor CLI: validate / extension / instrument / registry /
+          (lab-executor serve)
+        - visa-mcp CLI: serve (PyVisaBackend 注入) / list-resources /
+          raw VISA tools
+    lab_executor_part:
+      - "validate / extension / instrument / registry / lab-executor serve"
+    visa_mcp_part:
+      - "visa-mcp serve (compat wrapper) / raw VISA / list-resources"
+
+  visa_mcp.tools:
+    owner: split
+    reason: >
+      MCP tool 実装の集まり。多くは runtime 寄りだが、PyVISA を直接
+      触る tool は visa-mcp 側。詳細は各 sub-module 参照。
+
+  visa_mcp.tools.audit:
+    owner: lab-executor-mcp
+  visa_mcp.tools.dsl:
+    owner: lab-executor-mcp
+  visa_mcp.tools.export:
+    owner: lab-executor-mcp
+  visa_mcp.tools.groups:
+    owner: lab-executor-mcp
+  visa_mcp.tools.jobs:
+    owner: lab-executor-mcp
+  visa_mcp.tools.monitor:
+    owner: lab-executor-mcp
+  visa_mcp.tools.observation:
+    owner: lab-executor-mcp
+  visa_mcp.tools.recipes:
+    owner: lab-executor-mcp
+  visa_mcp.tools.waits:
+    owner: lab-executor-mcp
+  visa_mcp.tools.info:
+    owner: lab-executor-mcp
+    reason: describe_instrument / get_state など schema 解釈中心
+
+  visa_mcp.tools.discovery:
+    owner: visa-mcp
+    reason: PyVISA resource 列挙 (list_resources 実装)
+
+  visa_mcp.tools.commands:
+    owner: split
+    reason: >
+      v1.0 から named command orchestration + raw VISA 実行が同居。
+      v1.11 で 2 つに分割 (named は lab-executor、raw VISA は visa-mcp)。
+    lab_executor_part:
+      - "execute_named_command (YAML 経由 safety / parameter 解決)"
+      - "list_commands"
+    visa_mcp_part:
+      - "send_command / query_instrument (raw VISA, env-gated)"
+
+  visa_mcp.tools.pdf_extractor:
+    owner: lab-executor-mcp
+    reason: >
+      authoring 系 (definition pack YAML 草案生成)。実体は YAML 整形
+      なので backend 非依存。重い PDF 依存は **optional extra**
+      (`pip install lab-executor-mcp[pdf]`) として v2.0 で設計。
+
+  # ==================================================
+  # Utils
+  # ==================================================
+  visa_mcp.utils:
+    owner: lab-executor-mcp
+  visa_mcp.utils.condition:
+    owner: lab-executor-mcp
+  visa_mcp.utils.expression:
+    owner: lab-executor-mcp
+  visa_mcp.utils.idn_matcher:
+    owner: lab-executor-mcp
+    reason: IDN string matching (backend 非依存、文字列処理)
+  visa_mcp.utils.param_validator:
+    owner: lab-executor-mcp
+
+  # ==================================================
+  # dev / tooling
+  # ==================================================
+  visa_mcp.dev:
+    owner: lab-executor-mcp
+    reason: v1.9 で追加した dependency_report (separation 用 dev tool)
+  visa_mcp.dev.dependency_report:
+    owner: lab-executor-mcp
+  visa_mcp.dev.ownership_check:
+    owner: lab-executor-mcp
+    reason: v1.10 で追加した ownership manifest verifier + dependency graph generator
+  visa_mcp.dev.split_rehearsal:
+    owner: lab-executor-mcp
+    reason: >
+      v1.11 で追加した split rehearsal generator。
+      `module_ownership.yaml` を基に tmp/ へ lab_executor_candidate ツリーを
+      生成し、import rewrite dry-run を可能にする。
+
+# Statistics for v1.10 (manual count、test で実装と一致を確認):
+statistics:
+  lab_executor_mcp_count: 61
+  visa_mcp_count: 5
+  split_count: 8
+  shared_count: 2
+  unclassified_count: 0   # CI で 0 を強制
+  # 計 76 module (v1.11 で backends/{mock,pyvisa}_backend.py +
+  # dev/split_rehearsal.py を追加し 73 → 76)
+  # test_v110_separation_audit.py で実 owner count と一致確認

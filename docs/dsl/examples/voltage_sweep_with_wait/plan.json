@@ -1,0 +1,41 @@
+{
+  "dsl_version": "0.8",
+  "name": "voltage_sweep_with_wait",
+  "description": "電圧を 1.0/2.0/3.0 V に sweep し、各点で 1 秒 wait してから測定",
+  "bindings": {
+    "psu": "psu001",
+    "dmm": "dmm001"
+  },
+  "steps": [
+    {
+      "type": "sweep",
+      "parameter": "voltage",
+      "values": {
+        "values": [
+          1.0,
+          2.0,
+          3.0
+        ]
+      },
+      "body": [
+        {
+          "type": "command",
+          "instrument": "$psu",
+          "command": "set_voltage",
+          "args": {
+            "voltage": "{voltage}"
+          }
+        },
+        {
+          "type": "wait",
+          "seconds": 1.0
+        },
+        {
+          "type": "query",
+          "instrument": "$dmm",
+          "command": "measure_voltage"
+        }
+      ]
+    }
+  ]
+}

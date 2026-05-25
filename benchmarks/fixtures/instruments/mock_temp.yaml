@@ -1,0 +1,14 @@
+metadata:
+  manufacturer: MockVendor
+  model: MockTempMeter
+  category: thermometer
+  description: Mock temperature meter (stable / drifting modes via scenario)
+commands:
+  measure_temperature:
+    scpi: "TEMP?"
+    type: query
+    polling_safe: true
+state_query:
+  temperature:
+    command: measure_temperature
+    unit: degC

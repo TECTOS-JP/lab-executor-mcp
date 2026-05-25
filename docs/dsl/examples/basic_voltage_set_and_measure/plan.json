@@ -1,0 +1,23 @@
+{
+  "dsl_version": "0.8",
+  "name": "basic_voltage_set_and_measure",
+  "description": "電源を 5V に設定し、その後測定値を取得する最小例",
+  "bindings": {
+    "psu": "psu001"
+  },
+  "steps": [
+    {
+      "type": "command",
+      "instrument": "$psu",
+      "command": "set_voltage",
+      "args": {
+        "voltage": 5.0
+      }
+    },
+    {
+      "type": "query",
+      "instrument": "$psu",
+      "command": "measure_voltage"
+    }
+  ]
+}

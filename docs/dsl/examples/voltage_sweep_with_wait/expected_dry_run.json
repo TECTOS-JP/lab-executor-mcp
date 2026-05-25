@@ -1,0 +1,6 @@
+{
+  "expected_summary": "sweep が 3 値展開で step_count_expanded ≈ 9",
+  "valid": true,
+  "name": "voltage_sweep_with_wait",
+  "dsl_version": "0.8"
+}

@@ -1,0 +1,720 @@
+{
+  "$defs": {
+    "DSLBarrierStep": {
+      "description": "Group/Map 内 target 間同期 (parallel branch 間でも使用可)",
+      "properties": {
+        "type": {
+          "const": "barrier",
+          "default": "barrier",
+          "title": "Type",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "timeout_s": {
+          "default": 60.0,
+          "title": "Timeout S",
+          "type": "number"
+        },
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "DSLBarrierStep",
+      "type": "object"
+    },
+    "DSLCommandStep": {
+      "description": "command 実行 (write/query 両対応)",
+      "properties": {
+        "type": {
+          "const": "command",
+          "default": "command",
+          "title": "Type",
+          "type": "string"
+        },
+        "instrument": {
+          "title": "Instrument",
+          "type": "string"
+        },
+        "command": {
+          "title": "Command",
+          "type": "string"
+        },
+        "args": {
+          "additionalProperties": true,
+          "title": "Args",
+          "type": "object"
+        },
+        "save_as": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Save As"
+        },
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        }
+      },
+      "required": [
+        "instrument",
+        "command"
+      ],
+      "title": "DSLCommandStep",
+      "type": "object"
+    },
+    "DSLParallelStep": {
+      "description": "branches を並列実行。compile 時に GroupExecutor の target に転送される",
+      "properties": {
+        "type": {
+          "const": "parallel",
+          "default": "parallel",
+          "title": "Type",
+          "type": "string"
+        },
+        "concurrency": {
+          "default": 1,
+          "title": "Concurrency",
+          "type": "integer"
+        },
+        "branches": {
+          "items": {
+            "items": {
+              "discriminator": {
+                "mapping": {
+                  "barrier": "#/$defs/DSLBarrierStep",
+                  "command": "#/$defs/DSLCommandStep",
+                  "parallel": "#/$defs/DSLParallelStep",
+                  "query": "#/$defs/DSLQueryStep",
+                  "safe_shutdown": "#/$defs/DSLSafeShutdownStep",
+                  "sweep": "#/$defs/DSLSweepStep",
+                  "wait": "#/$defs/DSLWaitStep",
+                  "wait_for_condition": "#/$defs/DSLWaitForConditionStep",
+                  "wait_for_stable": "#/$defs/DSLWaitForStableStep",
+                  "wait_until": "#/$defs/DSLWaitUntilStep"
+                },
+                "propertyName": "type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/DSLCommandStep"
+                },
+                {
+                  "$ref": "#/$defs/DSLQueryStep"
+                },
+                {
+                  "$ref": "#/$defs/DSLWaitStep"
+                },
+                {
+                  "$ref": "#/$defs/DSLWaitUntilStep"
+                },
+                {
+                  "$ref": "#/$defs/DSLWaitForConditionStep"
+                },
+                {
+                  "$ref": "#/$defs/DSLWaitForStableStep"
+                },
+                {
+                  "$ref": "#/$defs/DSLBarrierStep"
+                },
+                {
+                  "$ref": "#/$defs/DSLSafeShutdownStep"
+                },
+                {
+                  "$ref": "#/$defs/DSLSweepStep"
+                },
+                {
+                  "$ref": "#/$defs/DSLParallelStep"
+                }
+              ]
+            },
+            "type": "array"
+          },
+          "title": "Branches",
+          "type": "array"
+        },
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        }
+      },
+      "title": "DSLParallelStep",
+      "type": "object"
+    },
+    "DSLQueryStep": {
+      "description": "query 専用 step (意味的には command と同じだが LLM 可読性のため分離)",
+      "properties": {
+        "type": {
+          "const": "query",
+          "default": "query",
+          "title": "Type",
+          "type": "string"
+        },
+        "instrument": {
+          "title": "Instrument",
+          "type": "string"
+        },
+        "command": {
+          "title": "Command",
+          "type": "string"
+        },
+        "args": {
+          "additionalProperties": true,
+          "title": "Args",
+          "type": "object"
+        },
+        "save_as": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Save As"
+        },
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        }
+      },
+      "required": [
+        "instrument",
+        "command"
+      ],
+      "title": "DSLQueryStep",
+      "type": "object"
+    },
+    "DSLSafeShutdownStep": {
+      "description": "このプランで使用した resource (または明示指定 targets) を安全停止。\n\nv0.8.0 では「Plan で使用した全 resource」へ best_effort_safe_shutdown を適用。\n`targets` 明示指定で対象を絞り込み可能。",
+      "properties": {
+        "type": {
+          "const": "safe_shutdown",
+          "default": "safe_shutdown",
+          "title": "Type",
+          "type": "string"
+        },
+        "targets": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Targets"
+        },
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        }
+      },
+      "title": "DSLSafeShutdownStep",
+      "type": "object"
+    },
+    "DSLSweepStep": {
+      "description": "変数 sweep。compile 時に body を value 数だけ複製して展開する",
+      "properties": {
+        "type": {
+          "const": "sweep",
+          "default": "sweep",
+          "title": "Type",
+          "type": "string"
+        },
+        "parameter": {
+          "title": "Parameter",
+          "type": "string"
+        },
+        "values": {
+          "$ref": "#/$defs/SweepValues"
+        },
+        "body": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "barrier": "#/$defs/DSLBarrierStep",
+                "command": "#/$defs/DSLCommandStep",
+                "parallel": "#/$defs/DSLParallelStep",
+                "query": "#/$defs/DSLQueryStep",
+                "safe_shutdown": "#/$defs/DSLSafeShutdownStep",
+                "sweep": "#/$defs/DSLSweepStep",
+                "wait": "#/$defs/DSLWaitStep",
+                "wait_for_condition": "#/$defs/DSLWaitForConditionStep",
+                "wait_for_stable": "#/$defs/DSLWaitForStableStep",
+                "wait_until": "#/$defs/DSLWaitUntilStep"
+              },
+              "propertyName": "type"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/DSLCommandStep"
+              },
+              {
+                "$ref": "#/$defs/DSLQueryStep"
+              },
+              {
+                "$ref": "#/$defs/DSLWaitStep"
+              },
+              {
+                "$ref": "#/$defs/DSLWaitUntilStep"
+              },
+              {
+                "$ref": "#/$defs/DSLWaitForConditionStep"
+              },
+              {
+                "$ref": "#/$defs/DSLWaitForStableStep"
+              },
+              {
+                "$ref": "#/$defs/DSLBarrierStep"
+              },
+              {
+                "$ref": "#/$defs/DSLSafeShutdownStep"
+              },
+              {
+                "$ref": "#/$defs/DSLSweepStep"
+              },
+              {
+                "$ref": "#/$defs/DSLParallelStep"
+              }
+            ]
+          },
+          "title": "Body",
+          "type": "array"
+        },
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        }
+      },
+      "required": [
+        "parameter",
+        "values"
+      ],
+      "title": "DSLSweepStep",
+      "type": "object"
+    },
+    "DSLWaitForConditionStep": {
+      "properties": {
+        "type": {
+          "const": "wait_for_condition",
+          "default": "wait_for_condition",
+          "title": "Type",
+          "type": "string"
+        },
+        "instrument": {
+          "title": "Instrument",
+          "type": "string"
+        },
+        "command": {
+          "title": "Command",
+          "type": "string"
+        },
+        "condition_expr": {
+          "title": "Condition Expr",
+          "type": "string"
+        },
+        "args": {
+          "additionalProperties": true,
+          "title": "Args",
+          "type": "object"
+        },
+        "interval_s": {
+          "default": 1.0,
+          "title": "Interval S",
+          "type": "number"
+        },
+        "timeout_s": {
+          "default": 60.0,
+          "title": "Timeout S",
+          "type": "number"
+        },
+        "command_timeout_s": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Command Timeout S"
+        },
+        "value_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Value Path"
+        },
+        "retry_on_error": {
+          "default": 1,
+          "title": "Retry On Error",
+          "type": "integer"
+        },
+        "max_consecutive_errors": {
+          "default": 3,
+          "title": "Max Consecutive Errors",
+          "type": "integer"
+        },
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        }
+      },
+      "required": [
+        "instrument",
+        "command",
+        "condition_expr"
+      ],
+      "title": "DSLWaitForConditionStep",
+      "type": "object"
+    },
+    "DSLWaitForStableStep": {
+      "properties": {
+        "type": {
+          "const": "wait_for_stable",
+          "default": "wait_for_stable",
+          "title": "Type",
+          "type": "string"
+        },
+        "instrument": {
+          "title": "Instrument",
+          "type": "string"
+        },
+        "command": {
+          "title": "Command",
+          "type": "string"
+        },
+        "tolerance": {
+          "title": "Tolerance",
+          "type": "number"
+        },
+        "window_s": {
+          "title": "Window S",
+          "type": "number"
+        },
+        "args": {
+          "additionalProperties": true,
+          "title": "Args",
+          "type": "object"
+        },
+        "interval_s": {
+          "default": 1.0,
+          "title": "Interval S",
+          "type": "number"
+        },
+        "timeout_s": {
+          "default": 60.0,
+          "title": "Timeout S",
+          "type": "number"
+        },
+        "command_timeout_s": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Command Timeout S"
+        },
+        "value_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Value Path"
+        },
+        "min_samples": {
+          "default": 3,
+          "title": "Min Samples",
+          "type": "integer"
+        },
+        "retry_on_error": {
+          "default": 1,
+          "title": "Retry On Error",
+          "type": "integer"
+        },
+        "max_consecutive_errors": {
+          "default": 3,
+          "title": "Max Consecutive Errors",
+          "type": "integer"
+        },
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        }
+      },
+      "required": [
+        "instrument",
+        "command",
+        "tolerance",
+        "window_s"
+      ],
+      "title": "DSLWaitForStableStep",
+      "type": "object"
+    },
+    "DSLWaitStep": {
+      "description": "単純秒待機",
+      "properties": {
+        "type": {
+          "const": "wait",
+          "default": "wait",
+          "title": "Type",
+          "type": "string"
+        },
+        "seconds": {
+          "title": "Seconds",
+          "type": "number"
+        },
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        }
+      },
+      "required": [
+        "seconds"
+      ],
+      "title": "DSLWaitStep",
+      "type": "object"
+    },
+    "DSLWaitUntilStep": {
+      "properties": {
+        "type": {
+          "const": "wait_until",
+          "default": "wait_until",
+          "title": "Type",
+          "type": "string"
+        },
+        "timestamp": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Timestamp"
+        },
+        "seconds_from_now": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Seconds From Now"
+        },
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        }
+      },
+      "title": "DSLWaitUntilStep",
+      "type": "object"
+    },
+    "SweepValues": {
+      "description": "sweep の値指定 (start/stop/step または values list)",
+      "properties": {
+        "start": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Start"
+        },
+        "stop": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stop"
+        },
+        "step": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Step"
+        },
+        "values": {
+          "anyOf": [
+            {
+              "items": {},
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Values"
+        }
+      },
+      "title": "SweepValues",
+      "type": "object"
+    }
+  },
+  "description": "LLM が生成する実験計画のルート (v1.0 stable. 詳細互換保証は docs/v1_stability_policy.md 参照。 一部 experimental fields は v1.x 内で変更可能。)",
+  "properties": {
+    "dsl_version": {
+      "default": "0.8",
+      "title": "Dsl Version",
+      "type": "string"
+    },
+    "name": {
+      "default": "",
+      "title": "Name",
+      "type": "string"
+    },
+    "description": {
+      "default": "",
+      "title": "Description",
+      "type": "string"
+    },
+    "unit": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Unit"
+    },
+    "bindings": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Bindings",
+      "type": "object"
+    },
+    "variables": {
+      "additionalProperties": true,
+      "title": "Variables",
+      "type": "object"
+    },
+    "steps": {
+      "items": {
+        "discriminator": {
+          "mapping": {
+            "barrier": "#/$defs/DSLBarrierStep",
+            "command": "#/$defs/DSLCommandStep",
+            "parallel": "#/$defs/DSLParallelStep",
+            "query": "#/$defs/DSLQueryStep",
+            "safe_shutdown": "#/$defs/DSLSafeShutdownStep",
+            "sweep": "#/$defs/DSLSweepStep",
+            "wait": "#/$defs/DSLWaitStep",
+            "wait_for_condition": "#/$defs/DSLWaitForConditionStep",
+            "wait_for_stable": "#/$defs/DSLWaitForStableStep",
+            "wait_until": "#/$defs/DSLWaitUntilStep"
+          },
+          "propertyName": "type"
+        },
+        "oneOf": [
+          {
+            "$ref": "#/$defs/DSLCommandStep"
+          },
+          {
+            "$ref": "#/$defs/DSLQueryStep"
+          },
+          {
+            "$ref": "#/$defs/DSLWaitStep"
+          },
+          {
+            "$ref": "#/$defs/DSLWaitUntilStep"
+          },
+          {
+            "$ref": "#/$defs/DSLWaitForConditionStep"
+          },
+          {
+            "$ref": "#/$defs/DSLWaitForStableStep"
+          },
+          {
+            "$ref": "#/$defs/DSLBarrierStep"
+          },
+          {
+            "$ref": "#/$defs/DSLSafeShutdownStep"
+          },
+          {
+            "$ref": "#/$defs/DSLSweepStep"
+          },
+          {
+            "$ref": "#/$defs/DSLParallelStep"
+          }
+        ]
+      },
+      "title": "Steps",
+      "type": "array"
+    }
+  },
+  "title": "Experiment DSL ExperimentPlan (v1.0 stable)",
+  "type": "object",
+  "$id": "https://tectos-jp.github.io/visa-mcp/schemas/dsl.schema.v1.json",
+  "x-visa-mcp-status": "stable",
+  "x-compatibility": "v1.x-compatible"
+}

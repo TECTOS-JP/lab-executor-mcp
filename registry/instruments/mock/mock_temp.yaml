@@ -1,0 +1,17 @@
+metadata:
+  manufacturer: visa-mcp
+  model: MockTempMeter
+  description: Reference mock thermometer (stable / drifting via scenario)
+  category: thermometer
+  support_level: tested
+  tested_interfaces: ["mock"]
+  definition_version: "0.9.2"
+commands:
+  measure_temperature:
+    scpi: "TEMP?"
+    type: query
+    polling_safe: true
+state_query:
+  temperature:
+    command: measure_temperature
+    unit: degC

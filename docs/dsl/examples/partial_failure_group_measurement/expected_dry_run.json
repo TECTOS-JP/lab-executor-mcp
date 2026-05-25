@@ -1,0 +1,6 @@
+{
+  "expected_summary": "has_parallel=True, parallel_group_count=1, branches 共有なし",
+  "valid": true,
+  "name": "partial_failure_group_measurement",
+  "dsl_version": "0.8"
+}

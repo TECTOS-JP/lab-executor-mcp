@@ -1,0 +1,569 @@
+{
+  "$defs": {
+    "ExpectedFailure": {
+      "description": "v0.9.1: repair task 用「broken_plan が満たすべき失敗仕様」",
+      "properties": {
+        "phase": {
+          "default": "validate",
+          "enum": [
+            "validate",
+            "dry_run",
+            "execute"
+          ],
+          "title": "Phase",
+          "type": "string"
+        },
+        "error_class": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Error Class"
+        },
+        "field_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Field Path"
+        },
+        "step_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Step Path"
+        },
+        "required_recommended_actions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Required Recommended Actions",
+          "type": "array"
+        }
+      },
+      "title": "ExpectedFailure",
+      "type": "object"
+    },
+    "ExpectedRepair": {
+      "description": "v0.9.1: repair task 用「repaired_plan が満たすべき仕様」",
+      "properties": {
+        "repair_actions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Repair Actions",
+          "type": "array"
+        },
+        "must_not": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Must Not",
+          "type": "array"
+        },
+        "layer": {
+          "default": "dry_run",
+          "enum": [
+            "validate",
+            "dry_run",
+            "execute"
+          ],
+          "title": "Layer",
+          "type": "string"
+        }
+      },
+      "title": "ExpectedRepair",
+      "type": "object"
+    },
+    "ExpectedSpec": {
+      "properties": {
+        "plan_features": {
+          "$ref": "#/$defs/PlanFeatures"
+        },
+        "required_tool_sequence": {
+          "$ref": "#/$defs/ExpectedToolSequence"
+        },
+        "success_criteria": {
+          "$ref": "#/$defs/SuccessCriteria"
+        }
+      },
+      "title": "ExpectedSpec",
+      "type": "object"
+    },
+    "ExpectedToolSequence": {
+      "description": "Tool 呼び出し列の期待: 厳密一致ではなく「含有 / 禁止」で判定",
+      "properties": {
+        "required_order": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Required Order",
+          "type": "array"
+        },
+        "optional": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Optional",
+          "type": "array"
+        },
+        "forbidden": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Forbidden",
+          "type": "array"
+        }
+      },
+      "title": "ExpectedToolSequence",
+      "type": "object"
+    },
+    "Fixtures": {
+      "description": "fixture file paths (benchmarks/fixtures/... からの相対 or 絶対)",
+      "properties": {
+        "system_config": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "System Config"
+        },
+        "instruments": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Instruments",
+          "type": "array"
+        },
+        "mock_scenarios": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mock Scenarios"
+        },
+        "templates": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Templates",
+          "type": "array"
+        },
+        "random_seed": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Random Seed"
+        },
+        "safety_mode": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Safety Mode"
+        }
+      },
+      "title": "Fixtures",
+      "type": "object"
+    },
+    "InputSpec": {
+      "description": "benchmark task の入力。\n\nLLM 評価モード (v0.9.1+) では instruction + available_units を渡して\nLLM に Plan を生成させる。v0.9.0 では plan / template_name + override\nどちらかを直接渡す。",
+      "properties": {
+        "instruction": {
+          "default": "",
+          "title": "Instruction",
+          "type": "string"
+        },
+        "available_units": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Available Units",
+          "type": "array"
+        },
+        "plan": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Plan"
+        },
+        "template_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Template Name"
+        },
+        "template_override": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Template Override"
+        }
+      },
+      "title": "InputSpec",
+      "type": "object"
+    },
+    "PlanFeatures": {
+      "description": "Plan が満たすべき構造的特徴",
+      "properties": {
+        "uses_unit": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Uses Unit"
+        },
+        "uses_sweep": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Uses Sweep"
+        },
+        "uses_parallel": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Uses Parallel"
+        },
+        "uses_wait_for_stable": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Uses Wait For Stable"
+        },
+        "uses_wait_for_condition": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Uses Wait For Condition"
+        },
+        "uses_safe_shutdown": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Uses Safe Shutdown"
+        },
+        "uses_verify": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Uses Verify"
+        },
+        "uses_template_override": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Uses Template Override"
+        },
+        "min_required_resources": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Min Required Resources"
+        },
+        "max_required_resources": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Required Resources"
+        }
+      },
+      "title": "PlanFeatures",
+      "type": "object"
+    },
+    "SuccessCriteria": {
+      "description": "benchmark 成功条件",
+      "properties": {
+        "validation_status": {
+          "default": "any",
+          "enum": [
+            "ok",
+            "error",
+            "any"
+          ],
+          "title": "Validation Status",
+          "type": "string"
+        },
+        "dry_run_has_no_errors": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Dry Run Has No Errors"
+        },
+        "dry_run_max_warnings": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Dry Run Max Warnings"
+        },
+        "job_status": {
+          "default": "any",
+          "enum": [
+            "completed",
+            "failed",
+            "any"
+          ],
+          "title": "Job Status",
+          "type": "string"
+        },
+        "expected_job_outcome": {
+          "default": "any",
+          "enum": [
+            "success",
+            "partial_failure",
+            "failure",
+            "cancelled",
+            "interrupted",
+            "any"
+          ],
+          "title": "Expected Job Outcome",
+          "type": "string"
+        },
+        "expected_verify_failed_count": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expected Verify Failed Count"
+        },
+        "expected_measurements": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Expected Measurements",
+          "type": "array"
+        }
+      },
+      "title": "SuccessCriteria",
+      "type": "object"
+    }
+  },
+  "description": "benchmarks/tasks/*.yaml ルート (v1.0 stable. 詳細互換保証は docs/v1_stability_policy.md 参照。 一部 experimental fields は v1.x 内で変更可能。)",
+  "properties": {
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "title": {
+      "default": "",
+      "title": "Title",
+      "type": "string"
+    },
+    "description": {
+      "default": "",
+      "title": "Description",
+      "type": "string"
+    },
+    "layer": {
+      "default": "execute",
+      "enum": [
+        "validate",
+        "dry_run",
+        "execute",
+        "repair"
+      ],
+      "title": "Layer",
+      "type": "string"
+    },
+    "input": {
+      "$ref": "#/$defs/InputSpec"
+    },
+    "expected": {
+      "$ref": "#/$defs/ExpectedSpec"
+    },
+    "fixtures": {
+      "$ref": "#/$defs/Fixtures"
+    },
+    "broken_plan": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Broken Plan"
+    },
+    "repaired_plan": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Repaired Plan"
+    },
+    "expected_failure": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ExpectedFailure"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "expected_repair": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ExpectedRepair"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    }
+  },
+  "required": [
+    "id"
+  ],
+  "title": "Benchmark Task (incl. repair tasks) (v1.0 stable)",
+  "type": "object",
+  "$id": "https://tectos-jp.github.io/visa-mcp/schemas/benchmark_task.schema.v1.json",
+  "x-visa-mcp-status": "stable",
+  "x-compatibility": "v1.x-compatible"
+}

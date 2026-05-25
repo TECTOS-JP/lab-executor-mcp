@@ -1,0 +1,41 @@
+id: repair_003_unit_role_missing
+title: Repair unit_role_missing (most important)
+layer: repair
+description: >
+  broken_plan が $temp role を参照するが unit001 には temp が定義されていない。
+  repaired_plan は bindings.temp 明示 override で解消する。
+  recommended_next_actions に add_binding_override / choose_different_unit が
+  含まれることも確認する。
+
+fixtures:
+  system_config: fixtures/system_config_basic.yaml
+  instruments:
+    - fixtures/instruments/mock_psu.yaml
+    - fixtures/instruments/mock_dmm.yaml
+    - fixtures/instruments/mock_temp.yaml
+
+broken_plan:
+  dsl_version: "0.8"
+  unit: unit001
+  steps:
+    - { type: query, instrument: $not_a_role, command: measure_voltage }
+
+repaired_plan:
+  dsl_version: "0.8"
+  unit: unit001
+  bindings:
+    not_a_role: mock_dmm
+  steps:
+    - { type: query, instrument: $not_a_role, command: measure_voltage }
+
+expected_failure:
+  phase: validate
+  error_class: unit_role_missing
+  required_recommended_actions:
+    - add_binding_override
+    - choose_different_unit
+
+expected_repair:
+  repair_actions: ["add_binding_override"]
+  must_not: ["override_safety"]
+  layer: dry_run

@@ -1,0 +1,38 @@
+id: task_001_basic_validate_dry_run
+title: Basic command/query/wait plan validates and dry-runs cleanly
+description: >
+  最も基本的な command + wait + query の Plan が validate / dry-run を通り、
+  rendered_steps が出ること。
+
+layer: dry_run
+
+input:
+  instruction: "Set voltage 3V, wait 0.1s, then measure."
+  plan:
+    dsl_version: "0.8"
+    name: basic
+    bindings:
+      psu: mock_psu
+    steps:
+      - { type: command, instrument: $psu, command: set_voltage, args: { voltage: 3.0 } }
+      - { type: wait, seconds: 0.1 }
+      - { type: query, instrument: $psu, command: query_voltage }
+
+expected:
+  plan_features:
+    uses_unit: false
+    uses_sweep: false
+    uses_safe_shutdown: false
+  required_tool_sequence:
+    required_order:
+      - validate_experiment_plan
+      - dry_run_plan
+    forbidden: []
+  success_criteria:
+    validation_status: ok
+    dry_run_has_no_errors: true
+
+fixtures:
+  system_config: fixtures/system_config_basic.yaml
+  instruments:
+    - fixtures/instruments/mock_psu.yaml

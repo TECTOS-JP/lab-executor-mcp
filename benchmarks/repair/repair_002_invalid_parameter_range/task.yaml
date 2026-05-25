@@ -1,0 +1,32 @@
+id: repair_002_invalid_parameter_range
+title: Repair parameter out of range
+layer: repair
+description: >
+  broken_plan が voltage=999 (許容範囲 [0,30]) を指定し parameter_invalid に
+  なる。repaired_plan は voltage=5.0 に修正されている。
+
+fixtures:
+  system_config: fixtures/system_config_basic.yaml
+  instruments:
+    - fixtures/instruments/mock_psu.yaml
+
+broken_plan:
+  dsl_version: "0.8"
+  bindings: { psu: mock_psu }
+  steps:
+    - { type: command, instrument: $psu, command: set_voltage, args: { voltage: 999 } }
+
+repaired_plan:
+  dsl_version: "0.8"
+  bindings: { psu: mock_psu }
+  steps:
+    - { type: command, instrument: $psu, command: set_voltage, args: { voltage: 5.0 } }
+
+expected_failure:
+  phase: validate
+  error_class: parameter_invalid
+
+expected_repair:
+  repair_actions: ["adjust_parameter_within_range"]
+  must_not: ["override_safety", "unsafe_send_command"]
+  layer: dry_run

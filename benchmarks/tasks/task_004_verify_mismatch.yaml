@@ -1,0 +1,48 @@
+id: task_004_verify_mismatch
+title: Verify mismatch is detected and surfaced
+description: >
+  set_voltage の後の verify read-back で意図的に -0.2V のオフセットを返し、
+  verify mismatch が summary.verify_summary に反映されることを確認。
+
+layer: execute
+
+input:
+  instruction: "Set voltage 5V with verify; PSU returns 4.8V on readback."
+  plan:
+    dsl_version: "0.8"
+    name: verify_mismatch
+    bindings: { psu: mock_psu }
+    steps:
+      - { type: command, instrument: $psu, command: set_voltage, args: { voltage: 5.0 } }
+
+expected:
+  plan_features:
+    uses_verify: true
+  required_tool_sequence:
+    required_order:
+      - validate_experiment_plan
+      - start_experiment_job
+  success_criteria:
+    validation_status: ok
+    # NOTE (v0.9.0.1): strict mode で実行することで verify 失敗が step_failed
+    # に昇格し、Job 自体が failed 終端まで到達する。verify_failed_count を
+    # summary で観測したい場合、現状の DSL Plan path では job_steps 永続化が
+    # 一部抜けるため expected_verify_failed_count はまだ使えない (v0.9.1 で
+    # build_run_summary + DSL step persistence を整備予定)。
+    # 暫定で job_status=failed + error_class が verify 系であることを確認する。
+    job_status: failed
+
+fixtures:
+  system_config: fixtures/system_config_basic.yaml
+  safety_mode: strict
+  random_seed: 12345
+  instruments:
+    - fixtures/instruments/mock_psu.yaml
+  mock_scenarios:
+    psu001:
+      - command_pattern: "VOLT 5\\.0"
+        mode: verify_mismatch
+        actual_offset: -0.2
+      - command_pattern: "MEAS:VOLT\\?"
+        mode: verify_mismatch
+        actual_offset: -0.2

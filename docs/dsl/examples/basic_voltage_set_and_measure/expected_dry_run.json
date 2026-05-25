@@ -1,0 +1,6 @@
+{
+  "expected_summary": "validate=True, step_count_dsl=2, has_safe_shutdown=False, has_parallel=False",
+  "valid": true,
+  "name": "basic_voltage_set_and_measure",
+  "dsl_version": "0.8"
+}

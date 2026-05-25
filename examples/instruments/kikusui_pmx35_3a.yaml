@@ -1,0 +1,662 @@
+# =============================================================
+# Kikusui PMX35-3A 直流安定化電源 (PMX-A シリーズ)
+# 出典: PMX_IF_J6.pdf (Interface Manual), PMX_V2_J8.pdf (User Manual)
+# 仕様: 35V / 3A 単出力
+# =============================================================
+# 標準SCPI対応機器。*IDN? で自動識別可能。
+# USB / LAN / RS-232C 接続をサポート。
+# =============================================================
+
+metadata:
+  manufacturer: "Kikusui"
+  model: "PMX35-3A"
+  description: "直流安定化電源 PMX-Aシリーズ 35V/3A 単出力"
+  manual_ref: "PMX_IF_J6.pdf, PMX_V2_J8.pdf"
+  category: "power_supply"
+
+identification:
+  # *IDN? 応答例: "KIKUSUI,PMX35-3A,XX123456,IFC01.20.0048 SYS01.41 ..."
+  manufacturer_match: "KIKUSUI"
+  model_regex: "PMX35-3A"
+
+connection:
+  default_timeout_ms: 3000
+  read_termination: "\n"
+  write_termination: "\n"
+
+# ===== 安全停止シーケンス (v0.5.0.2) =====
+# cancel_mode="safe_shutdown" / emergency_stop 時に実行される。
+# PMX-A シリーズでは出力 OFF → 電圧 0 設定が標準。
+safe_shutdown:
+  - { command: "set_output", args: { state: "OFF" } }
+  - { command: "set_voltage", args: { voltage: 0 } }
+
+# ===== 機器仕様 (v0.2.0) =====
+specifications:
+  outputs:
+    - name: "DC Output (single channel)"
+      voltage_range: { min: 0, max: 35.0, unit: "V" }
+      current_range: { min: 0, max: 3.0, unit: "A" }
+      voltage_resolution: 0.001
+      current_resolution: 0.0001
+      ripple_noise: "5 mVp-p typical"
+      load_regulation: "0.01% + 2mV"
+      line_regulation: "0.01% + 2mV"
+  measurement:
+    voltage_accuracy: "±(0.05% of reading + 5 mV)"
+    current_accuracy: "±(0.1% of reading + 5 mA)"
+
+# ===== 安全制約 (v0.2.0) =====
+safety:
+  ratings:
+    voltage:
+      rated: 35.0
+      absolute_max: 36.75      # 定格 105%
+      recommended_max: 35.0
+      absolute_min: 0
+      unit: "V"
+      description: "出力電圧の絶対最大定格"
+    current:
+      rated: 3.0
+      absolute_max: 3.15       # 定格 105%
+      recommended_max: 3.0
+      absolute_min: 0
+      unit: "A"
+      description: "出力電流の絶対最大定格"
+    voltage_protection:
+      rated: 38.5
+      absolute_max: 38.5       # OVP 設定の絶対上限 (定格 110%)
+      absolute_min: 3.5        # OVP 設定の絶対下限 (定格 10%)
+      unit: "V"
+      description: "OVP 動作点の設定可能範囲"
+    current_protection:
+      rated: 3.3
+      absolute_max: 3.3        # OCP 設定の絶対上限 (定格 110%)
+      absolute_min: 0.3        # OCP 設定の絶対下限 (定格 10%)
+      unit: "A"
+      description: "OCP 動作点の設定可能範囲"
+
+  # 出力 ON 前に保護設定を促す
+  preconditions:
+    - command: "set_output"
+      when: { state: ["ON", "1"] }
+      requires:
+        - { has_been_called: "set_voltage_protection" }
+        - { has_been_called: "set_current_protection" }
+      severity: "medium"
+      reason: "出力 ON 前に過電圧保護 (OVP) と過電流保護 (OCP) を設定することを推奨します"
+
+  cautions:
+    - "出力端子を短絡しないこと"
+    - "誘導性負荷 (リレー・モータ等) は OUTP OFF で急遮断せず、徐々に電流を下げること"
+    - "並列接続は不可。直列接続のみ可能"
+    - "外部から逆電圧を印加しないこと"
+
+  hardware_protections:
+    - name: "OVP (Over Voltage Protection)"
+      description: "VOLT:PROT で設定。設定値超過時に出力遮断"
+      related_command: "set_voltage_protection"
+    - name: "OCP (Over Current Protection)"
+      description: "CURR:PROT で設定。設定値超過時に出力遮断"
+      related_command: "set_current_protection"
+    - name: "OTP (Over Temperature Protection)"
+      description: "機器内部温度上昇時の自動遮断 (常時有効)"
+    - name: "Reverse polarity protection"
+      description: "逆電圧入力時の保護 (機器内部回路)"
+
+# ===== 応答フォーマット (v0.2.0) =====
+response_formats:
+  numeric_nr3:
+    pattern: '^(?P<value>[+-]\d+\.\d+E[+-]\d+)$'
+    description: "NR3 形式 (科学表記)。例: +5.00000E+00 = 5.0"
+    fields: {}
+  error_response:
+    pattern: '^(?P<code>[+-]?\d+),"(?P<message>[^"]*)"$'
+    description: "SYST:ERR? の応答形式。例: +0,\"No error\""
+    fields: {}
+
+# ===== 動作状態・推奨手順 (v0.3.0) =====
+operational_states:
+  startup_sequence:
+    - "*RST で初期化"
+    - "VOLT:PROT で OVP を設定"
+    - "CURR:PROT で OCP を設定"
+    - "VOLT / CURR で出力値を設定"
+    - "OUTP ON で出力開始"
+  shutdown_sequence:
+    - "OUTP OFF で出力停止"
+    - "（必要に応じて *SAV でプリセット保存）"
+  modes:
+    - name: "CV"
+      description: "定電圧モード。負荷が CC リミット未満の通常動作。STAT:OPER bit 8"
+      indicator: "STAT:OPER:COND?"
+    - name: "CC"
+      description: "定電流モード。負荷が CC リミットに到達した状態。STAT:OPER bit 10"
+      indicator: "STAT:OPER:COND?"
+    - name: "Local"
+      description: "フロントパネル操作可能な状態"
+    - name: "Remote"
+      description: "リモート制御中、パネルキーロック可能"
+  notes:
+    - "電源投入時の出力状態は OUTP:PON で設定 (SAFE/AUTO/FORCE)"
+    - "アラーム発生時は OUTP:PROT:CLE で解除可能"
+
+# ===== 物理インタフェース (v0.3.0) =====
+physical_interface:
+  front_panel:
+    - { label: "+", type: "banana_jack", color: "red", description: "DC 出力プラス端子" }
+    - { label: "-", type: "banana_jack", color: "black", description: "DC 出力マイナス端子" }
+  rear_panel:
+    - { label: "USB", type: "USB-B", description: "USB Type-B コネクタ (PC 接続)" }
+    - { label: "LAN", type: "RJ-45", description: "LXI 準拠 LAN" }
+    - { label: "AC INPUT", type: "AC inlet", description: "AC 電源入力" }
+  notes:
+    - "リモートセンス端子 (+S/-S) はリアパネルに装備"
+    - "出力端子は前面のみ"
+
+# ===== Recipe: 典型ワークフロー (v0.3.0) =====
+recipes:
+
+  safe_output_on:
+    description: |
+      OVP/OCP を target_v / current_limit の 110% に自動設定してから安全に出力 ON する。
+      LLM は単にこの recipe を呼ぶだけで安全な起動シーケンスを保証できる。
+    parameters:
+      - { name: "target_v", type: "float", description: "目標出力電圧 (V)" }
+      - { name: "current_limit", type: "float", description: "最大電流 (A)" }
+    steps:
+      - { command: "reset", description: "機器初期化" }
+      - { command: "set_voltage_protection", args: { voltage: "$target_v * 1.1 + 0.5" }, description: "OVP を 110% + 0.5V に設定" }
+      - { command: "set_current_protection", args: { current: "$current_limit * 1.1 + 0.05" }, description: "OCP を 110% + 0.05A に設定" }
+      - { command: "set_voltage", args: { voltage: "$target_v" } }
+      - { command: "set_current", args: { current: "$current_limit" } }
+      - { command: "set_output", args: { state: "ON" } }
+
+  safe_shutdown:
+    description: "安全な停止シーケンス: 出力 OFF → 電圧 0 設定"
+    parameters: []
+    steps:
+      - { command: "set_output", args: { state: "OFF" } }
+      - { command: "set_voltage", args: { voltage: 0 } }
+
+  read_measurement:
+    description: "現在の出力電圧と電流を測定"
+    parameters: []
+    steps:
+      - { command: "measure_voltage" }
+      - { command: "measure_current" }
+
+  # v0.5.0-rc1: wait step を使った settling 付き測定の例
+  set_voltage_and_measure_after_settling:
+    description: |
+      電圧設定 → 指定秒数待機 (出力安定化) → 実測値読み取り。
+      Settling 時間は target_v / 負荷条件により調整可能。
+    parameters:
+      - { name: "target_v", type: "float", description: "目標出力電圧 (V)" }
+      - { name: "current_limit", type: "float", description: "最大電流 (A)" }
+      - { name: "settle_s", type: "float", description: "settling 待機秒数", default: 2 }
+    steps:
+      - { command: "reset" }
+      - { command: "set_voltage_protection", args: { voltage: "$target_v * 1.1 + 0.5" } }
+      - { command: "set_current_protection", args: { current: "$current_limit * 1.1 + 0.05" } }
+      - { command: "set_voltage", args: { voltage: "$target_v" } }
+      - { command: "set_current", args: { current: "$current_limit" } }
+      - { command: "set_output", args: { state: "ON" } }
+      - wait: { seconds: "$settle_s" }
+      - { command: "measure_voltage" }
+      - { command: "measure_current" }
+
+commands:
+
+  # ====================================================
+  # IEEE 488.2 共通コマンド
+  # ====================================================
+  identify:
+    scpi: "*IDN?"
+    type: "query"
+    description: "本製品の機種名とファームウェアのバージョンを問い合わせ"
+    parameters: []
+    returns:
+      type: "string"
+      description: "メーカー,モデル,シリアル,ファームウェア"
+
+  reset:
+    scpi: "*RST"
+    type: "write"
+    description: "パネル設定を初期化（出力電圧0、OVP/OCP定格110%、出力OFF）"
+    parameters: []
+
+  clear_status:
+    scpi: "*CLS"
+    type: "write"
+    description: "ステータスバイト・イベントステータス・エラーキューをクリア"
+    parameters: []
+
+  query_options:
+    scpi: "*OPT?"
+    type: "query"
+    description: "本製品に装着されているオプションを問い合わせ"
+    parameters: []
+    returns:
+      type: "string"
+
+  self_test:
+    scpi: "*TST?"
+    type: "query"
+    description: "自己診断を実行（0=正常）"
+    parameters: []
+    returns:
+      type: "integer"
+
+  trigger:
+    scpi: "*TRG"
+    type: "write"
+    description: "トリガコマンド。VOLT:TRIG/CURR:TRIG で設定した値に切り替える"
+    parameters: []
+
+  wait_complete:
+    scpi: "*WAI"
+    type: "write"
+    description: "待機中のすべての動作が完了するまで以降のコマンドを実行しない"
+    parameters: []
+
+  set_event_status_enable:
+    scpi: "*ESE {value}"
+    type: "write"
+    description: "イベントステータスイネーブルレジスタを設定"
+    parameters:
+      - name: value
+        type: "integer"
+        range: [0, 255]
+
+  query_event_status:
+    scpi: "*ESR?"
+    type: "query"
+    description: "イベントステータスレジスタを問い合わせ"
+    parameters: []
+    returns:
+      type: "integer"
+
+  set_service_request_enable:
+    scpi: "*SRE {value}"
+    type: "write"
+    description: "サービスリクエストイネーブルレジスタを設定"
+    parameters:
+      - name: value
+        type: "integer"
+        range: [0, 255]
+
+  query_status_byte:
+    scpi: "*STB?"
+    type: "query"
+    description: "ステータスバイトレジスタを問い合わせ"
+    parameters: []
+    returns:
+      type: "integer"
+
+  save_preset:
+    scpi: "*SAV {memory}"
+    type: "write"
+    description: "現在の電圧/電流/OVP/OCP設定値をプリセットメモリに保存 (1=A, 2=B, 3=C)"
+    parameters:
+      - name: memory
+        type: "enum"
+        choices: ["1", "2", "3"]
+
+  recall_preset:
+    scpi: "*RCL {memory}"
+    type: "write"
+    description: "プリセットメモリに保存した設定値を呼び出し (1=A, 2=B, 3=C)"
+    parameters:
+      - name: memory
+        type: "enum"
+        choices: ["1", "2", "3"]
+
+  # ====================================================
+  # 出力制御 (OUTPut)
+  # ====================================================
+  set_output:
+    scpi: "OUTP {state}"
+    type: "write"
+    description: "出力のON/OFF設定 (1=ON, 0=OFF)"
+    parameters:
+      - name: state
+        type: "enum"
+        choices: ["0", "1", "ON", "OFF"]
+
+  query_output:
+    scpi: "OUTP?"
+    type: "query"
+    description: "出力状態を問い合わせ"
+    parameters: []
+    returns:
+      type: "integer"
+      description: "1=ON, 0=OFF"
+
+  set_output_external:
+    scpi: "OUTP:EXT {state}"
+    type: "write"
+    description: "外部コントロールで出力をON/OFFするかどうか設定"
+    parameters:
+      - name: state
+        type: "enum"
+        choices: ["0", "1", "ON", "OFF"]
+
+  set_output_external_logic:
+    scpi: "OUTP:EXT:LOG {logic}"
+    type: "write"
+    description: "外部コントロール論理 (LOW=LOWまたは短絡でON, HIGH=HIGHまたは開放でON)"
+    parameters:
+      - name: logic
+        type: "enum"
+        choices: ["LOW", "HIGH"]
+
+  set_power_on_state:
+    scpi: "OUTP:PON {state}"
+    type: "write"
+    description: "電源オン時の出力状態 (SAFE=出力OFF, AUTO=前回状態復帰, FORCE=常にON)"
+    parameters:
+      - name: state
+        type: "enum"
+        choices: ["SAFE", "AUTO", "FORCE"]
+
+  clear_protection:
+    scpi: "OUTP:PROT:CLE"
+    type: "write"
+    description: "アラーム（OVP/OCP/OTP等）を解除する"
+    parameters: []
+
+  # ====================================================
+  # 電圧設定 ([SOURce:]VOLTage)
+  # ====================================================
+  set_voltage:
+    scpi: "VOLT {voltage}"
+    type: "write"
+    description: "出力電圧を設定（V単位、定格0〜105%）"
+    parameters:
+      - name: voltage
+        description: "電圧値 (0〜36.75 V)"
+        type: "float"
+        range: [0, 36.75]
+
+  query_voltage:
+    scpi: "VOLT?"
+    type: "query"
+    description: "設定電圧値を問い合わせ"
+    parameters: []
+    returns:
+      type: "float"
+      unit: "V"
+
+  set_voltage_protection:
+    scpi: "VOLT:PROT {voltage}"
+    type: "write"
+    description: "過電圧保護(OVP)動作点を設定（定格10〜110%）"
+    parameters:
+      - name: voltage
+        description: "OVP値 (3.5〜38.5 V)"
+        type: "float"
+        range: [3.5, 38.5]
+
+  query_voltage_protection:
+    scpi: "VOLT:PROT?"
+    type: "query"
+    description: "OVP動作点を問い合わせ"
+    parameters: []
+    returns:
+      type: "float"
+      unit: "V"
+
+  set_voltage_trigger:
+    scpi: "VOLT:TRIG {voltage}"
+    type: "write"
+    description: "トリガで切り替わる電圧値を設定（*TRG で適用）"
+    parameters:
+      - name: voltage
+        type: "float"
+        range: [0, 36.75]
+
+  query_voltage_trigger:
+    scpi: "VOLT:TRIG?"
+    type: "query"
+    description: "トリガ電圧値を問い合わせ"
+    parameters: []
+    returns:
+      type: "float"
+      unit: "V"
+
+  set_voltage_external_source:
+    scpi: "VOLT:EXT:SOUR {source}"
+    type: "write"
+    description: "外部コントロールでのCVコントロール方法 (NONE=なし, VOLT=外部電圧, RES=外部抵抗)"
+    parameters:
+      - name: source
+        type: "enum"
+        choices: ["NONE", "VOLT", "RES"]
+
+  # ====================================================
+  # 電流設定 ([SOURce:]CURRent)
+  # ====================================================
+  set_current:
+    scpi: "CURR {current}"
+    type: "write"
+    description: "出力電流を設定（A単位、定格0〜105%）"
+    parameters:
+      - name: current
+        description: "電流値 (0〜3.15 A)"
+        type: "float"
+        range: [0, 3.15]
+
+  query_current:
+    scpi: "CURR?"
+    type: "query"
+    description: "設定電流値を問い合わせ"
+    parameters: []
+    returns:
+      type: "float"
+      unit: "A"
+
+  set_current_protection:
+    scpi: "CURR:PROT {current}"
+    type: "write"
+    description: "過電流保護(OCP)動作点を設定（定格10〜110%）"
+    parameters:
+      - name: current
+        description: "OCP値 (0.3〜3.3 A)"
+        type: "float"
+        range: [0.3, 3.3]
+
+  query_current_protection:
+    scpi: "CURR:PROT?"
+    type: "query"
+    description: "OCP動作点を問い合わせ"
+    parameters: []
+    returns:
+      type: "float"
+      unit: "A"
+
+  set_current_trigger:
+    scpi: "CURR:TRIG {current}"
+    type: "write"
+    description: "トリガで切り替わる電流値を設定（*TRG で適用）"
+    parameters:
+      - name: current
+        type: "float"
+        range: [0, 3.15]
+
+  query_current_trigger:
+    scpi: "CURR:TRIG?"
+    type: "query"
+    description: "トリガ電流値を問い合わせ"
+    parameters: []
+    returns:
+      type: "float"
+      unit: "A"
+
+  set_current_external_source:
+    scpi: "CURR:EXT:SOUR {source}"
+    type: "write"
+    description: "外部コントロールでのCCコントロール方法 (NONE=なし, VOLT=外部電圧, RES=外部抵抗)"
+    parameters:
+      - name: source
+        type: "enum"
+        choices: ["NONE", "VOLT", "RES"]
+
+  # ====================================================
+  # 測定 (MEASure)
+  # ====================================================
+  measure_voltage:
+    scpi: "MEAS:VOLT?"
+    type: "query"
+    description: "現在の出力電圧値を測定"
+    parameters: []
+    returns:
+      type: "float"
+      unit: "V"
+
+  measure_current:
+    scpi: "MEAS:CURR?"
+    type: "query"
+    description: "現在の出力電流値を測定"
+    parameters: []
+    returns:
+      type: "float"
+      unit: "A"
+
+  # ====================================================
+  # トリガ初期化 (INITiate)
+  # ====================================================
+  init_transient:
+    scpi: "INIT:TRAN"
+    type: "write"
+    description: "設定の変更のトリガ機能を開始（*TRG または外部トリガ受付状態にする）"
+    parameters: []
+
+  abort:
+    scpi: "ABOR"
+    type: "write"
+    description: "設定の変更動作を中止"
+    parameters: []
+
+  # ====================================================
+  # プリセットメモリ (MEMory)
+  # ====================================================
+  memory_recall:
+    scpi: "MEM:REC {memory}"
+    type: "write"
+    description: "プリセットメモリに保存した設定値を呼び出し (1=A, 2=B, 3=C)"
+    parameters:
+      - name: memory
+        type: "enum"
+        choices: ["1", "2", "3"]
+
+  memory_save:
+    scpi: "MEM:SAVE {memory}"
+    type: "write"
+    description: "現在の設定値をプリセットメモリに保存 (1=A, 2=B, 3=C)"
+    parameters:
+      - name: memory
+        type: "enum"
+        choices: ["1", "2", "3"]
+
+  set_memory_recall_confirmation:
+    scpi: "MEM:REC:CONF {state}"
+    type: "write"
+    description: "パネル操作でプリセットメモリ呼び出し時に確認するかどうか"
+    parameters:
+      - name: state
+        type: "enum"
+        choices: ["0", "1", "ON", "OFF"]
+
+  preview_memory:
+    scpi: "MEM:REC:PREV? {memory}"
+    type: "query"
+    description: "プリセットメモリに保存されている設定値を覗き見る"
+    parameters:
+      - name: memory
+        type: "enum"
+        choices: ["1", "2", "3"]
+    returns:
+      type: "string"
+
+  # ====================================================
+  # ステータス (STATus)
+  # ====================================================
+  query_operation_condition:
+    scpi: "STAT:OPER:COND?"
+    type: "query"
+    description: "OPERATIONステータスのコンディションレジスタ"
+    parameters: []
+    returns:
+      type: "integer"
+
+  query_operation_event:
+    scpi: "STAT:OPER?"
+    type: "query"
+    description: "OPERATIONステータスのイベントレジスタ（読み出しでクリア）"
+    parameters: []
+    returns:
+      type: "integer"
+
+  query_questionable_condition:
+    scpi: "STAT:QUES:COND?"
+    type: "query"
+    description: "QUESTIONABLEステータスのコンディションレジスタ"
+    parameters: []
+    returns:
+      type: "integer"
+
+  query_questionable_event:
+    scpi: "STAT:QUES?"
+    type: "query"
+    description: "QUESTIONABLEステータスのイベントレジスタ（読み出しでクリア）"
+    parameters: []
+    returns:
+      type: "integer"
+
+  # ====================================================
+  # システム (SYSTem)
+  # ====================================================
+  query_error:
+    scpi: "SYST:ERR?"
+    type: "query"
+    description: "エラーキューから次のエラーを読み出し"
+    parameters: []
+    returns:
+      type: "string"
+      description: "例: '0,\"No error\"' またはエラーコード/メッセージ"
+
+  query_scpi_version:
+    scpi: "SYST:VERS?"
+    type: "query"
+    description: "本製品が準拠するSCPIのバージョンを問い合わせ"
+    parameters: []
+    returns:
+      type: "string"
+
+  set_key_lock:
+    scpi: "SYST:KLOC {state}"
+    type: "write"
+    description: "パネルキーロック設定"
+    parameters:
+      - name: state
+        type: "enum"
+        choices: ["0", "1", "ON", "OFF"]
+
+  set_remote:
+    scpi: "SYST:REM"
+    type: "write"
+    description: "リモート状態にする"
+    parameters: []
+
+  set_local:
+    scpi: "SYST:LOC"
+    type: "write"
+    description: "ローカル状態に戻す"
+    parameters: []
+
+  set_remote_with_lockout:
+    scpi: "SYST:RWL"
+    type: "write"
+    description: "リモートウィズロックアウト状態（フロントパネル操作不可）"
+    parameters: []

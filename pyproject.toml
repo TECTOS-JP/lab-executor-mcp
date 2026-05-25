@@ -1,0 +1,46 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "lab-executor-mcp"
+version = "2.0.0-rc1"
+description = "Backend-independent experiment execution runtime for AI agents (split from visa-mcp v1.11)"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+keywords = [
+    "mcp", "experiment-automation", "laboratory-automation",
+    "ai-agent", "dsl", "fastmcp", "claude",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering",
+]
+
+# v2.0: PyVISA は依存しない (backend は外部から注入)
+dependencies = [
+    "fastmcp>=2.0",
+    "pydantic>=2.0",
+    "pyyaml",
+]
+
+[project.optional-dependencies]
+pdf = ["pdfplumber"]
+dev = ["pytest", "pytest-asyncio", "pyyaml"]
+
+[project.scripts]
+lab-executor = "lab_executor.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/lab_executor"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

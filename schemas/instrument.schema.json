@@ -1,0 +1,971 @@
+{
+  "$defs": {
+    "CommandDefinition": {
+      "properties": {
+        "scpi": {
+          "title": "Scpi",
+          "type": "string"
+        },
+        "type": {
+          "default": "query",
+          "enum": [
+            "query",
+            "write"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        },
+        "parameters": {
+          "items": {
+            "$ref": "#/$defs/ParameterDefinition"
+          },
+          "title": "Parameters",
+          "type": "array"
+        },
+        "returns": {
+          "$ref": "#/$defs/ReturnDefinition"
+        },
+        "timeout_ms": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Timeout Ms"
+        },
+        "polling_safe": {
+          "default": false,
+          "title": "Polling Safe",
+          "type": "boolean"
+        },
+        "verify": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VerifyConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "scpi"
+      ],
+      "title": "CommandDefinition",
+      "type": "object"
+    },
+    "ConnectionConfig": {
+      "properties": {
+        "default_timeout_ms": {
+          "default": 5000,
+          "title": "Default Timeout Ms",
+          "type": "integer"
+        },
+        "read_termination": {
+          "default": "\n",
+          "title": "Read Termination",
+          "type": "string"
+        },
+        "write_termination": {
+          "default": "\n",
+          "title": "Write Termination",
+          "type": "string"
+        },
+        "serial": {
+          "$ref": "#/$defs/SerialConfig"
+        }
+      },
+      "title": "ConnectionConfig",
+      "type": "object"
+    },
+    "HardwareProtection": {
+      "description": "機器側の保護機能 (情報共有のみ)",
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        },
+        "related_command": {
+          "default": "",
+          "title": "Related Command",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "HardwareProtection",
+      "type": "object"
+    },
+    "IdentificationConfig": {
+      "properties": {
+        "manufacturer_match": {
+          "default": "",
+          "title": "Manufacturer Match",
+          "type": "string"
+        },
+        "model_regex": {
+          "default": "",
+          "title": "Model Regex",
+          "type": "string"
+        }
+      },
+      "title": "IdentificationConfig",
+      "type": "object"
+    },
+    "MetadataConfig": {
+      "properties": {
+        "manufacturer": {
+          "title": "Manufacturer",
+          "type": "string"
+        },
+        "model": {
+          "title": "Model",
+          "type": "string"
+        },
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        },
+        "manual_ref": {
+          "default": "",
+          "title": "Manual Ref",
+          "type": "string"
+        },
+        "category": {
+          "default": "",
+          "title": "Category",
+          "type": "string"
+        },
+        "support_level": {
+          "default": "draft",
+          "title": "Support Level",
+          "type": "string"
+        },
+        "tested_interfaces": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Tested Interfaces",
+          "type": "array"
+        },
+        "tested_firmware": {
+          "default": "",
+          "title": "Tested Firmware",
+          "type": "string"
+        },
+        "definition_version": {
+          "default": "",
+          "title": "Definition Version",
+          "type": "string"
+        },
+        "validation_evidence": {
+          "additionalProperties": true,
+          "title": "Validation Evidence",
+          "type": "object"
+        }
+      },
+      "required": [
+        "manufacturer",
+        "model"
+      ],
+      "title": "MetadataConfig",
+      "type": "object"
+    },
+    "OperationalMode": {
+      "description": "動作モード (例: CV/CC、Local/Remote)",
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        },
+        "indicator": {
+          "default": "",
+          "title": "Indicator",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "OperationalMode",
+      "type": "object"
+    },
+    "OperationalStates": {
+      "description": "状態機械・推奨手順",
+      "properties": {
+        "startup_sequence": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Startup Sequence",
+          "type": "array"
+        },
+        "shutdown_sequence": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Shutdown Sequence",
+          "type": "array"
+        },
+        "modes": {
+          "items": {
+            "$ref": "#/$defs/OperationalMode"
+          },
+          "title": "Modes",
+          "type": "array"
+        },
+        "notes": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Notes",
+          "type": "array"
+        }
+      },
+      "title": "OperationalStates",
+      "type": "object"
+    },
+    "ParameterDefinition": {
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        },
+        "type": {
+          "default": "string",
+          "enum": [
+            "integer",
+            "float",
+            "string",
+            "enum"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "required": {
+          "default": true,
+          "title": "Required",
+          "type": "boolean"
+        },
+        "range": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "number"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Range"
+        },
+        "choices": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Choices"
+        },
+        "default": {
+          "default": null,
+          "title": "Default"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "ParameterDefinition",
+      "type": "object"
+    },
+    "PhysicalInterface": {
+      "description": "物理コネクタ・端子情報",
+      "properties": {
+        "front_panel": {
+          "items": {
+            "$ref": "#/$defs/PhysicalTerminal"
+          },
+          "title": "Front Panel",
+          "type": "array"
+        },
+        "rear_panel": {
+          "items": {
+            "$ref": "#/$defs/PhysicalTerminal"
+          },
+          "title": "Rear Panel",
+          "type": "array"
+        },
+        "notes": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Notes",
+          "type": "array"
+        }
+      },
+      "title": "PhysicalInterface",
+      "type": "object"
+    },
+    "PhysicalTerminal": {
+      "description": "物理端子の情報",
+      "properties": {
+        "label": {
+          "title": "Label",
+          "type": "string"
+        },
+        "type": {
+          "default": "",
+          "title": "Type",
+          "type": "string"
+        },
+        "color": {
+          "default": "",
+          "title": "Color",
+          "type": "string"
+        },
+        "max_voltage_to_gnd": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Voltage To Gnd"
+        },
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        }
+      },
+      "required": [
+        "label"
+      ],
+      "title": "PhysicalTerminal",
+      "type": "object"
+    },
+    "PreconditionCheck": {
+      "description": "状態・順序制約: 特定コマンド実行前に満たすべき条件",
+      "properties": {
+        "command": {
+          "title": "Command",
+          "type": "string"
+        },
+        "when": {
+          "additionalProperties": true,
+          "title": "When",
+          "type": "object"
+        },
+        "requires": {
+          "items": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "title": "Requires",
+          "type": "array"
+        },
+        "severity": {
+          "default": "medium",
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "title": "Severity",
+          "type": "string"
+        },
+        "reason": {
+          "default": "",
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "command"
+      ],
+      "title": "PreconditionCheck",
+      "type": "object"
+    },
+    "RatingItem": {
+      "description": "値制約: rated/absolute_max/recommended_max を持つ単項目",
+      "properties": {
+        "rated": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rated"
+        },
+        "absolute_max": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Absolute Max"
+        },
+        "recommended_max": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Recommended Max"
+        },
+        "absolute_min": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Absolute Min"
+        },
+        "recommended_min": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Recommended Min"
+        },
+        "unit": {
+          "default": "",
+          "title": "Unit",
+          "type": "string"
+        },
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        }
+      },
+      "title": "RatingItem",
+      "type": "object"
+    },
+    "RecipeDefinition": {
+      "description": "複数コマンドを安全な順序で実行する典型ワークフロー",
+      "properties": {
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        },
+        "parameters": {
+          "items": {
+            "$ref": "#/$defs/ParameterDefinition"
+          },
+          "title": "Parameters",
+          "type": "array"
+        },
+        "steps": {
+          "items": {
+            "$ref": "#/$defs/RecipeStep"
+          },
+          "title": "Steps",
+          "type": "array"
+        }
+      },
+      "title": "RecipeDefinition",
+      "type": "object"
+    },
+    "RecipeStep": {
+      "description": "recipe の 1 ステップ。\n\nv0.5.0-rc1 から下記のステップ型をサポート:\n- **command step**: `command` を指定 (従来通り)、機器コマンドを実行\n- **wait step**: `wait: { seconds: N }` を指定、N 秒待機\n\nv0.5.1 で polling 系を追加:\n- **wait_until step**:        `wait_until: { timestamp: ... | seconds_from_now: ... }`\n- **wait_for_condition step**:`wait_for_condition: {...}`\n- **wait_for_stable step**:   `wait_for_stable: {...}`\n\nいずれか一つを必ず指定する (複数指定はエラー)。\n\nYAML 例:\n    steps:\n      - { command: \"set_voltage\", args: { voltage: 5 } }\n      - wait: { seconds: 60 }\n      - wait_for_stable:\n          instrument: temp1\n          command: measure_temperature\n          tolerance: 0.2\n          window_s: 60\n          interval_s: 5\n          timeout_s: 1800\n      - { command: \"measure_temperature\" }",
+      "properties": {
+        "command": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Command"
+        },
+        "args": {
+          "additionalProperties": true,
+          "title": "Args",
+          "type": "object"
+        },
+        "result_as": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Result As"
+        },
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        },
+        "instrument": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Instrument"
+        },
+        "stagger_ms": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stagger Ms"
+        },
+        "wait": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Wait"
+        },
+        "wait_until": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Wait Until"
+        },
+        "wait_for_condition": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Wait For Condition"
+        },
+        "wait_for_stable": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Wait For Stable"
+        },
+        "barrier": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Barrier"
+        }
+      },
+      "title": "RecipeStep",
+      "type": "object"
+    },
+    "ResponseFormat": {
+      "description": "機器固有の応答フォーマット定義",
+      "properties": {
+        "pattern": {
+          "title": "Pattern",
+          "type": "string"
+        },
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        },
+        "fields": {
+          "additionalProperties": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "title": "Fields",
+          "type": "object"
+        }
+      },
+      "required": [
+        "pattern"
+      ],
+      "title": "ResponseFormat",
+      "type": "object"
+    },
+    "ReturnDefinition": {
+      "properties": {
+        "type": {
+          "default": "string",
+          "enum": [
+            "none",
+            "integer",
+            "float",
+            "boolean",
+            "string"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "unit": {
+          "default": "",
+          "title": "Unit",
+          "type": "string"
+        },
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        },
+        "format": {
+          "default": "",
+          "title": "Format",
+          "type": "string"
+        }
+      },
+      "title": "ReturnDefinition",
+      "type": "object"
+    },
+    "SafetyConfig": {
+      "description": "安全制約セクション",
+      "properties": {
+        "ratings": {
+          "additionalProperties": {
+            "$ref": "#/$defs/RatingItem"
+          },
+          "title": "Ratings",
+          "type": "object"
+        },
+        "preconditions": {
+          "items": {
+            "$ref": "#/$defs/PreconditionCheck"
+          },
+          "title": "Preconditions",
+          "type": "array"
+        },
+        "cautions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Cautions",
+          "type": "array"
+        },
+        "hardware_protections": {
+          "items": {
+            "$ref": "#/$defs/HardwareProtection"
+          },
+          "title": "Hardware Protections",
+          "type": "array"
+        }
+      },
+      "title": "SafetyConfig",
+      "type": "object"
+    },
+    "SerialConfig": {
+      "properties": {
+        "baud_rate": {
+          "default": 9600,
+          "title": "Baud Rate",
+          "type": "integer"
+        },
+        "data_bits": {
+          "default": 8,
+          "title": "Data Bits",
+          "type": "integer"
+        },
+        "parity": {
+          "default": "N",
+          "enum": [
+            "N",
+            "E",
+            "O"
+          ],
+          "title": "Parity",
+          "type": "string"
+        },
+        "stop_bits": {
+          "default": 1,
+          "title": "Stop Bits",
+          "type": "number"
+        },
+        "flow_control": {
+          "default": "none",
+          "enum": [
+            "none",
+            "xon_xoff",
+            "rts_cts"
+          ],
+          "title": "Flow Control",
+          "type": "string"
+        }
+      },
+      "title": "SerialConfig",
+      "type": "object"
+    },
+    "SpecificationConfig": {
+      "description": "機器仕様 (LLM への情報提供用、自由形式)",
+      "properties": {
+        "outputs": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Outputs",
+          "type": "array"
+        },
+        "measurement": {
+          "additionalProperties": true,
+          "title": "Measurement",
+          "type": "object"
+        },
+        "other": {
+          "additionalProperties": true,
+          "title": "Other",
+          "type": "object"
+        }
+      },
+      "title": "SpecificationConfig",
+      "type": "object"
+    },
+    "StateQueryItem": {
+      "description": "v0.7.0: 状態 query 1 件の定義\n\n`command` は CommandDefinition の名前 (query 系)。\n`unit` は表示用 (実機は単位変換しない)。\n`value_path` は parsed response から数値を取り出すフィールド名。\n`map` は raw 文字列を表示値に変換する辞書 (例: {\"1\": \"ON\", \"0\": \"OFF\"})。",
+      "properties": {
+        "command": {
+          "title": "Command",
+          "type": "string"
+        },
+        "unit": {
+          "default": "",
+          "title": "Unit",
+          "type": "string"
+        },
+        "value_path": {
+          "default": "",
+          "title": "Value Path",
+          "type": "string"
+        },
+        "map": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Map",
+          "type": "object"
+        },
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        }
+      },
+      "required": [
+        "command"
+      ],
+      "title": "StateQueryItem",
+      "type": "object"
+    },
+    "VerifyConfig": {
+      "description": "v0.7.0: write 系コマンドの read-back 検証設定\n\n`readback_command` で指定された query 系コマンドを write 直後に実行し、\nwrite した args[*] と read 値を比較する。strict mode では不一致を step failed\nとして扱う。\n\n比較は数値のみ (v0.7.0 MVP)。文字列比較は v0.7.1 以降。",
+      "properties": {
+        "readback_command": {
+          "title": "Readback Command",
+          "type": "string"
+        },
+        "arg_key": {
+          "default": "",
+          "title": "Arg Key",
+          "type": "string"
+        },
+        "tolerance": {
+          "default": 0.0,
+          "title": "Tolerance",
+          "type": "number"
+        },
+        "retry": {
+          "default": 1,
+          "title": "Retry",
+          "type": "integer"
+        },
+        "delay_s": {
+          "default": 0.2,
+          "title": "Delay S",
+          "type": "number"
+        },
+        "value_path": {
+          "default": "",
+          "title": "Value Path",
+          "type": "string"
+        }
+      },
+      "required": [
+        "readback_command"
+      ],
+      "title": "VerifyConfig",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "metadata": {
+      "$ref": "#/$defs/MetadataConfig"
+    },
+    "identification": {
+      "$ref": "#/$defs/IdentificationConfig"
+    },
+    "connection": {
+      "$ref": "#/$defs/ConnectionConfig"
+    },
+    "commands": {
+      "additionalProperties": {
+        "$ref": "#/$defs/CommandDefinition"
+      },
+      "title": "Commands",
+      "type": "object"
+    },
+    "safety": {
+      "$ref": "#/$defs/SafetyConfig"
+    },
+    "specifications": {
+      "$ref": "#/$defs/SpecificationConfig"
+    },
+    "response_formats": {
+      "additionalProperties": {
+        "$ref": "#/$defs/ResponseFormat"
+      },
+      "title": "Response Formats",
+      "type": "object"
+    },
+    "recipes": {
+      "additionalProperties": {
+        "$ref": "#/$defs/RecipeDefinition"
+      },
+      "title": "Recipes",
+      "type": "object"
+    },
+    "operational_states": {
+      "$ref": "#/$defs/OperationalStates"
+    },
+    "physical_interface": {
+      "$ref": "#/$defs/PhysicalInterface"
+    },
+    "safe_shutdown": {
+      "items": {
+        "$ref": "#/$defs/RecipeStep"
+      },
+      "title": "Safe Shutdown",
+      "type": "array"
+    },
+    "state_query": {
+      "additionalProperties": {
+        "$ref": "#/$defs/StateQueryItem"
+      },
+      "title": "State Query",
+      "type": "object"
+    }
+  },
+  "required": [
+    "metadata"
+  ],
+  "title": "Instrument YAML Definition (v1.0 stable)",
+  "type": "object",
+  "$id": "https://tectos-jp.github.io/visa-mcp/schemas/instrument.schema.v1.json",
+  "x-visa-mcp-status": "stable",
+  "x-compatibility": "v1.x-compatible",
+  "description": " (v1.0 stable. 詳細互換保証は docs/v1_stability_policy.md 参照。 一部 experimental fields は v1.x 内で変更可能。)"
+}

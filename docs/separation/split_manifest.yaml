@@ -1,0 +1,210 @@
+# Split Manifest (v1.10.0, v2.0 git filter-repo の source)
+#
+# v2.0 で `git filter-repo` を使って lab-executor-mcp 新 repo へ移送
+# する path の **網羅リスト**。v1.10 では path 単位 (file 全体) で
+# 列挙し、`split` 扱いの module は v1.11 で sub-module 分割が済んで
+# から path を追加する。
+#
+# 関連: docs/separation/module_ownership.yaml
+# / docs/separation/dependency_graph.md
+
+# 第一候補リポジトリ名 (v1.11 で確定予定)
+target_repo:
+  name: lab-executor-mcp
+  pypi: lab-executor-mcp
+  python_package: lab_executor
+  cli: lab-executor
+
+# ===========================================================
+# move_to_lab_executor: lab-executor-mcp 新 repo へ移送する path
+# (v2.0 で `git filter-repo --path-rename` を使う)
+# ===========================================================
+move_to_lab_executor:
+  # core runtime
+  - src/visa_mcp/audit.py
+  - src/visa_mcp/observation.py
+  - src/visa_mcp/response_envelope.py
+  - src/visa_mcp/safety.py
+  - src/visa_mcp/stability.py
+  - src/visa_mcp/state_query.py
+  - src/visa_mcp/system_config.py
+  - src/visa_mcp/polling_executor.py
+  - src/visa_mcp/instrument_registry.py
+  - src/visa_mcp/response_parser.py
+
+  # DSL / Plan
+  - src/visa_mcp/dsl/
+
+  # Job / scheduler
+  - src/visa_mcp/job/
+  - src/visa_mcp/group/
+
+  # IR
+  - src/visa_mcp/experiment_ir/
+
+  # Definition pack ecosystem (v1.2 - v1.8)
+  - src/visa_mcp/extension.py
+  - src/visa_mcp/extension_install.py
+  - src/visa_mcp/extension_integrity.py
+  - src/visa_mcp/extension_packaging.py
+  - src/visa_mcp/extension_catalog.py
+  - src/visa_mcp/extension_authoring.py
+  - src/visa_mcp/instrument_authoring.py
+
+  # Models / schemas
+  - src/visa_mcp/models/
+  - schemas/dsl.schema.json
+  - schemas/instrument.schema.json
+  - schemas/system_config.schema.json
+  - schemas/benchmark_task.schema.json
+  - schemas/extension_manifest.schema.json
+
+  # Testing / benchmark
+  - src/visa_mcp/testing/
+  - benchmarks/
+
+  # Tools (runtime 寄り)
+  - src/visa_mcp/tools/audit.py
+  - src/visa_mcp/tools/dsl.py
+  - src/visa_mcp/tools/export.py
+  - src/visa_mcp/tools/groups.py
+  - src/visa_mcp/tools/info.py
+  - src/visa_mcp/tools/jobs.py
+  - src/visa_mcp/tools/monitor.py
+  - src/visa_mcp/tools/observation.py
+  - src/visa_mcp/tools/recipes.py
+  - src/visa_mcp/tools/waits.py
+  - src/visa_mcp/tools/pdf_extractor.py
+
+  # Utils
+  - src/visa_mcp/utils/
+
+  # Dev tools (boundary monitor)
+  - src/visa_mcp/dev/
+
+  # Built-in registry
+  - registry/
+
+  # docs (runtime / ecosystem 中心は全部移送、backend 系のみ visa-mcp 側に残す)
+  - docs/
+
+# ===========================================================
+# keep_in_visa_mcp: visa-mcp に残す path
+# ===========================================================
+keep_in_visa_mcp:
+  # PyVISA backend 実装
+  - src/visa_mcp/visa_manager.py
+  - src/visa_mcp/bus_manager.py
+  - src/visa_mcp/session_manager.py
+
+  # backend Protocol は両 repo が見るが、PyVisaBackend adapter 実体は
+  # visa-mcp 側 (v1.11 で実装)
+  # → src/visa_mcp/backends/pyvisa_backend.py (v1.11 新規)
+
+  # PyVISA-direct tools
+  - src/visa_mcp/tools/discovery.py
+
+  # raw VISA / env-gated tools (env: VISA_MCP_ALLOW_RAW)
+  # 注: v1.11 で tools/commands.py を分割し、raw 部分のみ visa-mcp に残す
+
+  # visa-mcp 専用 docs
+  - docs/raw_visa.md  # (v2.0 で新規作成予定、現状は v1_stability_policy 内に記載)
+
+# ===========================================================
+# split_files: v1.11 で内部分割してから移送する path
+# ===========================================================
+split_files:
+  - path: src/visa_mcp/cli.py
+    v1_11_split_into:
+      - lab-executor: src/lab_executor/cli.py (validate / extension /
+          instrument / registry / lab-executor serve)
+      - visa-mcp:     src/visa_mcp/cli.py (serve / list-resources /
+          raw VISA / extract-pdf 後方互換 shim)
+    notes: |
+      v1.x の CLI は backend / runtime / authoring 系が混在。v2.0 で
+      `lab-executor` と `visa-mcp` 2 つに分けるが、互換のため
+      `visa-mcp extension ...` 等は v2.0 では DeprecationWarning 経由で
+      lab-executor CLI を呼ぶ shim として残す。
+
+  - path: src/visa_mcp/tools/commands.py
+    v1_11_split_into:
+      - lab-executor: tools/commands_named.py
+          (execute_named_command / list_commands)
+      - visa-mcp:     tools/commands_raw_visa.py
+          (send_command / query_instrument, env-gated)
+    notes: named command orchestration vs raw VISA を分離
+
+  - path: src/visa_mcp/step_executor.py
+    v1_11_split_into:
+      - lab-executor: step_executor/ir_runner.py
+      - shared:       step_executor/visa_transport.py
+          (InstrumentBackend Protocol 経由化)
+    notes: IR 実行と visa 送受信を adapter 経由で切り離す
+
+  - path: src/visa_mcp/recipe_executor.py
+    v1_11_split_into:
+      - lab-executor: recipe execution flow
+      - shared:       backend 呼び出しは InstrumentBackend 経由
+    notes: step_executor と同じ方針
+
+  - path: src/visa_mcp/registry.py
+    v1_11_split_into:
+      - lab-executor: registry/index.py
+      - lab-executor: registry/instrument_validation.py
+      - lab-executor: registry/strict_checks.py
+      - lab-executor: registry/plan_validation.py
+      - lab-executor: registry/benchmark_validation.py
+      - lab-executor: registry/category_policy.py
+    notes: v1.10 で識別済、v1.11 で実分割
+
+  - path: src/visa_mcp/server.py
+    v1_11_split_into:
+      - lab-executor: MCP tool registration + lab-executor serve
+      - visa-mcp:     compatibility wrapper (PyVisaBackend を inject)
+    notes: tool surface は lab-executor 所有
+
+  - path: src/visa_mcp/__init__.py
+    v1_11_split_into:
+      - lab-executor: src/lab_executor/__init__.py
+      - visa-mcp:     src/visa_mcp/__init__.py (shim)
+    notes: visa-mcp shim は warnings + re-export 構成
+
+  - path: src/visa_mcp/backends/
+    v1_11_split_into:
+      - shared:       backends/base.py (Protocol、両 repo が見る)
+      - visa-mcp:     backends/pyvisa_backend.py (実装)
+      - lab-executor: backends/mock_backend.py (実装)
+    notes: Protocol は shared (lab-executor 側 source of truth)
+
+# ===========================================================
+# rename_after_move: 移送後の lab_executor/ への path 置換
+# ===========================================================
+rename_after_move:
+  # src/visa_mcp/ → src/lab_executor/
+  - from_pattern: "src/visa_mcp/"
+    to_pattern:   "src/lab_executor/"
+    note: backend layer 以外すべて
+  # tests/ は名前変更しないが import を rewrite (Step 3)
+  # import rewrite ルール:
+  #   visa_mcp.<owner=lab-executor> → lab_executor.<...>
+  #   visa_mcp.visa_manager / bus_manager / session_manager → visa_mcp.* (現状維持)
+
+# ===========================================================
+# excluded: 移送対象外 (visa-mcp 側にも入らない、削除候補)
+# ===========================================================
+excluded:
+  # v0.x 時代の dev/scratch 系があれば削除候補。現在は無し
+  []
+
+# ===========================================================
+# Pre-split CI gates (v2.0.0-rc1 で必須)
+# ===========================================================
+rc1_gates:
+  - "module_ownership.yaml に unclassified が 0 件"
+  - "test_separation_boundary.py が green"
+  - "pyvisa-not-installed CI が green"
+  - "split_files の v1_11_split が完了している"
+  - "git filter-repo dry-run が成功"
+  - "lab-executor-mcp wheel が PyVISA を含まない"
+  - "visa-mcp wheel が lab-executor-mcp >= 2.0 を install_requires に持つ"
+  - "docs/v2_migration.md が両 repo 用にある"

@@ -1,0 +1,7 @@
+instruments:
+  mock_dmm:
+    resource: "dmm001"
+  dmm_good:
+    resource: "dmm_good_001"
+  dmm_bad:
+    resource: "dmm_bad_001"

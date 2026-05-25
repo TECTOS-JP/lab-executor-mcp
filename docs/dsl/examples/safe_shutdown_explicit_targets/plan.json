@@ -1,0 +1,33 @@
+{
+  "dsl_version": "0.8",
+  "name": "safe_shutdown_explicit_targets",
+  "description": "psu_a を一定電圧設定後、psu_a だけを safe_shutdown",
+  "bindings": {
+    "psu_a": "psu001",
+    "psu_b": "psu002"
+  },
+  "steps": [
+    {
+      "type": "command",
+      "instrument": "$psu_a",
+      "command": "set_voltage",
+      "args": {
+        "voltage": 5.0
+      }
+    },
+    {
+      "type": "command",
+      "instrument": "$psu_b",
+      "command": "set_voltage",
+      "args": {
+        "voltage": 3.0
+      }
+    },
+    {
+      "type": "safe_shutdown",
+      "targets": [
+        "$psu_a"
+      ]
+    }
+  ]
+}

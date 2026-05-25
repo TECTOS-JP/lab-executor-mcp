@@ -1,0 +1,26 @@
+{
+  "dsl_version": "0.8",
+  "name": "voltage_sweep_basic",
+  "description": "voltage / wait_s をテンプレート変数とした再利用可能 sweep (v0.8.3)",
+  "unit": "unit001",
+  "variables": {
+    "voltage": 1.0,
+    "wait_s": 0.5
+  },
+  "steps": [
+    {
+      "type": "command",
+      "instrument": "$psu",
+      "command": "set_voltage",
+      "args": { "voltage": "{voltage}" }
+    },
+    { "type": "wait", "seconds": "{wait_s}" },
+    {
+      "type": "query",
+      "instrument": "$dmm",
+      "command": "measure_voltage",
+      "save_as": "v_meas"
+    },
+    { "type": "safe_shutdown" }
+  ]
+}

@@ -1,0 +1,46 @@
+id: task_005_partial_failure_parallel
+title: Parallel branches with one timeout → partial_failure
+description: >
+  parallel 2 branch のうち 1 つが timeout する scenario。job_status=completed だが
+  job_outcome=partial_failure として表現されることを期待。
+
+layer: execute
+
+input:
+  instruction: "Run two parallel branches; one DMM times out."
+  plan:
+    dsl_version: "0.8"
+    name: parallel_partial
+    bindings:
+      dmm_a: dmm_good
+      dmm_b: dmm_bad
+    steps:
+      - type: parallel
+        concurrency: 2
+        branches:
+          - - { type: query, instrument: $dmm_a, command: measure_voltage }
+          - - { type: query, instrument: $dmm_b, command: measure_voltage }
+
+expected:
+  plan_features:
+    uses_parallel: true
+  required_tool_sequence:
+    required_order:
+      - validate_experiment_plan
+      - start_experiment_job
+  success_criteria:
+    validation_status: ok
+    expected_job_outcome: partial_failure
+
+fixtures:
+  system_config: fixtures/system_config_partial_failure.yaml
+  instruments:
+    - fixtures/instruments/mock_dmm.yaml
+  mock_scenarios:
+    dmm_good_001:
+      - command_pattern: ".*"
+        mode: constant
+        value: 1.0
+    dmm_bad_001:
+      - command_pattern: ".*"
+        mode: timeout

@@ -1,0 +1,13 @@
+instruments:
+  mock_psu:
+    resource: "psu001"
+  mock_dmm:
+    resource: "dmm001"
+  mock_temp:
+    resource: "temp001"
+
+experiment_units:
+  unit001:
+    psu: mock_psu
+    dmm: mock_dmm
+    temp: mock_temp

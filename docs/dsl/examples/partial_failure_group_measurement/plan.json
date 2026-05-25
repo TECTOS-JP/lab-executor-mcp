@@ -1,0 +1,39 @@
+{
+  "dsl_version": "0.8",
+  "name": "partial_failure_group_measurement",
+  "description": "3 つの機器を parallel で測定 (一部失敗を許容する想定)",
+  "bindings": {
+    "dmm_a": "dmm001",
+    "dmm_b": "dmm002",
+    "dmm_c": "dmm003"
+  },
+  "steps": [
+    {
+      "type": "parallel",
+      "concurrency": 3,
+      "branches": [
+        [
+          {
+            "type": "query",
+            "instrument": "$dmm_a",
+            "command": "measure_voltage"
+          }
+        ],
+        [
+          {
+            "type": "query",
+            "instrument": "$dmm_b",
+            "command": "measure_voltage"
+          }
+        ],
+        [
+          {
+            "type": "query",
+            "instrument": "$dmm_c",
+            "command": "measure_voltage"
+          }
+        ]
+      ]
+    }
+  ]
+}

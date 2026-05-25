@@ -1,0 +1,6 @@
+{
+  "expected_summary": "uses_polling=True, polling_safe_false warning が出る可能性",
+  "valid": true,
+  "name": "voltage_sweep_with_wait_for_stable",
+  "dsl_version": "0.8"
+}

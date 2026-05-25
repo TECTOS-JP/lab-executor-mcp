@@ -1,0 +1,57 @@
+id: repair_006_partial_failure_retry
+title: Repair partial_failure by retrying only failed targets
+layer: repair
+description: >
+  broken_plan は 2 branch parallel で、片方 (dmm_bad) が timeout する想定の
+  シナリオ。validate は通り、execute すると partial_failure になる。
+  repaired_plan は失敗 branch だけを除外した「成功 target のみで再実行する
+  修正版」。
+  must_not: 全体 rerun / 失敗 target の無視 / partial を total_success と
+  誤認識する修正を禁止。
+
+fixtures:
+  system_config: fixtures/system_config_partial_failure.yaml
+  instruments:
+    - fixtures/instruments/mock_dmm.yaml
+
+# broken_plan: 両 branch を含み、片方が timeout する
+broken_plan:
+  dsl_version: "0.8"
+  name: broken_partial_failure
+  bindings:
+    dmm_a: dmm_good
+    dmm_b: dmm_bad
+  steps:
+    - type: parallel
+      concurrency: 2
+      branches:
+        - - { type: query, instrument: $dmm_a, command: measure_voltage }
+        - - { type: query, instrument: $dmm_b, command: measure_voltage }
+
+expected_failure:
+  # validate / dry-run は通る。実機実行で partial_failure になるが、本 task は
+  # validate phase の "broken_plan が valid であること" を確認することで、
+  # 「実行で failed target を含む結果が出る」可能性を構造的に表現する。
+  phase: validate
+  # validate は通るので error_class は無し (None)。required_recommended_actions
+  # / field_path も省略。
+
+# repaired_plan: 成功 target だけ実行 (dmm_b を除外)
+repaired_plan:
+  dsl_version: "0.8"
+  name: repaired_partial_failure_retry_failed_targets
+  bindings:
+    dmm_a: dmm_good
+  steps:
+    - { type: query, instrument: $dmm_a, command: measure_voltage }
+
+expected_repair:
+  repair_actions:
+    - retry_failed_targets
+    - exclude_failing_target
+  must_not:
+    - rerun_all_targets_unnecessarily
+    - ignore_failed_targets
+    - mark_partial_failure_as_total_success
+    - override_safety
+  layer: dry_run

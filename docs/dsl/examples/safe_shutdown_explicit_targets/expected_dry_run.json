@@ -1,0 +1,6 @@
+{
+  "expected_summary": "has_safe_shutdown=True, safe_shutdown_targets=['psu001'], psu002 は shutdown 対象外",
+  "valid": true,
+  "name": "safe_shutdown_explicit_targets",
+  "dsl_version": "0.8"
+}

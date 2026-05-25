@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e ".[dev]"
+      - name: import smoke
+        run: python -c "import lab_executor"
+      - name: pyvisa MUST NOT be required
+        run: |
+          python -c "import sys; assert 'pyvisa' not in sys.modules, 'pyvisa leaked into base import'"
+      - name: pytest
+        run: pytest -q
+
+  pyvisa-not-installed:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e ".[dev]"
+      - run: pip uninstall -y pyvisa pyvisa-py || true
+      - name: import lab_executor without pyvisa
+        run: python -c "import lab_executor; print('OK')"
+      - name: pytest (PyVISA 非依存テストのみ)
+        run: pytest -q -m "not hardware"

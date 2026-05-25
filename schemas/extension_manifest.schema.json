@@ -1,0 +1,190 @@
+{
+  "$defs": {
+    "ExtensionCatalog": {
+      "description": "v1.6: catalog metadata (任意)。pack の選定 / 比較に使う。\n\n`extension.yaml` の root `catalog:` field として記述する。schema\nレベルではすべて optional。`extension package --strict` で\n`summary` / `license` 空は warning。",
+      "properties": {
+        "summary": {
+          "default": "",
+          "title": "Summary",
+          "type": "string"
+        },
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        },
+        "authors": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Authors",
+          "type": "array"
+        },
+        "license": {
+          "default": "",
+          "title": "License",
+          "type": "string"
+        },
+        "homepage": {
+          "default": "",
+          "title": "Homepage",
+          "type": "string"
+        },
+        "tags": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Tags",
+          "type": "array"
+        },
+        "categories": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Categories",
+          "type": "array"
+        },
+        "target_users": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Target Users",
+          "type": "array"
+        },
+        "safety_notes": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Safety Notes",
+          "type": "array"
+        }
+      },
+      "title": "ExtensionCatalog",
+      "type": "object"
+    },
+    "ExtensionContents": {
+      "description": "definition pack の中身ファイル参照 (extension.yaml からの相対 path)。\nすべて optional だが、少なくとも 1 セクションが非空である必要がある。",
+      "properties": {
+        "instruments": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Instruments",
+          "type": "array"
+        },
+        "benchmarks": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Benchmarks",
+          "type": "array"
+        },
+        "templates": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Templates",
+          "type": "array"
+        },
+        "mock_scenarios": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Mock Scenarios",
+          "type": "array"
+        },
+        "registry_entries": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Registry Entries",
+          "type": "array"
+        }
+      },
+      "title": "ExtensionContents",
+      "type": "object"
+    },
+    "ExtensionStability": {
+      "properties": {
+        "support_level": {
+          "default": "draft",
+          "title": "Support Level",
+          "type": "string"
+        },
+        "executable_code": {
+          "default": false,
+          "title": "Executable Code",
+          "type": "boolean"
+        }
+      },
+      "title": "ExtensionStability",
+      "type": "object"
+    }
+  },
+  "description": "v1.2: definition pack manifest (`extension.yaml`) (EXPERIMENTAL: definition pack manifest introduced in v1.2. The shape may change within v1.x. Not a stable plugin API.)",
+  "properties": {
+    "extension_id": {
+      "title": "Extension Id",
+      "type": "string"
+    },
+    "name": {
+      "title": "Name",
+      "type": "string"
+    },
+    "version": {
+      "title": "Version",
+      "type": "string"
+    },
+    "type": {
+      "const": "definition_pack",
+      "default": "definition_pack",
+      "title": "Type",
+      "type": "string"
+    },
+    "visa_mcp_compatibility": {
+      "default": ">=1.2,<2.0",
+      "title": "Visa Mcp Compatibility",
+      "type": "string"
+    },
+    "description": {
+      "default": "",
+      "title": "Description",
+      "type": "string"
+    },
+    "author": {
+      "default": "",
+      "title": "Author",
+      "type": "string"
+    },
+    "homepage": {
+      "default": "",
+      "title": "Homepage",
+      "type": "string"
+    },
+    "license": {
+      "default": "",
+      "title": "License",
+      "type": "string"
+    },
+    "contents": {
+      "$ref": "#/$defs/ExtensionContents"
+    },
+    "stability": {
+      "$ref": "#/$defs/ExtensionStability"
+    },
+    "catalog": {
+      "$ref": "#/$defs/ExtensionCatalog"
+    }
+  },
+  "required": [
+    "extension_id",
+    "name",
+    "version"
+  ],
+  "title": "Extension Manifest (definition pack) (v1.2 experimental)",
+  "type": "object",
+  "$id": "https://tectos-jp.github.io/visa-mcp/schemas/extension_manifest.schema.v1.json",
+  "x-visa-mcp-status": "experimental",
+  "x-compatibility": "subject-to-change-within-v1.x"
+}

@@ -1,0 +1,703 @@
+# =============================================================
+# Yokogawa Model 7563 6-digit Digital Multi-thermometer
+# 出典: IM7563-01.jp.pdf (OCR から自動生成・要レビュー)
+# =============================================================
+# 注意:
+#   この機器は SCPI 非対応で *IDN? コマンドがありません。
+#   identify_instrument では識別できないため、手動バインディングが必要です。
+#   コマンドフォーマットは Yokogawa 独自形式（例: F1, R2, TU0, ESC R）。
+#   ターミネータは DLm で切替可（CR/LF/EOI、LF、EOI/CR）。
+# =============================================================
+
+metadata:
+  manufacturer: "Yokogawa"
+  model: "7563"
+  description: "6桁デジタルマルチ温度計（DCV/抵抗/RTD/熱電対）"
+  manual_ref: "IM7563-01.jp.pdf"
+  category: "multimeter"
+
+identification:
+  # この機器は *IDN? 非対応。identify_instrument では識別不可。
+  # 手動バインディング（resource_name と定義名を直接紐付け）が必要。
+  manufacturer_match: "YOKOGAWA"
+  model_regex: "7563"
+
+connection:
+  default_timeout_ms: 5000
+  read_termination: "\n"     # DL1 設定時 (LF)
+  write_termination: "\n"
+  # GPIB アドレスは機器側で設定（典型値: 1〜30）
+  # RS-232-C 通信時はシリアル設定を本体から確認すること
+  serial:
+    baud_rate: 9600
+    data_bits: 8
+    parity: "N"
+    stop_bits: 1
+
+# ===== 機器仕様 (v0.2.0) =====
+specifications:
+  measurement:
+    display_digits: 6
+    functions:
+      DCV:
+        function_code: "F1"
+        ranges_v: [0.2, 2.0, 20.0, 200.0]
+      OHM_2W:
+        function_code: "F3"
+        ranges_ohm: [200, 2000, 20000, 200000, 2000000, 20000000]
+      OHM_4W:
+        function_code: "F4"
+        ranges_ohm: [200, 2000, 20000, 200000, 2000000, 20000000]
+        notes: "微小抵抗・配線抵抗を排除する場合に推奨"
+      Thermocouple:
+        function_code: "F12"
+        types: ["R", "T", "K", "E", "J", "S", "B", "N", "KpvsAu7Fe", "J263*B"]
+  integration_time:
+    options: ["2.5ms", "16.66ms", "20ms", "100ms", "200ms", "500ms"]
+
+# ===== 安全制約 (v0.2.0) =====
+safety:
+  ratings:
+    input_voltage_dcv:
+      rated: 200.0
+      absolute_max: 220.0
+      recommended_max: 200.0
+      unit: "V"
+      description: "DCV ファンクション時の最大入力電圧"
+    function:
+      rated: 12
+      absolute_max: 12
+      absolute_min: 1
+      unit: ""
+      description: "ファンクションコードの有効範囲 (1=DCV, 3=OHM2W, 4=OHM4W, 9=RTD2W, 10=RTD3W, 11=RTD4W, 12=TC)"
+    integration_time:
+      rated: 6
+      absolute_max: 6
+      absolute_min: 1
+      unit: ""
+      description: "積分時間コード (1=2.5ms, 6=500ms)"
+    averaging_count:
+      rated: 100
+      absolute_max: 100
+      absolute_min: 2
+      unit: ""
+
+  preconditions: []   # 順序依存制約は特になし
+
+  cautions:
+    - "DCV 200V レンジ使用時、入力電圧 200V を超えないこと"
+    - "抵抗測定時は被測定回路の電源を OFF にしてから接続すること"
+    - "熱電対測定では基準接点補償モードを必ず設定 (RM0=内部 / RM1=外部)"
+    - "校正モード (リアパネルスイッチ) は通常使用時に切り替えないこと"
+    - "EEPROM クリア (initialize_eeprom, RC) は数秒間プロセスがブロックされる"
+
+  hardware_protections:
+    - name: "Burnout detection"
+      description: "熱電対の断線検出 (BS1 で有効化)"
+      related_command: "set_burnout_detection"
+    - name: "Range over indication"
+      description: "オーバレンジ時にステータスバイトでフラグが立つ"
+
+# ===== 応答フォーマット (v0.2.0) =====
+response_formats:
+  measurement_data:
+    pattern: '^(?P<status>[NFOTBC])(?P<func>[NTRKEJSB])(?P<tc_type>[KCFVA])(?P<unit>[CFKVNA])(?P<value>[+-]\d+\.\d+E[+-]\d+)\s*$'
+    description: |
+      Yokogawa 7563 独自の測定データ応答形式。
+      例: NTKC+00027.2E+0
+        N=Normal (status), T=Temperature (func),
+        K=K type TC, C=Celsius (unit),
+        +00027.2E+0 = 27.2℃
+    fields:
+      status:
+        N: "Normal"
+        O: "Over range"
+        F: "Failure (burnout 等)"
+        T: "Trigger waiting"
+        B: "Burnout detected"
+      unit:
+        C: "celsius"
+        F: "fahrenheit"
+        K: "kelvin"
+        V: "volt"
+        N: "none / unitless"
+
+commands:
+
+  # ====================================================
+  # 6.3.1 / 6.3.2 ファンクション・レンジ設定
+  # ====================================================
+  set_function:
+    scpi: "F{function}"
+    type: "write"
+    description: "測定ファンクション設定 (1=DCV, 3=OHM2W, 4=OHM4W, 9=RTD2W, 10=RTD3W, 11=RTD4W, 12=TC)"
+    parameters:
+      - name: function
+        description: "1:DCV / 3:2線抵抗 / 4:4線抵抗 / 9:RTD2W / 10:RTD3W / 11:RTD4W / 12:熱電対"
+        type: "enum"
+        choices: ["1", "3", "4", "9", "10", "11", "12"]
+
+  set_range:
+    scpi: "R{range}"
+    type: "write"
+    description: "レンジ設定（ファンクションにより範囲が異なる。0=AUTO）"
+    parameters:
+      - name: range
+        description: "0=AUTO、1〜12=各ファンクション固有のレンジ／センサタイプ"
+        type: "integer"
+        range: [0, 12]
+
+  set_function_and_range:
+    scpi: "F{function}R{range}"
+    type: "write"
+    description: "ファンクションとレンジを同時設定"
+    parameters:
+      - name: function
+        type: "enum"
+        choices: ["1", "3", "4", "9", "10", "11", "12"]
+      - name: range
+        type: "integer"
+        range: [0, 12]
+
+  # ====================================================
+  # 6.3.3〜6.3.7 基準接点・温度関連
+  # ====================================================
+  set_rjc_mode:
+    scpi: "RM{mode}"
+    type: "write"
+    description: "基準接点補償(RJC)モード設定 (0=内部, 1=外部)。TC ファンクション時のみ有効"
+    parameters:
+      - name: mode
+        type: "enum"
+        choices: ["0", "1"]
+
+  set_external_rjc_value:
+    scpi: "RJ{value},{unit}"
+    type: "write"
+    description: "外部基準接点補償値の設定（TC ファンクション時のみ有効）"
+    parameters:
+      - name: value
+        description: "RJC 値（-1999999〜+1999999）"
+        type: "integer"
+        range: [-1999999, 1999999]
+      - name: unit
+        description: "温度単位 (0=℃, 2=K)"
+        type: "enum"
+        choices: ["0", "2"]
+
+  measure_external_rjc:
+    scpi: "RJS"
+    type: "write"
+    description: "外部基準接点温度補償値を Pt100 4線式で1回測定（TC ファンクション時のみ有効）"
+    parameters: []
+
+  set_temperature_unit:
+    scpi: "TU{unit}"
+    type: "write"
+    description: "温度単位設定 (0=℃, 1=℉, 2=K)。KpvsAu7Fe / J263+B 使用時は自動的に K 固定"
+    parameters:
+      - name: unit
+        type: "enum"
+        choices: ["0", "1", "2"]
+
+  set_rtd_reference_resistance:
+    scpi: "RT{value}"
+    type: "write"
+    description: "測温抵抗体(RTD)の 0℃時基準抵抗値設定 (Ω)"
+    parameters:
+      - name: value
+        description: "基準温度抵抗値 (0〜1999.999 Ω)"
+        type: "float"
+        range: [0, 1999.999]
+
+  set_rtd_resistance_from_measurement:
+    scpi: "RTS"
+    type: "write"
+    description: "前回測定値を 0℃時 RTD 抵抗値としてセット（抵抗測定ファンクションのみ有効）"
+    parameters: []
+
+  # ====================================================
+  # 6.3.8 バーンアウト検出
+  # ====================================================
+  set_burnout_detection:
+    scpi: "BS{mode}"
+    type: "write"
+    description: "バーンアウト検出 ON/OFF (0=OFF, 1=ON)"
+    parameters:
+      - name: mode
+        type: "enum"
+        choices: ["0", "1"]
+
+  # ====================================================
+  # 6.3.9〜6.3.12 サンプリング・トリガ
+  # ====================================================
+  set_sampling_mode:
+    scpi: "M{mode}"
+    type: "write"
+    description: "サンプリングモード設定 (0=AUTO, 1=SINGLE, 2=N RDGS)"
+    parameters:
+      - name: mode
+        type: "enum"
+        choices: ["0", "1", "2"]
+
+  trigger:
+    scpi: "E"
+    type: "write"
+    description: "トリガ信号送出（A-D変換器起動）。GPIB の <GET> インタフェースメッセージでも可"
+    parameters: []
+
+  set_sampling_interval:
+    scpi: "SI{interval_ms}"
+    type: "write"
+    description: "サンプリングインタバル設定（1ms 単位、3000ms 超は秒単位に四捨五入）"
+    parameters:
+      - name: interval_ms
+        description: "サンプリング周期 (10〜3,600,000 ms)"
+        type: "integer"
+        range: [10, 3600000]
+
+  set_trigger_delay:
+    scpi: "TD{delay_ms}"
+    type: "write"
+    description: "トリガディレイ時間設定（1ms 単位、3000ms 超は秒単位に四捨五入）"
+    parameters:
+      - name: delay_ms
+        description: "ディレイ時間 (0〜3,600,000 ms)"
+        type: "integer"
+        range: [0, 3600000]
+
+  # ====================================================
+  # 6.3.13〜6.3.15 NULL・積分・サンプリング数
+  # ====================================================
+  set_null:
+    scpi: "NL{mode}"
+    type: "write"
+    description: "NULL 機能設定 (0=OFF, 1=ON, 2=NULL値設定)"
+    parameters:
+      - name: mode
+        type: "enum"
+        choices: ["0", "1", "2"]
+
+  set_integration_time:
+    scpi: "IT{mode}"
+    type: "write"
+    description: "積分時間設定 (1=2.5ms, 2=16.66ms, 3=20ms, 4=100ms, 5=200ms, 6=500ms)"
+    parameters:
+      - name: mode
+        type: "enum"
+        choices: ["1", "2", "3", "4", "5", "6"]
+
+  set_sampling_count:
+    scpi: "NS{count}"
+    type: "write"
+    description: "N RDGS モード時のサンプリング数設定"
+    parameters:
+      - name: count
+        description: "1〜1000 (内蔵) / 〜500 (8K) / 〜1500 (16K) / 〜8000 (64K)"
+        type: "integer"
+        range: [1, 8000]
+
+  # ====================================================
+  # 6.3.16〜6.3.18 ストア・リコール
+  # ====================================================
+  set_store:
+    scpi: "ST{mode}"
+    type: "write"
+    description: "測定データのメモリ格納(STORE) ON/OFF (0=OFF, 1=ON)"
+    parameters:
+      - name: mode
+        type: "enum"
+        choices: ["0", "1"]
+
+  set_recall:
+    scpi: "RO{mode}"
+    type: "write"
+    description: "メモリデータ読み出し(RECALL) ON/OFF (0=OFF, 1=ON)"
+    parameters:
+      - name: mode
+        type: "enum"
+        choices: ["0", "1"]
+
+  set_recall_start_number:
+    scpi: "RD{number}"
+    type: "write"
+    description: "RECALL 先頭データ番号設定（マイナスはプリトリガデータ）"
+    parameters:
+      - name: number
+        description: "-7999〜+7999（メモリ容量による）"
+        type: "integer"
+        range: [-7999, 7999]
+
+  set_recall_start_from_last:
+    scpi: "RDS"
+    type: "write"
+    description: "RECALL 先頭番号にメモリデータの先頭値をセット"
+    parameters: []
+
+  # ====================================================
+  # 6.3.19〜6.3.21 IC メモリカード操作
+  # ====================================================
+  save_panel_to_card:
+    scpi: "SS"
+    type: "write"
+    description: "現在のパネル設定情報を IC メモリカードに書き込み"
+    parameters: []
+
+  load_panel_from_card:
+    scpi: "SL"
+    type: "write"
+    description: "IC メモリカードからパネル設定情報を読み出し"
+    parameters: []
+
+  initialize_card:
+    scpi: "CI"
+    type: "write"
+    description: "IC メモリカードのイニシャライズ（全データ消去）"
+    parameters: []
+
+  # ====================================================
+  # 6.3.22〜6.3.24 オートゼロ・平均
+  # ====================================================
+  set_auto_zero:
+    scpi: "AZ{mode}"
+    type: "write"
+    description: "オートゼロ設定 (0=OFF, 1=ON, 2=単発ゼロ測定)"
+    parameters:
+      - name: mode
+        type: "enum"
+        choices: ["0", "1", "2"]
+
+  set_averaging:
+    scpi: "SM{mode}"
+    type: "write"
+    description: "アベレージング ON/OFF (0=OFF, 1=ON)"
+    parameters:
+      - name: mode
+        type: "enum"
+        choices: ["0", "1"]
+
+  set_averaging_count:
+    scpi: "AT{count}"
+    type: "write"
+    description: "アベレージング回数設定 (2〜100)"
+    parameters:
+      - name: count
+        type: "integer"
+        range: [2, 100]
+
+  # ====================================================
+  # 6.3.25〜6.3.28 演算
+  # ====================================================
+  set_math:
+    scpi: "CO{mode}"
+    type: "write"
+    description: "演算(MATH) ON/OFF (0=OFF, 1=ON)"
+    parameters:
+      - name: mode
+        type: "enum"
+        choices: ["0", "1"]
+
+  set_math_type:
+    scpi: "CF{type_}"
+    type: "write"
+    description: "演算種類設定 (1=スケーリング, 3=コンパレータ)"
+    parameters:
+      - name: type_
+        type: "enum"
+        choices: ["1", "3"]
+
+  set_scaling_a:
+    scpi: "KA{value}"
+    type: "write"
+    description: "スケーリング定数 A 設定"
+    parameters:
+      - name: value
+        description: "-1999999〜+1999999（小数・指数表記可）"
+        type: "float"
+        range: [-1999999, 1999999]
+
+  set_scaling_b:
+    scpi: "KB{value}"
+    type: "write"
+    description: "スケーリング定数 B 設定"
+    parameters:
+      - name: value
+        type: "float"
+        range: [-1999999, 1999999]
+
+  set_scaling_a_from_measurement:
+    scpi: "KAS"
+    type: "write"
+    description: "スケーリング定数 A に前回測定結果をセット"
+    parameters: []
+
+  set_scaling_b_from_measurement:
+    scpi: "KBS"
+    type: "write"
+    description: "スケーリング定数 B に前回測定結果をセット"
+    parameters: []
+
+  set_comparator_hi:
+    scpi: "HI{value}"
+    type: "write"
+    description: "コンパレータ High 値設定"
+    parameters:
+      - name: value
+        type: "float"
+        range: [-1999999, 1999999]
+
+  set_comparator_lo:
+    scpi: "LO{value}"
+    type: "write"
+    description: "コンパレータ Low 値設定"
+    parameters:
+      - name: value
+        type: "float"
+        range: [-1999999, 1999999]
+
+  set_comparator_hi_from_measurement:
+    scpi: "HIS"
+    type: "write"
+    description: "コンパレータ High に前回測定結果をセット"
+    parameters: []
+
+  set_comparator_lo_from_measurement:
+    scpi: "LOS"
+    type: "write"
+    description: "コンパレータ Low に前回測定結果をセット"
+    parameters: []
+
+  # ====================================================
+  # 6.3.29〜6.3.31 出力フォーマット
+  # ====================================================
+  set_da_output_mode:
+    scpi: "DA{output_mode}{display_mode}"
+    type: "write"
+    description: "D-A 出力モード設定（オプション）。出力モード 0/1、表示モード 0〜3"
+    parameters:
+      - name: output_mode
+        type: "enum"
+        choices: ["0", "1"]
+      - name: display_mode
+        type: "enum"
+        choices: ["0", "1", "2", "3"]
+
+  set_header:
+    scpi: "H{mode}"
+    type: "write"
+    description: "出力データのヘッダ設定 (0=ヘッダなし, 1=ヘッダあり)"
+    parameters:
+      - name: mode
+        type: "enum"
+        choices: ["0", "1"]
+
+  set_terminator:
+    scpi: "DL{mode}"
+    type: "write"
+    description: "出力データターミネータ設定 (0=CR/LF/EOI, 1=LF, 2=EOI/CR)"
+    parameters:
+      - name: mode
+        type: "enum"
+        choices: ["0", "1", "2"]
+
+  # ====================================================
+  # 6.3.32〜6.3.33 出力
+  # ====================================================
+  query_panel_settings:
+    scpi: "OS"
+    type: "query"
+    description: "現在のパネル設定情報を出力（形名、ファンクション、レンジ等）"
+    parameters: []
+    returns:
+      type: "string"
+      description: "パネル設定情報の文字列"
+
+  query_data_rs232:
+    scpi: "\x1bD"
+    type: "query"
+    description: "測定データ／メモリ内データの出力（RS-232-C 専用、ESC D）"
+    parameters: []
+    returns:
+      type: "string"
+      description: "測定データ文字列"
+      format: "measurement_data"   # v0.3.0: 応答を自動構造化
+
+  # トーカ機能の自動データ送出を読み取る (空 SCPI = read のみ)
+  read_measurement:
+    scpi: ""
+    type: "query"
+    description: |
+      GPIB トーカ機能で機器が自動送出する測定データを読み取る。
+      応答は response_formats.measurement_data で構造化される。
+    parameters: []
+    returns:
+      type: "string"
+      format: "measurement_data"
+
+  # ====================================================
+  # 6.3.34〜6.3.35 リモート／ローカル（RS-232-C 専用）
+  # ====================================================
+  remote_rs232:
+    scpi: "\x1bR"
+    type: "write"
+    description: "RS-232-C 通信でリモート状態にする（ESC R）"
+    parameters: []
+
+  local_rs232:
+    scpi: "\x1bL"
+    type: "write"
+    description: "RS-232-C 通信でローカル状態に戻す（ESC L）"
+    parameters: []
+
+  # ====================================================
+  # 6.3.36〜6.3.38 ステータス・SRQ
+  # ====================================================
+  query_status_byte_rs232:
+    scpi: "\x1bS"
+    type: "query"
+    description: "ステータスバイト出力（RS-232-C 専用、ESC S）"
+    parameters: []
+    returns:
+      type: "integer"
+      description: "ステータスバイト値"
+
+  set_status_byte_mask:
+    scpi: "MS{mask}"
+    type: "write"
+    description: "ステータスバイトマスク設定（RS-232-C）または SRQ マスク設定（GP-IB）"
+    parameters:
+      - name: mask
+        description: "0〜31 (発生要因のマスク値の合計: A-D=1, SRQキー=2, 文法エラー=4, オーバレンジ=8, ICカード=16)"
+        type: "integer"
+        range: [0, 31]
+
+  # ====================================================
+  # 6.3.39〜6.3.40 イニシャライズ
+  # ====================================================
+  initialize:
+    scpi: "C"
+    type: "write"
+    description: "パネル設定情報を電源 ON 直後の状態にする（ステータスバイト・マスク値・ターミネータ設定もクリア）"
+    parameters: []
+
+  initialize_eeprom:
+    scpi: "RC"
+    type: "write"
+    description: "パネル設定情報を強制初期化（EEPROM クリア。数秒かかる）"
+    parameters: []
+    timeout_ms: 15000
+
+  # ====================================================
+  # 6.3.41〜6.3.42 校正・保存
+  # ====================================================
+  set_calibration_value:
+    scpi: "PC{value}"
+    type: "write"
+    description: "校正値設定（リアパネル切換スイッチが CAL モード時のみ有効）"
+    parameters:
+      - name: value
+        description: "校正値（ファンクション・レンジにより範囲が異なる）"
+        type: "integer"
+        range: [-1999999, 1999999]
+
+  save_to_eeprom:
+    scpi: "SV"
+    type: "write"
+    description: "プログラム内容・通信設定情報・IC カードバネル設定情報を EEPROM に書き込み（直後に電源を切らないこと）"
+    parameters: []
+
+  # ====================================================
+  # 6.3.43〜6.3.45 プログラム機能
+  # ====================================================
+  set_program_input_mode:
+    scpi: "PR{mode}"
+    type: "write"
+    description: "プログラム入力モード (0=OFF, 1=ON)"
+    parameters:
+      - name: mode
+        type: "enum"
+        choices: ["0", "1"]
+
+  set_program_run_mode:
+    scpi: "RU{mode}"
+    type: "write"
+    description: "プログラム実行モード (0=OFF, 1=ON)"
+    parameters:
+      - name: mode
+        type: "enum"
+        choices: ["0", "1"]
+
+  query_status:
+    scpi: "OC"
+    type: "query"
+    description: "状態出力（1バイト返却）"
+    parameters: []
+    returns:
+      type: "integer"
+      description: "状態バイト"
+
+# ===== 動作状態・推奨手順 (v0.3.0) =====
+operational_states:
+  startup_sequence:
+    - "initialize (C) でパネル設定を電源 ON 直後の状態に"
+    - "set_function でファンクション選択"
+    - "set_range でレンジ選択 (Auto は 0)"
+    - "TC モードなら set_temperature_unit と set_rjc_mode を設定"
+    - "trigger (E) で測定開始"
+  modes:
+    - name: "Local"
+      description: "フロントパネル操作可能"
+    - name: "Remote"
+      description: "リモート制御中 (ESC R / GPIB REN)"
+    - name: "Trigger waiting"
+      description: "サンプリングモードが SINGLE/N RDGS でトリガ待機中"
+    - name: "Calibration"
+      description: "リアパネル CAL スイッチが有効な校正モード（通常使用時は触らない）"
+  notes:
+    - "GPIB トーカ機能により、リード操作で常に直近の測定データが返る"
+    - "ターミネータは set_terminator で切替可 (CR/LF/EOI / LF / EOI/CR)"
+    - "ヘッダは set_header で ON にすると応答に付加される"
+
+# ===== 物理インタフェース (v0.3.0) =====
+physical_interface:
+  front_panel:
+    - { label: "INPUT HI", type: "banana_jack", color: "red", description: "正側入力" }
+    - { label: "INPUT LO", type: "banana_jack", color: "black", description: "負側入力" }
+    - { label: "SENSE HI", type: "banana_jack", color: "red", description: "4線式測定用センスライン正" }
+    - { label: "SENSE LO", type: "banana_jack", color: "black", description: "4線式測定用センスライン負" }
+    - { label: "GUARD", type: "banana_jack", color: "green", description: "ガード端子" }
+    - { label: "TC", type: "thermocouple_jack", description: "熱電対入力 (前面)" }
+  rear_panel:
+    - { label: "GPIB", type: "GPIB-24pin", description: "IEEE-488 コネクタ" }
+    - { label: "RS-232C", type: "DB-25", description: "RS-232C シリアル" }
+    - { label: "AC INPUT", type: "AC inlet", description: "AC 電源入力" }
+  notes:
+    - "DCV モード時の最大入力は 200V（DCV 200V レンジ）"
+    - "GUARD と LO の取り扱いは精密測定時に重要"
+
+# ===== Recipe: 典型ワークフロー (v0.3.0) =====
+recipes:
+
+  setup_k_thermocouple:
+    description: |
+      K 型熱電対による温度測定の標準セットアップ。
+      ファンクション=TC、レンジ=K型、単位=℃、基準接点補償=内部。
+    parameters:
+      - { name: "range", type: "integer", description: "K型熱電対のレンジコード (環境に依存)", default: 2 }
+    steps:
+      - { command: "set_function_and_range", args: { function: "12", range: "$range" }, description: "F12 (TC) + Rn" }
+      - { command: "set_temperature_unit", args: { unit: "0" }, description: "TU0 = ℃" }
+      - { command: "set_rjc_mode", args: { mode: "0" }, description: "RM0 = 内部基準接点補償" }
+
+  setup_dcv_200mv:
+    description: "DC 電圧 200mV レンジに設定"
+    parameters: []
+    steps:
+      - { command: "set_function_and_range", args: { function: "1", range: 3 } }
+
+  trigger_and_read:
+    description: "1 回トリガを発行して測定データを読み出す (構造化応答)"
+    parameters: []
+    steps:
+      - { command: "trigger", description: "A-D 変換起動" }
+      - { command: "read_measurement", description: "測定値読み出し → 構造化パース" }

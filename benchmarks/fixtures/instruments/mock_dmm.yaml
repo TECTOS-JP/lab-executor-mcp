@@ -1,0 +1,18 @@
+metadata:
+  manufacturer: MockVendor
+  model: MockDMM
+  category: dmm
+  description: Mock digital multimeter for benchmarks (v0.9.0)
+commands:
+  measure_voltage:
+    scpi: "MEAS:VOLT:DC?"
+    type: query
+    polling_safe: true
+  measure_current:
+    scpi: "MEAS:CURR:DC?"
+    type: query
+    polling_safe: true
+state_query:
+  voltage:
+    command: measure_voltage
+    unit: V

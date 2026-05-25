@@ -1,0 +1,12 @@
+{
+  "name": "run_from_template_001",
+  "unit": "unit002",
+  "bindings": {
+    "dmm": "dmm_backup_001"
+  },
+  "parameters": {
+    "voltage": 3.5,
+    "wait_s": 1.0
+  },
+  "owner": "agent_alpha"
+}
