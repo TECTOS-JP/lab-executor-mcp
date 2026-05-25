@@ -1,25 +1,25 @@
 """
-v1.11: InstrumentBackend Protocol — backend / runtime separation boundary
+InstrumentBackend Protocol — lab-executor-mcp の backend 公開境界 (v2.0)
 
-v1.1 で spike 公開した Protocol を、v1.11 で **分離境界として実体化**
-した。runtime module (lab-executor-mcp 候補) は `InstrumentBackend`
-にのみ依存し、`VisaManager` 等を直接 import しない構造になっている。
+`lab-executor-mcp` runtime が機器と通信する際の **backend-independent
+contract**。runtime module は本 Protocol にのみ依存し、PyVISA 等の
+特定 backend に直接依存しない。
 
-- `PyVisaBackend` (visa-mcp 側) は `VisaManager` を内部に包む実装
-- `MockBackend` (lab-executor-mcp 側) は PyVISA 非依存の adapter
-- 既存 `VisaManager` / `MockVisaManager` も duck-typed に compatible で
-  あり、v2.0 までは並走可能。
+実装:
+- `lab_executor.backends.mock_backend.MockBackend`
+  (lab-executor-mcp 同梱、PyVISA 非依存、benchmark / dry-run 用)
+- `visa_mcp.backends.pyvisa_backend.PyVisaBackend`
+  (visa-mcp 同梱、PyVISA 透過 adapter、実機通信用)
 
-Protocol は **意図的に最小**: `list_resources` / `query` / `write` /
-`close` / `backend_id`。async API / streaming / event subscription /
-remote / plugin loading は v2.x 以降で慎重に検討する (v2.0 の目的は
-分離であり、backend API の完成ではない)。
+Protocol は **意図的に最小**: `backend_id` / `list_resources` /
+`query` / `write` / `close` のみ。async API / streaming / event
+subscription / remote backend / plugin loading は v2.x 以降で慎重に
+検討する。
 
 `timeout_ms` / `read_termination` / `write_termination` の単位は v1.1
 spike 時点から維持。v2.0 公開境界としてこの形式を採用する。
 
-詳細: `docs/backend_abstraction.md` / `docs/separation/notes.md` /
-`docs/raw_visa.md`
+詳細: `docs/backend_abstraction.md` / `docs/separation/notes.md`
 """
 from __future__ import annotations
 from typing import Protocol, runtime_checkable
@@ -27,7 +27,7 @@ from typing import Protocol, runtime_checkable
 
 @runtime_checkable
 class InstrumentBackend(Protocol):
-    """機器との通信を抽象化する backend (v1.11: 分離境界として確定)
+    """機器との通信を抽象化する backend (v2.0 公開境界)
 
     既存実装 (v1.11 時点):
       - ``visa_mcp.backends.pyvisa_backend.PyVisaBackend``
