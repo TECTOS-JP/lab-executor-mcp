@@ -1,23 +1,33 @@
-"""lab-executor CLI (v2.1.0).
+"""lab-executor CLI (v2.2.x).
 
 v2.0 では minimal CLI / `serve` placeholder のみだったが、v2.1.0 で
-`serve --backend mock` を実装し、backend-independent な MCP server を
-起動できるようにした。v1.x `visa-mcp` CLI の段階的 port も開始する
-(validate / extension の subset)。
+`serve --backend mock` を実装、v2.2.0 で authoring workflow CLI を
+追加した。実機 backend (PyVISA / VISA resource discovery / raw VISA)
+は **`visa-mcp serve`** を継続利用する。
 
-サブコマンド (v2.1.0):
+サブコマンド一覧:
 
-- ``lab-executor --version``
-- ``lab-executor --help``
-- ``lab-executor serve --backend mock``: MCP server 起動
-- ``lab-executor validate instrument <path>``
-- ``lab-executor validate extension <path>``
-- ``lab-executor extension doctor <pack_dir>``
-- ``lab-executor extension package <pack_dir>``
-- ``lab-executor extension verify-package <zip>``
+v2.1.0 追加:
+- ``lab-executor --version`` / ``--help``
+- ``lab-executor serve --backend mock`` (MCP server 起動)
+- ``lab-executor validate {instrument,extension} <path>``
+- ``lab-executor extension {doctor,package,verify-package}``
 
-実機 backend (PyVISA / VISA resource discovery / raw VISA) は
-**`visa-mcp serve`** を継続利用。
+v2.2.0 追加:
+- ``lab-executor extension init <pack_name>`` (definition pack scaffold)
+- ``lab-executor instrument scaffold <category> --output <path>``
+- ``lab-executor instrument review-report <path>``
+- ``lab-executor diagnose tool-surface`` (declared vs registered 差分)
+
+Exit code policy (v2.2.1 明文化):
+- 0:  正常終了 (`status == "ok"`)
+- 1:  validation / doctor warning / mismatch (CI gate として強い)
+- 2:  usage error / 引数不足
+
+`diagnose tool-surface` は default で warning も exit 1。手元診断で
+warning を許容したい場合は ``--strict`` を **指定しない** こと
+(v2.2.1 で `--strict` が default 化、非 strict は warning を許容
+する mode を提供する… のは v2.3 候補)。
 """
 from __future__ import annotations
 import argparse
@@ -116,7 +126,10 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     ext_init.add_argument(
         "--id", dest="extension_id", default=None,
-        help="reverse-DNS extension id (default: local.<pack_name>)",
+        help=(
+            "reverse-DNS extension id (default: 'local.<pack_name>', "
+            "e.g. 'local.my_pack')"
+        ),
     )
     ext_init.add_argument(
         "--template", default="minimal",
@@ -180,6 +193,14 @@ def _build_parser() -> argparse.ArgumentParser:
         "--backend", default="mock", choices=["mock"],
     )
     diag_ts.add_argument("--json", action="store_true")
+    diag_ts.add_argument(
+        "--strict", action="store_true",
+        help=(
+            "v2.2.1: --strict なら warning でも exit 1。指定なしは "
+            "warning を許容して exit 0 (手元診断向け、CI gate には "
+            "--strict 推奨)"
+        ),
+    )
 
     return parser
 
@@ -437,9 +458,12 @@ def _cmd_diagnose(args: argparse.Namespace) -> int:
         backend = MockBackend()
         server = create_server(backend=backend)
         diag = diagnose_tool_surface(server)
-        # status: ok / warning
         miss = diag.get("missing_from_registry") or []
         diag["status"] = "ok" if not miss else "warning"
+        # v2.2.1: --strict のときだけ warning で exit 1。default は
+        # 手元診断向けに exit 0 (warning は表示するが fail させない)。
+        strict = getattr(args, "strict", False)
+        diag["strict_mode"] = strict
         if args.json:
             print(json.dumps(diag, ensure_ascii=False, indent=2,
                               default=str))
@@ -449,12 +473,15 @@ def _cmd_diagnose(args: argparse.Namespace) -> int:
                   f"experimental={diag['declared_experimental']}, "
                   f"total={diag['declared_total']}")
             print(f"  registered: {diag['registered_count']}")
-            print(f"  status: {diag['status']}")
+            print(f"  status: {diag['status']} "
+                  f"(strict={strict})")
             if miss:
                 print(f"  missing ({len(miss)}):")
                 for m in miss[:20]:
                     print(f"    - {m}")
-        return 0 if diag["status"] == "ok" else 1
+        if diag["status"] == "ok":
+            return 0
+        return 1 if strict else 0
 
     print(
         "lab-executor diagnose: subcommand required (tool-surface)",

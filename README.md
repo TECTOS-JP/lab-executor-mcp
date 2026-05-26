@@ -74,6 +74,10 @@ lab-executor extension verify-package my_pack.visa-mcp-ext.zip
 | `extension doctor` | `status == "ok"` | warnings / errors あり | usage error |
 | `extension package` | package 成功 | 失敗 | usage error |
 | `extension verify-package` | checksums OK | mismatch / 不正 | usage error |
+| `extension init` | pack 生成成功 | 失敗 | usage error |
+| `instrument scaffold` | YAML 生成成功 | 失敗 | usage error |
+| `instrument review-report` | markdown 出力成功 | file 不在等の error | usage error |
+| `diagnose tool-surface` | `status == "ok"` または warning + `--strict` 無し | warning + `--strict` | usage error |
 
 `doctor` は warning だけでも exit 1 になります (CI で fail させる
 強い gate として設計)。warning を許容したい場合は `doctor` 出力を

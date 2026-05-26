@@ -1,5 +1,58 @@
 # 変更履歴
 
+## v2.2.1 — v2.2.0 レビュー応答 (docstring 更新 / --id help / diagnose --strict / README exit code)
+
+合言葉: **「v2.2.0 直後の docs / exit code policy 仕上げ」**
+
+v2.2.0 external review (P1/P2) 反映の small patch。public API /
+dependency / shim 動作すべて不変。
+
+### 変更点
+
+- **P1** (`src/lab_executor/cli.py` docstring):
+  - 冒頭を「v2.1.0」→「v2.2.x」へ更新
+  - v2.1.0 / v2.2.0 のサブコマンドを段階的に列挙
+  - **Exit code policy** を docstring 内に明文化
+    (0 / 1 / 2 の意味、`diagnose tool-surface` の strict mode 説明)
+- **P1** (`extension init --id` help):
+  - "reverse-DNS extension id (default: local.<pack_name>)" → より
+    具体的な "default: 'local.<pack_name>', e.g. 'local.my_pack'"
+    に変更
+- **P1** (`diagnose tool-surface --strict` 追加):
+  - default では warning でも exit 0 (手元診断向け、warning は表示
+    のみ)
+  - `--strict` 指定時のみ warning → exit 1 (CI gate 用途)
+  - JSON 出力に `strict_mode` field 追加
+- **P1** (`README.md` exit code table 拡張):
+  - `extension init` / `instrument scaffold` / `instrument
+    review-report` / `diagnose tool-surface` の exit code を追記
+  - `diagnose tool-surface` の warning + `--strict` 無し → exit 0 の
+    挙動を明示
+
+### tests
+
+- 既存 v2 smoke test 39 件 すべて pass (v2.0 + v2.1 + v2.2)
+- diagnose `--strict` の追加は default behavior の緩和のみで、
+  既存 test (`test_cli_diagnose_tool_surface_json`) は exit code
+  0 か 1 を許容しているため pass 維持
+
+### 互換性
+
+- API / package 構造 / MCP tool / DSL / extension pack: すべて不変
+- `diagnose tool-surface` の **default exit code が変わる**
+  (warning で exit 1 → exit 0)。CI で fail させたい場合は `--strict`
+  を明示すること
+
+### 注意点 (v2.3+ の宿題)
+
+- `src/lab_executor/job/manager.py` の `TYPE_CHECKING` 内に
+  `visa_mcp.session_manager` / `visa_mcp.visa_manager` 参照が残存
+  (runtime import ではないが、v2.3 で lab-executor 側 Protocol へ
+  置換予定)
+- `SessionFacade` を Protocol へ昇格 (v2.3 候補)
+- `lab-executor extension install / check / catalog` + path migration
+  は v2.3 で着手
+
 ## v2.2.0 — CLI Authoring Workflow + Backend Naming Cleanup
 
 合言葉: **「v2.1 で server を起動できるようになった runtime を、
