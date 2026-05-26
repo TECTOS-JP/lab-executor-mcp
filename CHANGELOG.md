@@ -1,5 +1,51 @@
 # 変更履歴
 
+## v2.5.1 — Docs / Review patch + summary breakdown
+
+v2.5.0 レビュー反映 patch。
+
+### Docs / CLI 文言
+
+- `cli.py` docstring を v2.4.x → v2.5.x へ更新。`migration-plan` /
+  `resolve_extension_by_id()` を全体説明と Exit code policy section に
+  追記
+- argparse `description` を「dual-path extension discovery and
+  migration planning (v2.5)」に更新
+- `ExtensionMigrationAction` docstring を明確化。「`apply_available
+  =False` は v2.5 では常に True にならない」という曖昧な表現を
+  「v2.5 では `apply_available` は常に False。本 release は plan の
+  みを出し、copy / move / delete は実行しない」に書き直し
+- README から `docs/extension_path_migration.md` へのリンクを追加
+
+### Summary breakdown (v2.5.1)
+
+`ExtensionMigrationPlan.summary` に内訳 field を追加 (既存 field
+は不変):
+
+- `invalid_metadata`: `extension.yaml` parse 失敗 / `extension_id`
+  欠落 (severity=error の起点)
+- `missing_extension_yaml`: pack dir はあるが `extension.yaml` が
+  ない (severity=warning の起点)
+
+これで CI / 人間レビューが「error 系の invalid か、warning 系の
+missing か」を summary 1 段で判別できる。`invalid` (合算) は
+互換のため残す。
+
+### docs/extension_path_migration.md 強化
+
+- catalog/check と migration-plan で duplicate の severity が違う
+  理由を表で明示 (catalog/check は warning、migration-plan は error)
+- summary breakdown の 2 新 field を説明
+- README からの導線確認
+
+### Internal
+
+- version 2.5.0 → 2.5.1 (`__init__.py` / `pyproject.toml`)
+- コア logic (plan_extension_migration / resolve_extension_by_id /
+  CLI ロジック) は不変、tests 88 件 pass
+
+---
+
 ## v2.5.0 — Extension Migration Plan + Conflict Resolution Guidance
 
 合言葉: **「v2.4 で検出、v2.5 で計画。まだ動かさない」**

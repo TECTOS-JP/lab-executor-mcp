@@ -31,10 +31,21 @@ report_conflict_no_implicit_precedence
 The system **does not silently prefer one location** when duplicate
 extension IDs exist. You must resolve duplicates explicitly.
 
-- `extension catalog` / `check` で duplicate を warning として報告
+- `extension catalog` / `check` で duplicate を **warning** として報告
 - `--strict` で exit 1
 - `resolve_extension_by_id(id)` API は duplicate 時に
   `duplicate_extension_id` error を返す (v2.5+)
+
+### catalog/check と migration-plan で severity が違う理由
+
+| CLI | duplicate の扱い | 理由 |
+|-----|--------------|------|
+| `extension catalog` / `check` | **warning** (`--strict` で exit 1) | 「現在の状態」を報告するコマンド。duplicate でも閲覧は可能 |
+| `extension migration-plan` | **error** (default で exit 1) | 移行を妨げる衝突。**解消しない限り migration には進めない** |
+
+つまり、duplicate は「動作させるだけなら見逃せるが、移行する前に
+必ず解消すべき」というポリシー。`catalog` は CI を止めず、
+`migration-plan` は CI を止める。
 
 ## `lab-executor extension migration-plan`
 
@@ -51,7 +62,11 @@ lab-executor extension migration-plan --strict
 - `summary.legacy_only`: legacy path にのみ存在する pack 数
 - `summary.new_only`: new path にのみ存在する pack 数
 - `summary.duplicates`: 両 path に存在する `extension_id` 数
-- `summary.invalid`: metadata 不正 / YAML 不在の数
+- `summary.invalid`: 上記 2 つの合算 (legacy 互換)
+- `summary.invalid_metadata`: `extension.yaml` parse 失敗 / `extension_id`
+  欠落など (severity=error の起点、v2.5.1+)
+- `summary.missing_extension_yaml`: `extension.yaml` 自体が無い pack
+  ディレクトリ (severity=warning の起点、v2.5.1+)
 - `summary.migration_required`: True なら何らかの対応が必要
 - `actions[]`: 推奨 action と severity (info / warning / error)
 

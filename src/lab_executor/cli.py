@@ -1,4 +1,4 @@
-"""lab-executor CLI (v2.4.x).
+"""lab-executor CLI (v2.5.x).
 
 v2.0 では minimal CLI / `serve` placeholder のみだったが、v2.1.0 で
 `serve --backend mock` を実装、v2.2.0 で authoring workflow CLI を
@@ -37,7 +37,19 @@ Detection):
 - ``extension check``: dual-path 経由の integrity check。
   ``summary.duplicate_extension_ids`` を返す。``--strict`` で exit 1
 
-Exit code policy (v2.2.1 明文化、v2.4 で extension lifecycle 拡張):
+v2.5.0 追加 (Extension Migration Plan + Conflict Resolution Guidance):
+
+- ``extension migration-plan``: 現状 path 状態 (legacy_only /
+  new_only / duplicates / invalid) を分類し、推奨 action を出力。
+  実ファイルは一切変更しない (plan only)。``--strict`` で warning も
+  exit 1
+- API ``resolve_extension_by_id()``: ``extension_id`` から 1 件の
+  ``InstalledExtension`` を返す。duplicate 時は
+  ``ExtensionResolveError("duplicate_extension_id")`` を raise し、
+  「黙って先頭採用」を API 境界で禁止する
+
+Exit code policy (v2.2.1 明文化、v2.4 で extension lifecycle 拡張、
+v2.5 で migration-plan 追加):
 
 - 0: 正常終了 (`status == "ok"`)
 - 1: validation / doctor warning / mismatch / ``--strict`` で warning
@@ -57,8 +69,9 @@ def _build_parser() -> argparse.ArgumentParser:
         prog="lab-executor",
         description=(
             "lab-executor-mcp: backend-independent experiment execution "
-            "runtime CLI (v2.4: dual-path extension discovery). For "
-            "hardware-backed operations, use `visa-mcp` CLI."
+            "runtime CLI with dual-path extension discovery and "
+            "migration planning (v2.5). For hardware-backed operations, "
+            "use `visa-mcp` CLI."
         ),
     )
     parser.add_argument(

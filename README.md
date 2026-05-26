@@ -10,7 +10,7 @@ Split from `visa-mcp` at v2.0.
 > 実機 backend が必要な既存利用者は **`pip install --upgrade visa-mcp`** が
 > 互換経路 (v2.0 では visa-mcp v2.0 release を待つ必要あり)。
 
-> **Line-ending / raw display note** (v2.4.1 強化):
+> **Line-ending / raw display note** (v2.5.1 強化):
 >
 > Some third-party viewers and LLM-based fetchers occasionally
 > report repository files as "1 line" / "collapsed" when reading
@@ -22,7 +22,7 @@ Split from `visa-mcp` at v2.0.
 > exact `bytes` / `LF` / `CR` / `BOM` counts. Any reviewer can run:
 >
 > ```bash
-> git clone --branch v2.4.1 https://github.com/TECTOS-JP/lab-executor-mcp.git
+> git clone --branch v2.5.1 https://github.com/TECTOS-JP/lab-executor-mcp.git
 > cd lab-executor-mcp
 > python scripts/release_verification.py --check
 > # expect: "OK" + exit 0  (CR=0, LF>=10, no BOM for every critical file)
@@ -78,6 +78,13 @@ implicitly. Inspect the resolver state with:
 ```bash
 lab-executor extension paths --json
 ```
+
+v2.5 adds `lab-executor extension migration-plan` (plan only, no file
+changes) and the `resolve_extension_by_id()` API (duplicate
+extension_id raises `ExtensionResolveError`). See
+[`docs/extension_path_migration.md`](docs/extension_path_migration.md)
+for the full migration guide and roadmap (v2.6 copy-plan → v2.7
+controlled apply → v2.8 default switch).
 
 ## How to start the server (v2.1+)
 

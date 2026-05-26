@@ -28,8 +28,12 @@ from lab_executor.extension_discovery import (
 
 @dataclass(frozen=True)
 class ExtensionMigrationAction:
-    """1 件の推奨 action。`apply_available=False` は v2.5 では常に
-    True にならない (file 変更は v2.6+)。"""
+    """1 件の推奨 action。
+
+    v2.5 では ``apply_available`` は **常に False**。本 release は
+    plan のみを出し、copy / move / delete は実行しない。
+    実際の apply は v2.6+ (copy-plan / controlled apply) で導入予定。
+    """
     action: str
     extension_id: str | None
     severity: str  # "info" / "warning" / "error"
@@ -115,13 +119,15 @@ def plan_extension_migration(
             new_only.append(ext)
 
     duplicates = discovery.duplicates
-    invalid_count = sum(
+    invalid_metadata_count = sum(
         1 for e in discovery.errors
         if e.get("error_class") == "invalid_extension_metadata"
-    ) + sum(
+    )
+    missing_yaml_count = sum(
         1 for w in discovery.warnings
         if w.get("warning_class") == "missing_extension_yaml"
     )
+    invalid_count = invalid_metadata_count + missing_yaml_count
 
     actions: list[ExtensionMigrationAction] = []
 
@@ -197,6 +203,10 @@ def plan_extension_migration(
         "new_only": len(new_only),
         "duplicates": len(duplicates),
         "invalid": invalid_count,
+        # v2.5.1: invalid の内訳を分けて公開
+        # (error vs warning の起点を明示)
+        "invalid_metadata": invalid_metadata_count,
+        "missing_extension_yaml": missing_yaml_count,
         "migration_required": migration_required,
     }
 
