@@ -132,7 +132,7 @@ def test_lab_executor_serve_is_placeholder():
     ようにする)"""
     result = subprocess.run(
         [sys.executable, "-m", "lab_executor.cli", "serve"],
-        text=True, capture_output=True,
+        text=True, capture_output=True, encoding="utf-8",
     )
     assert result.returncode == 2, (
         f"expected exit code 2 (placeholder), got "
@@ -146,7 +146,7 @@ def test_lab_executor_cli_version():
     """CLI --version が正しい version を返す"""
     result = subprocess.run(
         [sys.executable, "-m", "lab_executor.cli", "--version"],
-        text=True, capture_output=True,
+        text=True, capture_output=True, encoding="utf-8",
     )
     assert result.returncode == 0
     import lab_executor

@@ -1,5 +1,58 @@
 # 変更履歴
 
+## v2.0.2 — CI hotfix (TYPE_CHECKING import / ASCII CLI / smoke test scope)
+
+合言葉: **「v2.0.1 で CI 全 job 通すための hotfix」**
+
+v2.0.1 push 後の GitHub Actions failure 解析と修正。public API / MCP
+tool / DSL / extension pack すべて不変。
+
+### 失敗原因
+
+`run 26430762700` で `test` / `pyvisa-not-installed` job が fail:
+
+1. **P0 (`src/lab_executor/tools/commands.py`)**: bootstrap script の
+   patch 関数が `if TYPE_CHECKING:` を挿入する際、当該 file に
+   `from typing import` が存在しなかったため `TYPE_CHECKING` が
+   undefined になっていた。collection 段階で `NameError` 発生 →
+   pytest 全停止
+2. **P0 (`tests/test_v200_split.py`)**: `lab-executor serve` の
+   stderr メッセージが日本語で、Windows subprocess decode 時に
+   cp932 → utf-8 mismatch で `UnicodeDecodeError` 発生
+3. **P1 (`.github/workflows/ci.yml` test job)**: pytest 全件 (152
+   inherited visa-mcp tests + 1 smoke) を実行していたが、inherited
+   tests は v2.0 split に未適応 → 大量 fail
+
+### 修正
+
+- **P0-1** (`src/lab_executor/tools/commands.py`): `from typing import
+  TYPE_CHECKING` を追加
+- **P0-1** bootstrap script (`visa-mcp` repo): `from typing import`
+  が存在しない場合は `from __future__ import annotations` 直後に
+  新規 import 行を挿入するよう改良 (再 bootstrap 時の regression
+  防止)
+- **P0-2** (`src/lab_executor/cli.py`): `serve` placeholder の stderr
+  メッセージを **ASCII-only** に変更 (Windows cp932 / Linux UTF-8 /
+  CI locale を問わず subprocess で安全に decode できる)
+- **P0-2** (`tests/test_v200_split.py`): subprocess.run に
+  `encoding="utf-8"` 明示
+- **P1** (`.github/workflows/ci.yml`): `test` job の pytest を
+  `tests/test_v200_split.py` のみに限定 (inherited visa-mcp tests
+  152 件は v2.1 で curated subset へ拡張予定)
+
+### 検証
+
+```
+PYTHONPATH=src python -m pytest tests/test_v200_split.py -q
+→ 10 passed
+```
+
+### 互換性
+
+- API / package 構造: 不変
+- MCP tool 数 / DSL / extension pack: 不変
+- CLI 動作: stderr メッセージのみ英語化、exit code / 動作不変
+
 ## v2.0.1 — v2.0.0 レビュー応答 (README 導線 / line-ending note / MockBackend docstring)
 
 合言葉: **「正式版直後の peripheral 仕上げ」**

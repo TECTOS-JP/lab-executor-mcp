@@ -2,6 +2,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+from typing import TYPE_CHECKING
 
 from fastmcp import FastMCP
 from lab_executor.utils.param_validator import validate_and_build_scpi, ParameterValidationError

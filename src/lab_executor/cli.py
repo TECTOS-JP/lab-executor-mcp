@@ -81,11 +81,13 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "serve":
+        # ASCII-only message to avoid Windows cp932 / locale issues
+        # when invoked from subprocess.
         print(
-            "lab-executor serve: v2.0.0 では実装途中です。v2.1 で MCP "
-            "server を有効化します。\n"
-            "実機 backend が必要な場合は visa-mcp v2.x を install して "
-            "`visa-mcp serve` を使ってください。",
+            "lab-executor serve: placeholder in v2.0.x. "
+            "MCP server will be implemented in v2.1.\n"
+            "For hardware-backed MCP server, install visa-mcp v2.x "
+            "and run `visa-mcp serve`.",
             file=sys.stderr,
         )
         return 2
