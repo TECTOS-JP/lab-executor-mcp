@@ -150,9 +150,13 @@ def _build_parser() -> argparse.ArgumentParser:
 
     ext_catalog = ext_sub.add_parser(
         "catalog",
-        help="List installed extensions catalog",
+        help="List installed extensions catalog (v2.4: dual-path)",
     )
     ext_catalog.add_argument("--json", action="store_true")
+    ext_catalog.add_argument(
+        "--strict", action="store_true",
+        help="v2.4: duplicate_extension_id -> exit 1 (default: exit 0)",
+    )
 
     ext_paths = ext_sub.add_parser(
         "paths",
@@ -424,45 +428,74 @@ def _cmd_extension(args: argparse.Namespace) -> int:
         return 0 if data.get("status") == "ok" else 1
 
     if sub == "check":
+        # v2.4.0: dual-path discovery + duplicate detection を統合
         from lab_executor.extension_integrity import (
             check_installed_extension,
         )
-        from lab_executor.extension_install import list_installed_packs
-        packs = list_installed_packs()
+        from lab_executor.extension_discovery import (
+            discover_installed_extensions,
+        )
+        disc = discover_installed_extensions()
+        exts = list(disc.extensions)
         if args.extension_id:
-            packs = [p for p in packs
-                      if p.get("extension_id") == args.extension_id]
+            exts = [e for e in exts
+                    if e.extension_id == args.extension_id]
         results: list[dict] = []
         worst_status = "ok"
-        for p in packs:
-            install_path = p.get("install_path") or p.get("path")
-            if install_path is None:
-                continue
-            rep = check_installed_extension(install_path)
+        for e in exts:
+            rep = check_installed_extension(str(e.path))
             d = rep if isinstance(rep, dict) else (
                 rep.to_dict() if hasattr(rep, "to_dict") else {}
             )
-            d["extension_id"] = p.get("extension_id")
+            d["extension_id"] = e.extension_id
+            d["source_path"] = str(e.source_path)
             results.append(d)
             if d.get("status") == "error":
                 worst_status = "error"
             elif (d.get("status") == "warning"
                     and worst_status != "error"):
                 worst_status = "warning"
+        # duplicate を warning に格上げ (整合性検査の主戦場)
+        duplicate_warnings: list[dict] = []
+        if disc.has_duplicates():
+            for eid, entries in disc.duplicates.items():
+                duplicate_warnings.append({
+                    "warning_class": "duplicate_extension_id",
+                    "extension_id": eid,
+                    "locations": [str(x.path) for x in entries],
+                    "recommended_actions": [
+                        {"action": "remove_one_copy"},
+                        {"action": "run_migration_plan"},
+                    ],
+                })
+            if worst_status != "error":
+                worst_status = "warning"
         out = {
             "status": worst_status,
+            "summary": {
+                "checked_extensions": len(results),
+                "duplicate_extension_ids": len(disc.duplicates),
+            },
             "checked_count": len(results),
             "results": results,
+            "warnings": duplicate_warnings,
+            "duplicate_policy": disc.duplicate_policy,
         }
         if args.json:
             print(json.dumps(out, ensure_ascii=False, indent=2,
                               default=str))
         else:
             print(f"extension check: status={worst_status}, "
-                  f"checked={len(results)}")
+                  f"checked={len(results)}, "
+                  f"duplicates={len(disc.duplicates)}")
             for r in results:
                 print(f"  - {r.get('extension_id')}: "
                       f"{r.get('status')}")
+            for w in duplicate_warnings:
+                print(f"  WARN duplicate_extension_id: "
+                      f"{w['extension_id']}")
+                for loc in w["locations"]:
+                    print(f"      - {loc}")
         if worst_status == "ok":
             return 0
         if worst_status == "warning":
@@ -470,21 +503,71 @@ def _cmd_extension(args: argparse.Namespace) -> int:
         return 1
 
     if sub == "catalog":
-        from lab_executor.extension_catalog import list_catalog_installed
-        rep = list_catalog_installed()
-        data = rep.to_dict() if hasattr(rep, "to_dict") else rep
+        # v2.4.0: dual-path discovery + duplicate detection を統合
+        from lab_executor.extension_catalog import _entry_from_installed
+        from lab_executor.extension_discovery import (
+            discover_installed_extensions,
+        )
+        disc = discover_installed_extensions()
+        entries: list[dict] = []
+        for e in disc.extensions:
+            entry = _entry_from_installed({
+                "extension_id": e.extension_id,
+                "path": str(e.path),
+            })
+            if entry is None:
+                # extension.yaml は読めたが entry 化失敗 → 簡易 entry
+                entry = {
+                    "extension_id": e.extension_id,
+                    "version": e.metadata.get("version", ""),
+                    "source": {
+                        "kind": "installed",
+                        "path": str(e.path),
+                    },
+                }
+            entry["source_path"] = str(e.source_path)
+            entries.append(entry)
+        duplicates_block: list[dict] = []
+        for eid, entries_list in disc.duplicates.items():
+            duplicates_block.append({
+                "extension_id": eid,
+                "locations": [str(x.path) for x in entries_list],
+                "error_class": "duplicate_extension_id",
+            })
+        status = "warning" if disc.has_duplicates() else "ok"
+        data = {
+            "status": status,
+            "data": {
+                "extensions": entries,
+                "duplicates": duplicates_block,
+            },
+            "count": len(entries),
+            "duplicate_count": len(disc.duplicates),
+            "duplicate_policy": disc.duplicate_policy,
+        }
         if args.json:
             print(json.dumps(data, ensure_ascii=False, indent=2,
                               default=str))
         else:
-            entries = data.get("entries") or []
             print(f"extension catalog: {len(entries)} pack(s) "
-                  f"installed")
+                  f"installed (status={status})")
             for e in entries:
                 print(f"  - {e.get('extension_id')} "
-                      f"v{e.get('version', '?')} "
-                      f"[{e.get('support_level', '?')}]")
-        return 0
+                      f"v{e.get('version', '?')}")
+            for d in duplicates_block:
+                print(f"  WARN duplicate_extension_id: "
+                      f"{d['extension_id']}")
+                for loc in d["locations"]:
+                    print(f"      - {loc}")
+            if duplicates_block:
+                print(
+                    "  Resolve by removing one copy or use "
+                    "migration tooling."
+                )
+        if status == "ok":
+            return 0
+        # warning: --strict なら exit 1, なければ exit 0
+        return 1 if getattr(args, "strict", False) else 0
 
     if sub == "paths":
         from lab_executor.extension_paths import get_extension_paths
@@ -494,15 +577,21 @@ def _cmd_extension(args: argparse.Namespace) -> int:
             print(json.dumps(data, ensure_ascii=False, indent=2,
                               default=str))
         else:
-            print("extension paths (v2.3, planning only):")
-            print(f"  current_default:         "
+            print("extension paths (v2.4, dual-path read):")
+            print(f"  current_default:          "
                   f"{data['current_default']}")
             print(f"  future_default_candidate: "
                   f"{data['future_default_candidate']}")
+            print(f"  legacy_path:              {data['legacy_path']}")
+            print(f"  new_path:                 {data['new_path']}")
+            print(f"  write_default:            "
+                  f"{data['write_default']}")
             print(f"  active_read_paths:")
             for p in data["active_read_paths"]:
                 print(f"    - {p}")
-            print(f"  migration_required: "
+            print(f"  duplicate_policy:         "
+                  f"{data['duplicate_policy']}")
+            print(f"  migration_required:       "
                   f"{data['migration_required']}")
         return 0
 

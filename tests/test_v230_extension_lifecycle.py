@@ -25,16 +25,16 @@ def test_extension_paths_module_importable():
 
 def test_extension_paths_default_legacy_path():
     """v2.3: current_default は ~/.visa-mcp/extensions/ のまま
-    (v2.4+ で dual-read 検討、v2.5+ で切替判断)"""
+    (v2.4: dual-read 開始、v2.5+ で切替判断)"""
     from lab_executor.extension_paths import get_extension_paths
     paths = get_extension_paths()
     assert paths.current_default.name == "extensions"
     assert ".visa-mcp" in str(paths.current_default)
     # future candidate
     assert ".lab-executor" in str(paths.future_default_candidate)
-    # v2.3 では active_read_paths は current_default 単独
-    assert paths.active_read_paths == [paths.current_default]
-    # migration は v2.3 では発生しない
+    # v2.4 では active_read_paths は dual (new → legacy)
+    assert paths.current_default in paths.active_read_paths
+    # migration は default では発生しない (情報提供のみ)
     assert paths.migration_required is False
 
 
@@ -45,7 +45,8 @@ def test_extension_paths_to_dict():
     assert "future_default_candidate" in d
     assert "active_read_paths" in d
     assert "migration_required" in d
-    assert d["schema_version"] == "v2.3"
+    # v2.3 では "v2.3"、v2.4+ で "v2.4" 以上を許容
+    assert d["schema_version"] in ("v2.3", "v2.4")
 
 
 # ============================================================
@@ -71,7 +72,8 @@ def test_cli_extension_paths_json():
     assert res.returncode == 0
     import json
     data = json.loads(res.stdout)
-    assert data["schema_version"] == "v2.3"
+    # v2.3 -> "v2.3", v2.4+ -> "v2.4" 以上
+    assert data["schema_version"] in ("v2.3", "v2.4")
     assert data["migration_required"] is False
 
 

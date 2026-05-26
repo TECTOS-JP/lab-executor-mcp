@@ -1,5 +1,97 @@
 # 変更履歴
 
+## v2.4.0 — Dual-path Extension Discovery + Duplicate Conflict Detection
+
+合言葉: **「新 path を読み始める。ただし黙って優先しない」**
+
+v2.3.0 で planning に留めた path 移行を、v2.4.0 で
+**読み取りだけ dual-path 化** する。書き込み default は legacy
+(`~/.visa-mcp/extensions/`) のまま。同じ `extension_id` が
+new (`~/.lab-executor/extensions/`) と legacy 両方に存在する場合は
+**自動採用せず、warning として報告**する (案 B:
+`report_conflict_no_implicit_precedence`)。
+
+### Source of truth: `ExtensionPaths` (v2.4 schema)
+
+`lab_executor.extension_paths.get_extension_paths()` を拡張し、
+読み・書き・表示を分離した:
+
+```
+read     : active_read_paths = [new_path, legacy_path]
+write    : write_default       = legacy_path   (v2.4 では legacy のまま)
+display  : current_default / future_default_candidate
+policy   : duplicate_policy = "report_conflict_no_implicit_precedence"
+```
+
+新 fields: `legacy_path` / `new_path` / `write_default` /
+`duplicate_policy`。`to_dict()` の `schema_version` は `"v2.4"`。
+
+### 新規 module: `lab_executor.extension_discovery`
+
+`catalog` / `check` / 将来の `migration-plan` が共有する dual-path
+scan + duplicate 検出ロジックを 1 箇所に集約:
+
+- `discover_installed_extensions(paths=None) -> ExtensionDiscoveryResult`
+- `InstalledExtension` (frozen dataclass): `extension_id` / `path`
+  / `source_path` / `metadata` / `install_meta`
+- `ExtensionDiscoveryResult`: `extensions` / `duplicates` /
+  `warnings` / `errors` / `duplicate_policy`
+
+duplicate 判定は **ディレクトリ名ではなく `extension.yaml` の
+`extension_id`** ベース。YAML 読み込み失敗は
+`invalid_extension_metadata` / `missing_extension_yaml` として
+errors / warnings に分離して報告する。
+
+### CLI 挙動 (v2.4)
+
+- **`lab-executor extension paths`**: `legacy_path` / `new_path`
+  / `write_default` / `active_read_paths` / `duplicate_policy` を
+  表示。
+- **`lab-executor extension catalog`**: dual-path discovery 経由で
+  install 済 pack を列挙。duplicate がある場合 `status=warning`
+  + `duplicates` block 出力。`--strict` で warning → exit 1。
+- **`lab-executor extension check`**: dual-path discovery + 個別
+  integrity check の合算。`summary.duplicate_extension_ids` を
+  返す。default では warning でも exit 0、`--strict` で exit 1。
+
+### `lab-executor extension install` の挙動
+
+**default 書き込み先は引き続き `~/.visa-mcp/extensions/`** (v2.4 で
+変更しない)。v2.5+ で切替判断する。
+
+### v2.4 で **やらないこと**
+
+- install default を `~/.lab-executor/extensions/` に変更
+- duplicate 時に自動で片方を優先 / 削除 / 移動
+- migration 自動実行
+- extension pack 形式 / `.install_meta.json` schema 変更
+- MCP tool 追加 / DSL schema 変更
+
+### Tests
+
+- `tests/test_v240_extension_dual_path.py`: 18 件
+  - `ExtensionPaths` v2.4 schema (active_read_paths dual /
+    write_default legacy / duplicate_policy)
+  - `discover_installed_extensions` (legacy 単独 / new 単独 /
+    duplicate 検出 / missing_extension_yaml /
+    invalid_extension_metadata)
+  - CLI `extension paths/catalog/check` (`--strict` 含む)
+  - `install_default` 不変回帰
+  - PyVISA / `visa_mcp` 非依存 subprocess 検査
+  - tool surface 不変 (Stable 43 + Experimental 7 = 50)
+- v2.3 既存 tests を v2.4 schema 受容に更新
+  (`schema_version in {"v2.3","v2.4"}`)
+
+### 互換性
+
+- MCP tool 名 / 引数 / response、DSL `dsl_version=0.8`、
+  extension pack 形式 (`.visa-mcp-ext.zip`)、`.install_meta.json`
+  schema はすべて不変。
+- `default_extensions_dir()` の返り値 (`~/.visa-mcp/extensions/`)
+  も不変。v2.4 では `write_default` と完全一致する。
+
+---
+
 ## v2.3.1 — Docs / Review patch
 
 v2.3.0 レビュー反映 patch。コード変更なし、docs と CHANGELOG の補強のみ。
