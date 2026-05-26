@@ -113,6 +113,66 @@ v2.7 で `--apply` を入れるときは、`blocked_reasons` が空である
 ことを **追加の事前条件**として要求する予定 (現在 candidate になって
 いるものだけを apply 対象とし、skipped を黙って無視しない)。
 
+## `lab-executor extension migration-plan --copy-plan --apply` (v2.7)
+
+```bash
+lab-executor extension migration-plan --copy-plan --apply
+lab-executor extension migration-plan --copy-plan --apply --json
+```
+
+v2.7 で追加された **controlled copy apply**。legacy にしかない pack
+を new path へ実コピーする。
+
+### 厳格な事前条件 (一つでも欠ければ apply 不可)
+
+- `copy_plan.status == "ready"`
+- `copy_plan.candidates` が 1 件以上
+- `copy_plan.blocked_reasons` が空 (`target_exists` skipped も含む)
+- duplicate_extension_id / invalid_extension_metadata がない
+- `--apply` 単独使用は不可 (`--copy-plan` と併用必須、単独は exit 2)
+
+### 安全保証
+
+- **source は削除しない** (`delete_performed=False` 固定)
+- **target は上書きしない** (既存なら skipped + status=blocked)
+- candidate ごとに `target.tmp-<stamp>/` に copy → atomic-ish rename
+- 実行直前に migration plan を **再計算** (UI 表示後の filesystem
+  変化をケア)
+- partial failure 時は **fail-fast** (以降の candidate を実行せず、
+  成功済みは残す、`status="partial_failure"`)
+- manifest を `~/.lab-executor/migration_logs/extension-copy-<stamp>
+  .json` に必ず保存 (blocked 時も保存)
+
+### manifest schema
+
+```json
+{
+  "schema_version": "v2.7",
+  "operation": "extension_copy_apply",
+  "created_at": "2026-05-26T...",
+  "source_default": "~/.visa-mcp/extensions",
+  "target_default": "~/.lab-executor/extensions",
+  "status": "ok",
+  "copied": [
+    {"extension_id": "...", "source": "...", "target": "...",
+     "file_count": 12, "bytes": 34567}
+  ],
+  "failed": [],
+  "skipped": [],
+  "blocked_reasons": [],
+  "delete_performed": false,
+  "overwrite_performed": false
+}
+```
+
+### v2.7 で **やらないこと**
+
+- source delete / legacy path 自動 cleanup
+- target overwrite / `--force`
+- install default 変更
+- duplicate 自動解決
+- 自動 rollback (manifest 保存のみで人手復旧前提)
+
 ### blocked 例 (duplicate あり)
 
 ```json
@@ -181,8 +241,8 @@ migration_required = False otherwise (new_only のみ等)
 | v2.4.0 | dual-path read + duplicate 検出 | 実装済 |
 | v2.5.0 | migration-plan (現状分類) | 実装済 |
 | v2.6.0 | migration-plan --copy-plan (copy 候補生成、実 copy なし) | 実装済 |
-| v2.7.0 | Controlled `--apply` with backup / rollback | 検討中 |
-| v2.8.0 | migration rollback / verify copied packs | 検討中 |
+| v2.7.0 | Controlled `--apply` (実 copy、no delete / no overwrite) | 実装済 |
+| v2.8.0 | verify copied packs / rollback planning | 検討中 |
 | v2.9+   | install default を `~/.lab-executor/extensions/` へ切替判断 | 検討中 |
 
 順序は **検出 → 計画 → copy-plan → apply → default 切替** で固定。

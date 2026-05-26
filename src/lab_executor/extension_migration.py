@@ -1,19 +1,21 @@
-"""v2.5.0 / v2.6.0: Extension Migration Plan + Copy Plan.
+"""v2.5.0 / v2.6.0 / v2.7.0: Extension Migration Plan / Copy Plan /
+Controlled Apply.
 
 v2.4 で導入した dual-path discovery + duplicate detection に対し、
-**実ファイルは変更せず**、現状と推奨 action を構造化して出す:
+段階的に migration を計画 → copy 候補 → controlled apply へ進む:
 
-- legacy_only  : `~/.visa-mcp/extensions/` にのみ存在
-- new_only     : `~/.lab-executor/extensions/` にのみ存在
-- duplicate    : 両 path に同じ `extension_id` (案 B により自動採用なし)
-- invalid      : metadata 不正 / YAML 不在
+- v2.5: `plan_extension_migration()` (現状分類)
+- v2.6: `plan_extension_migration(copy_plan=True)` (copy 候補)
+- v2.7: `apply_extension_copy_plan()` (実 copy。厳格な事前条件下)
 
-v2.5.0 では migration plan を、v2.6.0 では copy plan を追加する。
-両方とも **plan のみ**。`--apply` / 実 copy / 実 move / 実 delete は
-実装しない (v2.7+ で慎重に検討)。
+v2.7 でも **delete / overwrite / move は行わない**。source は触らず、
+target が既存なら必ず止める。
 """
 from __future__ import annotations
+import json
+import shutil
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -397,3 +399,278 @@ def _build_copy_plan(
         blocked_reasons=[],
         apply_available=False,
     )
+
+
+# ============================================================
+# v2.7.0: Controlled Copy Apply
+# ============================================================
+
+
+class ExtensionCopyApplyError(Exception):
+    """`apply_extension_copy_plan()` の事前条件違反。"""
+
+    def __init__(self, error_class: str, message: str,
+                  details: dict[str, Any] | None = None):
+        super().__init__(message)
+        self.error_class = error_class
+        self.message = message
+        self.details = dict(details or {})
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "error_class": self.error_class,
+            "message": self.message,
+            "details": dict(self.details),
+        }
+
+
+@dataclass(frozen=True)
+class ExtensionCopyApplyResult:
+    """v2.7.0: `apply_extension_copy_plan()` の戻り値。
+
+    - status: "ok" / "blocked" / "partial_failure"
+    - copied / failed / skipped: copy 1 件ごとの記録 (dict)
+    - manifest_path: `~/.lab-executor/migration_logs/...` に保存した
+      manifest の path (status=blocked 時は None もあり)
+    - delete_performed / overwrite_performed: v2.7 では **常に False**
+    - blocked_reasons: status=blocked / partial_failure 時の理由
+    """
+    status: str
+    copied: list[dict[str, Any]] = field(default_factory=list)
+    failed: list[dict[str, Any]] = field(default_factory=list)
+    skipped: list[dict[str, Any]] = field(default_factory=list)
+    manifest_path: Path | None = None
+    delete_performed: bool = False
+    overwrite_performed: bool = False
+    blocked_reasons: list[dict[str, Any]] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "status": self.status,
+            "copied": list(self.copied),
+            "failed": list(self.failed),
+            "skipped": list(self.skipped),
+            "manifest_path": (
+                str(self.manifest_path)
+                if self.manifest_path else None
+            ),
+            "delete_performed": self.delete_performed,
+            "overwrite_performed": self.overwrite_performed,
+            "blocked_reasons": list(self.blocked_reasons),
+            "schema_version": "v2.7",
+        }
+
+
+def _migration_log_dir() -> Path:
+    """manifest 保存先 (`~/.lab-executor/migration_logs/`)。
+
+    `~/.lab-executor/` は v2.5+ の future_default_candidate と同じ
+    namespace。manifest はこちらに置くのが自然。
+    """
+    return Path.home() / ".lab-executor" / "migration_logs"
+
+
+def _now_stamp() -> str:
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def _count_files_and_bytes(p: Path) -> tuple[int, int]:
+    n = 0
+    b = 0
+    for f in p.rglob("*"):
+        if f.is_file():
+            n += 1
+            b += f.stat().st_size
+    return n, b
+
+
+def apply_extension_copy_plan(
+    *,
+    paths: ExtensionPaths | None = None,
+    log_dir: Path | None = None,
+) -> ExtensionCopyApplyResult:
+    """v2.7.0: legacy_only extension を new path へ copy する
+    controlled apply。
+
+    安全方針:
+
+    - 実行直前に **migration plan を再計算** (UI 表示後に filesystem
+      が変わった可能性をケア)
+    - `copy_plan.status == "ready"` かつ `blocked_reasons` が空である
+      ことが必須 (v2.6.1 で予約した条件)
+    - candidate ごとに **target.tmp-<stamp>/** に copy → atomic-ish
+      rename。target が既に存在する場合は **絶対に上書きせず** skip
+    - source は **削除しない**
+    - manifest を `~/.lab-executor/migration_logs/extension-copy-
+      <stamp>.json` に必ず保存 (失敗時も保存する)
+
+    partial failure 時の挙動: fail-fast。途中失敗したら以降の
+    candidate を実行せず、成功済みは残す。`status="partial_failure"`
+    で返し、manifest にも記録。
+    """
+    paths = paths or get_extension_paths()
+    log_dir = log_dir or _migration_log_dir()
+
+    # 1) 直前再計算
+    plan = plan_extension_migration(paths=paths, copy_plan=True)
+    cp = plan.copy_plan
+    assert cp is not None  # copy_plan=True で必ず非 None
+
+    # 2) 事前条件チェック (blocked / not ready / blocked_reasons あり
+    #    のいずれかなら apply 不可)
+    blocked: list[dict[str, Any]] = []
+    if cp.status != "ready":
+        blocked.append({
+            "reason_class": "copy_plan_not_ready",
+            "copy_plan_status": cp.status,
+        })
+    if cp.blocked_reasons:
+        # v2.6.1 で予約: blocked_reasons があれば apply 不可
+        for r in cp.blocked_reasons:
+            blocked.append({
+                "reason_class": r.get("reason_class", "unknown"),
+                "extension_id": r.get("extension_id"),
+                "path": r.get("path"),
+                "target": r.get("target"),
+            })
+    if not cp.candidates:
+        blocked.append({
+            "reason_class": "no_copy_candidates",
+        })
+
+    if blocked:
+        manifest_path = _write_manifest(
+            log_dir=log_dir,
+            status="blocked",
+            copied=[],
+            failed=[],
+            skipped=[],
+            blocked_reasons=blocked,
+            paths=paths,
+        )
+        return ExtensionCopyApplyResult(
+            status="blocked",
+            blocked_reasons=blocked,
+            manifest_path=manifest_path,
+        )
+
+    # 3) 実 copy (candidate 順 / fail-fast)
+    copied: list[dict[str, Any]] = []
+    failed: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+
+    paths.new_path.mkdir(parents=True, exist_ok=True)
+
+    for cand in cp.candidates:
+        target = cand.target
+        source = cand.source
+        # target 上書き防止 (再チェック)
+        if target.exists():
+            skipped.append({
+                "reason_class": "target_exists_at_apply",
+                "extension_id": cand.extension_id,
+                "source": str(source),
+                "target": str(target),
+            })
+            # fail-fast: 安全のため停止
+            break
+        # source 存在再確認
+        if not source.exists():
+            failed.append({
+                "reason_class": "source_missing_at_apply",
+                "extension_id": cand.extension_id,
+                "source": str(source),
+            })
+            break
+
+        # temp dir に copy → atomic-ish rename
+        tmp = target.parent / f"{target.name}.tmp-{_now_stamp()}"
+        try:
+            shutil.copytree(source, tmp)
+            tmp.rename(target)
+        except Exception as e:
+            # cleanup tmp if exists
+            try:
+                if tmp.exists():
+                    shutil.rmtree(tmp, ignore_errors=True)
+            except Exception:
+                pass
+            failed.append({
+                "reason_class": "copy_failed",
+                "extension_id": cand.extension_id,
+                "source": str(source),
+                "target": str(target),
+                "error": str(e),
+            })
+            break
+
+        n_files, n_bytes = _count_files_and_bytes(target)
+        copied.append({
+            "extension_id": cand.extension_id,
+            "source": str(source),
+            "target": str(target),
+            "file_count": n_files,
+            "bytes": n_bytes,
+        })
+
+    status = "ok"
+    if failed:
+        status = "partial_failure"
+    elif skipped:
+        status = "partial_failure"
+
+    manifest_path = _write_manifest(
+        log_dir=log_dir,
+        status=status,
+        copied=copied,
+        failed=failed,
+        skipped=skipped,
+        blocked_reasons=[],
+        paths=paths,
+    )
+
+    return ExtensionCopyApplyResult(
+        status=status,
+        copied=copied,
+        failed=failed,
+        skipped=skipped,
+        manifest_path=manifest_path,
+        delete_performed=False,
+        overwrite_performed=False,
+    )
+
+
+def _write_manifest(
+    *,
+    log_dir: Path,
+    status: str,
+    copied: list[dict[str, Any]],
+    failed: list[dict[str, Any]],
+    skipped: list[dict[str, Any]],
+    blocked_reasons: list[dict[str, Any]],
+    paths: ExtensionPaths,
+) -> Path:
+    """apply manifest を JSON で保存し、保存先 path を返す。"""
+    log_dir.mkdir(parents=True, exist_ok=True)
+    fname = f"extension-copy-{_now_stamp()}.json"
+    fpath = log_dir / fname
+    payload = {
+        "schema_version": "v2.7",
+        "operation": "extension_copy_apply",
+        "created_at": datetime.now(timezone.utc).isoformat(
+            timespec="seconds"),
+        "source_default": str(paths.legacy_path),
+        "target_default": str(paths.new_path),
+        "status": status,
+        "copied": copied,
+        "failed": failed,
+        "skipped": skipped,
+        "blocked_reasons": blocked_reasons,
+        "delete_performed": False,
+        "overwrite_performed": False,
+    }
+    fpath.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return fpath

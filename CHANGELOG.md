@@ -1,5 +1,111 @@
 # 変更履歴
 
+## v2.7.0 — Controlled Extension Copy Apply
+
+合言葉: **「v2.6 で copy 候補、v2.7 で実 copy。ただし source は触らず
+target は上書きしない」**
+
+v2.6 で出せた copy candidate を、**厳格な事前条件下でのみ実行**する
+段階。delete / overwrite / move は v2.7 でも一切しない。
+
+### 新規 API
+
+```python
+@dataclass(frozen=True)
+class ExtensionCopyApplyResult:
+    status: str   # "ok" / "blocked" / "partial_failure"
+    copied: list[dict]
+    failed: list[dict]
+    skipped: list[dict]
+    manifest_path: Path | None
+    delete_performed: bool = False        # v2.7 では常に False
+    overwrite_performed: bool = False     # v2.7 では常に False
+    blocked_reasons: list[dict] = []
+
+def apply_extension_copy_plan(
+    *, paths=None, log_dir=None,
+) -> ExtensionCopyApplyResult:
+    ...
+```
+
+`ExtensionCopyApplyError` (構造化 error class) も追加。
+
+### 厳格な事前条件 (一つでも欠ければ blocked)
+
+- `copy_plan.status == "ready"`
+- `copy_plan.candidates` が 1 件以上
+- `copy_plan.blocked_reasons` が空 (v2.6.1 で予約した条件を実施)
+- duplicate / invalid_metadata / missing_yaml がない
+- 実行直前に **migration plan を再計算** し、UI 表示後の filesystem
+  変化があれば blocked に倒す
+
+### 安全方針 (実装で固定)
+
+- source は **削除しない** (`delete_performed=False`)
+- target は **上書きしない**。既存なら skipped + 全 candidate を停止
+- candidate ごとに `target.tmp-<stamp>/` に copy → atomic-ish rename
+- partial failure は **fail-fast** (途中失敗で停止、成功済みは残す、
+  `status="partial_failure"`)
+- manifest を `~/.lab-executor/migration_logs/extension-copy-<stamp>
+  .json` に **必ず**保存 (blocked / partial_failure 時も保存)
+
+### 新規 CLI flag: `--apply`
+
+```bash
+lab-executor extension migration-plan --copy-plan --apply
+lab-executor extension migration-plan --copy-plan --apply --json
+```
+
+- `--apply` は **`--copy-plan` と併用必須**。単独使用は exit 2
+- Exit code: ok=0、blocked/partial_failure/failed=1
+- Human-readable に COPIED / FAILED / SKIPPED / BLOCKED + manifest
+  path + `delete_performed=False` / `overwrite_performed=False` を
+  明示出力
+
+### v2.7 で **やらないこと**
+
+- source delete / legacy path 自動 cleanup
+- target overwrite / `--force` / `--overwrite`
+- install default 変更
+- active_read_paths の優先順位変更
+- duplicate 自動解決
+- 自動 rollback (manifest を残すのみで人手復旧前提)
+- extension pack / `.install_meta.json` schema 変更
+- MCP tool 追加 / DSL schema 変更
+
+### Tests (119 件 pass)
+
+`tests/test_v270_copy_apply.py`: 16 件
+
+- `apply_copies_legacy_only_to_new_path`
+- `apply_does_not_delete_source` (snapshot 比較で固定)
+- `apply_does_not_overwrite_target` (preexisting target は不変)
+- `apply_fails_when_duplicate_exists` / `_when_invalid_metadata` /
+  `_when_target_exists` を含む blocked 系
+- `apply_writes_manifest` / `_even_when_blocked`
+- `apply_recomputes_plan_before_copy` (直前再計算 contract)
+- `apply_no_overwrite_performed_flag`
+- CLI: `--apply requires --copy-plan` (exit 2) / `--apply ok` /
+  `--apply blocked returns 1`
+- Boundary: PyVISA / `visa_mcp` 非依存 subprocess gate
+- 回帰: install_default 不変 / Stable 43 + Experimental 7 = 50 不変
+
+### docs / cli docstring
+
+- `docs/extension_path_migration.md`: `--apply` セクション + 事前
+  条件 + 安全保証 + manifest schema + やらないこと一覧、ロードマップ
+  表に v2.7 を実装済として追加
+- `cli.py` module docstring を v2.6.x → v2.7.x
+
+### 互換性
+
+- `plan_extension_migration()` (引数なし) は v2.5 完全互換、
+  `copy_plan=True` は v2.6 互換
+- MCP tool / DSL / extension pack 形式 / `.install_meta.json` /
+  `default_extensions_dir()` 返り値、すべて不変
+
+---
+
 ## v2.6.1 — Docs / Review patch (target_exists semantics 明文化)
 
 v2.6.0 レビュー反映 patch。コード変更は最小限。

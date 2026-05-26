@@ -1,4 +1,4 @@
-"""lab-executor CLI (v2.6.x).
+"""lab-executor CLI (v2.7.x).
 
 v2.0 では minimal CLI / `serve` placeholder のみだったが、v2.1.0 で
 `serve --backend mock` を実装、v2.2.0 で authoring workflow CLI を
@@ -54,7 +54,16 @@ v2.6.0 追加 (Extension Migration Copy Plan):
   new path へコピーする場合の **候補** を出力。実 copy は一切しない
   (``apply_available=False``)。duplicate / invalid_metadata / target
   既存などがあれば ``copy_plan.status="blocked"`` で candidate 生成を
-  停止する。``--apply`` は v2.7+ で慎重に検討する
+  停止する
+
+v2.7.0 追加 (Controlled Extension Copy Apply):
+
+- ``extension migration-plan --copy-plan --apply``: copy candidate を
+  legacy → new path へ **実コピー**。事前条件 (status=ready /
+  blocked_reasons 空 / target 未存在 / candidate >=1) を満たさなければ
+  apply 不可。``--apply`` は ``--copy-plan`` と併用必須 (単独使用は
+  exit 2)。source は **削除しない**、target は **上書きしない**、
+  manifest を ``~/.lab-executor/migration_logs/`` に必ず保存する
 
 Exit code policy (v2.2.1 明文化、v2.4 で extension lifecycle 拡張、
 v2.5 で migration-plan 追加):
@@ -214,6 +223,15 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             "v2.6: include copy candidates for legacy_only "
             "extensions (still plan only; no files are changed)"
+        ),
+    )
+    ext_mig.add_argument(
+        "--apply", dest="apply", action="store_true",
+        help=(
+            "v2.7: actually copy legacy_only extensions to the "
+            "new path. Requires --copy-plan. Source is never "
+            "deleted, target is never overwritten, manifest is "
+            "written to ~/.lab-executor/migration_logs/."
         ),
     )
 
@@ -633,10 +651,60 @@ def _cmd_extension(args: argparse.Namespace) -> int:
     if sub == "migration-plan":
         # v2.5.0: plan only (no file changes)
         # v2.6.0: optional --copy-plan adds ExtensionCopyPlan to output
+        # v2.7.0: optional --apply (requires --copy-plan) executes
+        #         controlled copy from legacy to new path
         from lab_executor.extension_migration import (
             plan_extension_migration,
         )
         want_copy = getattr(args, "copy_plan", False)
+        want_apply = getattr(args, "apply", False)
+
+        # v2.7: --apply requires --copy-plan
+        if want_apply and not want_copy:
+            print(
+                "extension migration-plan --apply requires --copy-plan",
+                file=sys.stderr,
+            )
+            return 2
+
+        if want_apply:
+            # v2.7: controlled copy apply
+            from lab_executor.extension_migration import (
+                apply_extension_copy_plan,
+            )
+            result = apply_extension_copy_plan()
+            data = result.to_dict()
+            if args.json:
+                print(json.dumps(data, ensure_ascii=False, indent=2,
+                                  default=str))
+            else:
+                print(f"extension migration-plan --apply: "
+                      f"status={data['status']}")
+                for c in data["copied"]:
+                    print(f"  COPIED {c['extension_id']}")
+                    print(f"    from: {c['source']}")
+                    print(f"    to:   {c['target']}")
+                    print(f"    files={c['file_count']} "
+                          f"bytes={c['bytes']}")
+                for f in data["failed"]:
+                    print(f"  FAILED {f.get('extension_id')}: "
+                          f"{f.get('reason_class')}")
+                for s in data["skipped"]:
+                    print(f"  SKIPPED {s.get('extension_id')}: "
+                          f"{s.get('reason_class')}")
+                for r in data["blocked_reasons"]:
+                    print(f"  BLOCKED: {r.get('reason_class')}"
+                          f" ({r.get('extension_id') or ''})")
+                if data["manifest_path"]:
+                    print(f"  manifest: {data['manifest_path']}")
+                print(f"  delete_performed={data['delete_performed']}")
+                print(f"  overwrite_performed="
+                      f"{data['overwrite_performed']}")
+            st = data["status"]
+            if st == "ok":
+                return 0
+            return 1
+
         plan = plan_extension_migration(copy_plan=want_copy)
         data = plan.to_dict()
         if args.json:
