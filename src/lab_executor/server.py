@@ -134,6 +134,39 @@ def create_server(
     return mcp
 
 
+def diagnose_tool_surface(server: "FastMCP") -> dict[str, Any]:
+    """v2.1.1: server に登録された tool 数と `stability` の declaration
+    との差分を返す診断 helper。
+
+    Returns:
+        {
+            "registered_count": int,
+            "declared_stable": int,    # 43
+            "declared_experimental": int,  # 7
+            "declared_total": int,     # 50
+            "missing_from_registry": list[str],  # declared but not registered
+            "extra_in_registry": list[str],      # registered but not declared
+        }
+    """
+    from lab_executor import stability
+    registered = set(list_registered_tools(server))
+    declared_stable = [
+        t for ts in stability.STABLE_TOOLS.values() for t in ts
+    ]
+    declared_exp = [
+        t for ts in stability.EXPERIMENTAL_TOOLS.values() for t in ts
+    ]
+    declared = set(declared_stable) | set(declared_exp)
+    return {
+        "registered_count": len(registered),
+        "declared_stable": len(declared_stable),
+        "declared_experimental": len(declared_exp),
+        "declared_total": len(declared),
+        "missing_from_registry": sorted(declared - registered),
+        "extra_in_registry": sorted(registered - declared),
+    }
+
+
 def list_registered_tools(server: "FastMCP") -> list[str]:
     """v2.1: server に登録された MCP tool 名を列挙 (test 用)"""
     import asyncio

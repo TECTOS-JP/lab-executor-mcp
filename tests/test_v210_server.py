@@ -217,6 +217,22 @@ def test_v2_1_version():
     assert int(parts[0]) >= 2 and int(parts[1]) >= 1
 
 
+def test_diagnose_tool_surface():
+    """v2.1.1: declared vs registered tool 差分 diagnostic"""
+    from lab_executor.server import (
+        create_server, diagnose_tool_surface,
+    )
+    server = create_server()
+    diag = diagnose_tool_surface(server)
+    assert diag["declared_stable"] == 43
+    assert diag["declared_experimental"] == 7
+    assert diag["declared_total"] == 50
+    assert diag["registered_count"] >= 30
+    # missing が空に近い (主要 stable は全部出ているはず)
+    # core stable tools が registered であること
+    assert "validate_experiment_plan" not in diag["missing_from_registry"]
+
+
 def test_no_top_level_visa_mcp_import_added():
     """v2.1 で新規追加した src/lab_executor/server.py 等が
     top-level で visa_mcp.* を import していないこと"""

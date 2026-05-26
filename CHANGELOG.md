@@ -1,5 +1,44 @@
 # 変更履歴
 
+## v2.1.1 — v2.1.0 レビュー応答 (README serve table / exit code policy / diagnose_tool_surface)
+
+合言葉: **「v2.1.0 直後の docs / diagnostic 仕上げ」**
+
+v2.1.0 external review (P1) 反映の small patch。public API / dependency
+/ MCP tool 数 declaration すべて不変。
+
+### 変更点
+
+- **P1** (`README.md`):
+  - **serve 使い分け表** を追加 (`lab-executor serve --backend mock`
+    vs `visa-mcp serve` の用途 / PyVISA 依存 / backend 種別を一覧化)
+  - **Quick examples** section 追加 (`--dry-run` / `validate
+    extension` / `extension doctor` / `package` + `verify-package`
+    の典型 4 ケース)
+  - **Exit code policy** を表形式で明文化:
+    | Subcommand | exit 0 | 1 | 2 |
+    `doctor` は warning でも exit 1 (CI gate として強い設計) を明記
+- **P1** (`src/lab_executor/server.py`):
+  - `diagnose_tool_surface(server)` 公開 helper 追加。`stability`
+    declaration (43 + 7 = 50) と実 registry の差分を構造化辞書で返す
+    (`missing_from_registry` / `extra_in_registry` 等)。v2.2+ で AI
+    エージェント向けに「declaration にあるのに registry に無い tool」
+    を可視化する診断 CLI の土台。
+- **P1** (`README.md` notes):
+  - runtime 内部の `JobManager(visa=...)` 引数名は v2.1 で互換維持
+    していること、v2.2+ で `backend=` への rename を検討する旨を明記
+
+### tests
+
+- `test_diagnose_tool_surface` 追加 → **26 件 pass**
+
+### 互換性
+
+- API / package 構造: 不変
+- MCP tool / DSL / extension pack: 不変
+- 既存 `list_registered_tools()` API: 不変 (`diagnose_tool_surface()`
+  を追加のみ)
+
 ## v2.1.0 — Mock Runtime Server / CLI Activation
 
 合言葉: **「v2.0 で分離した runtime を、単独で起動できる形に近づける」**

@@ -42,17 +42,50 @@ pip install visa-mcp     # PyVISA backend + lab-executor-mcp runtime
 
 ## How to start the server (v2.1+)
 
+| 用途 | コマンド | PyVISA | backend |
+|---|---|---|---|
+| Mock / dry-run / benchmark / validation | `lab-executor serve --backend mock` | 不要 | `MockBackend` |
+| 実機 (PyVISA 経由) | `visa-mcp serve` | 必要 | `PyVisaBackend` (visa-mcp 同梱) |
+
+### Quick examples
+
 ```bash
-# PyVISA 不要 (mock / dry-run / benchmark / definition pack validation)
+# 1) Server を compose して tool 一覧を確認する (transport 起動なし)
+lab-executor serve --backend mock --dry-run
+
+# 2) 実 transport を起動 (Claude Code / MCP client から接続)
 lab-executor serve --backend mock
 
-# 実機 backend (PyVISA 経由)
-visa-mcp serve
+# 3) Extension pack を検証
+lab-executor validate extension my_pack/extension.yaml --strict
+lab-executor extension doctor my_pack/
+
+# 4) Package + verify
+lab-executor extension package my_pack/ --output my_pack.visa-mcp-ext.zip
+lab-executor extension verify-package my_pack.visa-mcp-ext.zip
 ```
 
-`lab-executor serve` には **`--backend mock` が必須**です。引数なしは
-exit 2 で `visa-mcp serve` への案内を出します (v2.1 では mock backend
-のみ。他 backend / plugin は v2.2+ で検討)。
+### Exit code policy (v2.1.1)
+
+| Subcommand | exit 0 | exit 1 | exit 2 |
+|---|---|---|---|
+| `serve` | server 起動 / `--dry-run` 成功 | — | `--backend` 未指定 / 不正 |
+| `validate {instrument,extension}` | errors == 0 | errors > 0 | usage error |
+| `extension doctor` | `status == "ok"` | warnings / errors あり | usage error |
+| `extension package` | package 成功 | 失敗 | usage error |
+| `extension verify-package` | checksums OK | mismatch / 不正 | usage error |
+
+`doctor` は warning だけでも exit 1 になります (CI で fail させる
+強い gate として設計)。warning を許容したい場合は `doctor` 出力を
+`--json` で取り、`errors` のみを判定してください。
+
+### Notes
+
+- `lab-executor serve` は **`--backend mock` が必須** (引数なしは
+  exit 2 で `visa-mcp serve` への案内)
+- 他 backend (REST / replay / plugin) は v2.2+ で検討
+- runtime 内部の `JobManager` は v2.1 時点で `visa=` 引数名を受け取る
+  (v1.x からの互換維持)。v2.2+ で `backend=` への rename を検討予定
 
 ## CLI status in v2.1
 
