@@ -231,3 +231,78 @@ def discover_installed_extensions(
         })
 
     return result
+
+
+# ============================================================
+# v2.5.0: resolve_extension_by_id — duplicate を黙って解決しない
+# ============================================================
+
+
+class ExtensionResolveError(Exception):
+    """`resolve_extension_by_id()` の構造化 error。`error_class` /
+    `extension_id` / `locations` を保持する。"""
+
+    def __init__(
+        self,
+        error_class: str,
+        extension_id: str,
+        message: str,
+        locations: list[Path] | None = None,
+    ):
+        super().__init__(message)
+        self.error_class = error_class
+        self.extension_id = extension_id
+        self.locations = list(locations or [])
+        self.message = message
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "error_class": self.error_class,
+            "extension_id": self.extension_id,
+            "locations": [str(p) for p in self.locations],
+            "message": self.message,
+        }
+
+
+def resolve_extension_by_id(
+    extension_id: str,
+    *,
+    paths: ExtensionPaths | None = None,
+) -> InstalledExtension:
+    """v2.5.0: `extension_id` から install 済 pack を取得する。
+
+    案 B (`report_conflict_no_implicit_precedence`) を強制する:
+
+    - 見つからない → `ExtensionResolveError("extension_not_found", ...)`
+    - 1 件だけ      → `InstalledExtension` を返す
+    - 複数 (duplicate) → `ExtensionResolveError(
+                          "duplicate_extension_id", ...)` を raise
+
+    downstream で `extension_id` から実体を取りたい時はこの関数を
+    使い、duplicate を黙って解決しないこと。
+    """
+    discovery = discover_installed_extensions(paths)
+    if extension_id in discovery.duplicates:
+        entries = discovery.duplicates[extension_id]
+        raise ExtensionResolveError(
+            error_class="duplicate_extension_id",
+            extension_id=extension_id,
+            message=(
+                f"extension_id={extension_id!r} が複数 path に存在 "
+                f"(locations={len(entries)}). v2.4 policy: "
+                f"{discovery.duplicate_policy}. 解消後に再実行して "
+                f"ください。"
+            ),
+            locations=[e.path for e in entries],
+        )
+    for ext in discovery.extensions:
+        if ext.extension_id == extension_id:
+            return ext
+    raise ExtensionResolveError(
+        error_class="extension_not_found",
+        extension_id=extension_id,
+        message=(
+            f"extension_id={extension_id!r} は install されていません"
+        ),
+        locations=[],
+    )

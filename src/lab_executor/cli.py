@@ -175,6 +175,20 @@ def _build_parser() -> argparse.ArgumentParser:
         help="v2.4: duplicate_extension_id -> exit 1 (default: exit 0)",
     )
 
+    # ---- extension migration-plan (v2.5.0) ----------------------
+    ext_mig = ext_sub.add_parser(
+        "migration-plan",
+        help=(
+            "v2.5: Report extension path migration plan "
+            "(no file changes; plan only)"
+        ),
+    )
+    ext_mig.add_argument("--json", action="store_true")
+    ext_mig.add_argument(
+        "--strict", action="store_true",
+        help="treat warning/error as exit 1",
+    )
+
     ext_paths = ext_sub.add_parser(
         "paths",
         help=(
@@ -587,6 +601,45 @@ def _cmd_extension(args: argparse.Namespace) -> int:
             return 0
         # warning: --strict なら exit 1, なければ exit 0
         return 1 if getattr(args, "strict", False) else 0
+
+    if sub == "migration-plan":
+        # v2.5.0: plan only (no file changes)
+        from lab_executor.extension_migration import (
+            plan_extension_migration,
+        )
+        plan = plan_extension_migration()
+        data = plan.to_dict()
+        if args.json:
+            print(json.dumps(data, ensure_ascii=False, indent=2,
+                              default=str))
+        else:
+            s = data["summary"]
+            print(f"extension migration-plan: status={data['status']}")
+            print(f"  legacy_path:   {data['legacy_path']}")
+            print(f"  new_path:      {data['new_path']}")
+            print(f"  write_default: {data['write_default']}")
+            print(f"  summary: legacy_only={s['legacy_only']} "
+                  f"new_only={s['new_only']} "
+                  f"duplicates={s['duplicates']} "
+                  f"invalid={s['invalid']} "
+                  f"migration_required={s['migration_required']}")
+            for a in data["actions"]:
+                print(f"  [{a['severity']:7s}] {a['action']}"
+                      f" ({a.get('extension_id') or '-'})")
+                for loc in a["locations"]:
+                    print(f"      - {loc}")
+                if a.get("recommendation"):
+                    print(f"      -> {a['recommendation']}")
+            if not data["actions"]:
+                print("  (no actions; everything looks good)")
+        # exit code policy:
+        # ok / warning -> 0 ; warning + --strict -> 1 ; error -> 1
+        st = data["status"]
+        if st == "ok":
+            return 0
+        if st == "warning":
+            return 1 if getattr(args, "strict", False) else 0
+        return 1
 
     if sub == "paths":
         from lab_executor.extension_paths import get_extension_paths

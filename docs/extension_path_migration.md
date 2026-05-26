@@ -1,0 +1,108 @@
+# Extension Path Migration Guide (v2.5)
+
+## Background
+
+lab-executor-mcp v2.0 で `visa-mcp` から分離した時点では、
+definition pack の install path は v1.x 互換のため
+`~/.visa-mcp/extensions/` を継続使用していた。
+
+v2.4.0 で **dual-path read** を導入し、新 path
+`~/.lab-executor/extensions/` も読み取り対象になった。書き込み
+default は引き続き `~/.visa-mcp/extensions/` (legacy)。
+
+v2.5.0 では、その path 状態に対する **計画出力 (plan)** を追加する。
+ファイルの copy / move / delete は **まだ実行しない**。
+
+## Path roles (v2.5)
+
+| Role | Path |
+|------|------|
+| Legacy install path | `~/.visa-mcp/extensions/` |
+| New install path | `~/.lab-executor/extensions/` |
+| Read (catalog / check) | both (new first, then legacy) |
+| Write default (install) | legacy (`~/.visa-mcp/extensions/`) |
+
+## Duplicate policy (案 B)
+
+```text
+report_conflict_no_implicit_precedence
+```
+
+The system **does not silently prefer one location** when duplicate
+extension IDs exist. You must resolve duplicates explicitly.
+
+- `extension catalog` / `check` で duplicate を warning として報告
+- `--strict` で exit 1
+- `resolve_extension_by_id(id)` API は duplicate 時に
+  `duplicate_extension_id` error を返す (v2.5+)
+
+## `lab-executor extension migration-plan`
+
+v2.5 で追加された **plan-only** CLI:
+
+```bash
+lab-executor extension migration-plan
+lab-executor extension migration-plan --json
+lab-executor extension migration-plan --strict
+```
+
+何が出力されるか:
+
+- `summary.legacy_only`: legacy path にのみ存在する pack 数
+- `summary.new_only`: new path にのみ存在する pack 数
+- `summary.duplicates`: 両 path に存在する `extension_id` 数
+- `summary.invalid`: metadata 不正 / YAML 不在の数
+- `summary.migration_required`: True なら何らかの対応が必要
+- `actions[]`: 推奨 action と severity (info / warning / error)
+
+**v2.5 では `--apply` は存在しない**。実ファイルは一切変更しない。
+将来 v2.6+ で copy-plan を、v2.7+ で controlled apply を検討する。
+
+## Duplicate を解消する手順 (手作業)
+
+```bash
+# 1. duplicate を確認
+lab-executor extension migration-plan --json
+
+# 2. どちらを残すか決める (通常は新しい方 / version が新しい方)
+ls -la ~/.visa-mcp/extensions/local.my_pack
+ls -la ~/.lab-executor/extensions/local.my_pack
+
+# 3. 不要な方を rename or 削除
+mv ~/.visa-mcp/extensions/local.my_pack \
+   ~/.visa-mcp/extensions/.local.my_pack.bak
+
+# 4. 再確認
+lab-executor extension migration-plan
+lab-executor extension check
+```
+
+## migration_required の判定 (v2.5)
+
+```
+migration_required = True if any of:
+  - legacy_only >= 1   (legacy にのみある → 新 path への移行候補)
+  - duplicates >= 1    (両 path にある → 解消が必要)
+  - invalid >= 1       (壊れた pack がある → 修正が必要)
+
+migration_required = False otherwise (new_only のみ等)
+```
+
+## やらないこと (v2.5)
+
+- `--apply` flag
+- 自動 copy / move / delete
+- install default の `~/.lab-executor/extensions/` への切替
+- duplicate 時の自動採用
+- extension pack 形式 / `.install_meta.json` schema の変更
+
+## 将来のロードマップ
+
+| Version | 内容 |
+|---------|------|
+| v2.6.0 | `migration-plan --copy-plan` (dry-run の copy 候補生成) |
+| v2.7.0 | Controlled `--apply` with backup / rollback |
+| v2.8.0 | install default 切替判断 |
+
+順序は **検出 → 計画 → dry-run → apply → default 切替** で固定。
+extension path はユーザー環境に直接影響するため、急がない。

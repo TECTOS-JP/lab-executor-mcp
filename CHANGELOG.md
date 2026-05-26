@@ -1,5 +1,123 @@
 # 変更履歴
 
+## v2.5.0 — Extension Migration Plan + Conflict Resolution Guidance
+
+合言葉: **「v2.4 で検出、v2.5 で計画。まだ動かさない」**
+
+v2.4 で dual-path read + duplicate 検出ができるようになった次の段階。
+v2.5.0 では、検出結果に対する **plan のみ**を出し、ファイルは一切
+変更しない。`--apply` / 自動 copy / 自動 move / 自動 delete は
+v2.5 では実装しない (v2.6+ で慎重に検討)。
+
+### 新規 module: `lab_executor.extension_migration`
+
+```
+ExtensionMigrationAction (frozen dataclass)
+  action / extension_id / severity / locations / recommendation
+  / apply_available  (v2.5 では常に False)
+
+ExtensionMigrationPlan
+  status / summary / actions / paths
+
+plan_extension_migration(paths=None) -> ExtensionMigrationPlan
+```
+
+`summary` フィールド:
+
+- `legacy_only`: `~/.visa-mcp/extensions/` にのみ存在する pack 数
+- `new_only`: `~/.lab-executor/extensions/` にのみ存在する pack 数
+- `duplicates`: 両 path にある `extension_id` の数
+- `invalid`: metadata 不正 / YAML 不在の数
+- `migration_required`: 実態ベースで判定
+  (`legacy_only > 0` OR `duplicates > 0` OR `invalid > 0`)
+
+`status`:
+
+- `error`: duplicates あり、または invalid metadata あり
+- `warning`: legacy_only あり、または missing extension.yaml あり
+- `ok`: 上記いずれもなし (new_only のみは ok 扱い)
+
+### 新規 API: `resolve_extension_by_id()`
+
+`lab_executor.extension_discovery` に追加:
+
+```python
+def resolve_extension_by_id(
+    extension_id: str,
+    *,
+    paths: ExtensionPaths | None = None,
+) -> InstalledExtension:
+    """
+    - 見つからない -> ExtensionResolveError("extension_not_found")
+    - 1 件だけ      -> InstalledExtension を返す
+    - 複数 (duplicate) -> ExtensionResolveError(
+                          "duplicate_extension_id")
+    """
+```
+
+duplicate を **黙って解決しない** ことを API レイヤで強制する。
+構造化 error class `ExtensionResolveError` (error_class /
+extension_id / locations / message を保持) を新規追加。
+
+### 新規 CLI: `lab-executor extension migration-plan`
+
+```bash
+lab-executor extension migration-plan
+lab-executor extension migration-plan --json
+lab-executor extension migration-plan --strict
+```
+
+**実ファイルは変更しない**。出力するのは現状 path 状態と推奨 action
+のみ。
+
+Exit code:
+
+| status | default | --strict |
+|---|---|---|
+| ok | 0 | 0 |
+| warning | 0 | 1 |
+| error | 1 | 1 |
+
+### 新規 docs: `docs/extension_path_migration.md`
+
+- v2.4 以降の dual-read 構成
+- write_default が legacy のままである理由
+- duplicate を黙って優先しない方針 (案 B) の明文化
+- duplicate を手作業で解消する手順
+- `migration_required` の判定ロジック
+- v2.5 で **やらないこと** の list
+- v2.6 (copy-plan) / v2.7 (controlled apply) / v2.8 (default 切替)
+  のロードマップ
+
+### v2.5 で **やらない**こと
+
+- `--apply` 実装
+- 自動 copy / move / delete
+- install default の `~/.lab-executor/extensions/` への変更
+- duplicate 時の自動採用
+- extension pack 形式 / `.install_meta.json` schema の変更
+- MCP tool 追加 / DSL schema 変更
+
+### Tests (88 件 pass)
+
+`tests/test_v250_migration_plan.py`: 14 件
+
+- plan: no_extensions / legacy_only / new_only / duplicate /
+  invalid_metadata
+- plan: ファイル変更なし回帰
+- plan: schema_version=v2.5 / フィールド完全性
+- `resolve_extension_by_id`: ok / not_found / duplicate
+- CLI: help / --strict 挙動 (error→exit 1, warning→exit 0/1)
+- Boundary: PyVISA / `visa_mcp` 非依存 subprocess gate
+- 回帰: install_default 不変 / Stable 43 + Experimental 7 = 50 不変
+
+### 互換性
+
+MCP tool / DSL / extension pack 形式 / `.install_meta.json` / 既存
+の `default_extensions_dir()` 返り値、すべて v2.4 から不変。
+
+---
+
 ## v2.4.1 — Docs / Review patch + Release verification manifest
 
 v2.4.0 レビュー反映 patch。コード変更は最小限 (docstring / help 文言
