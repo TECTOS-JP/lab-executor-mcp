@@ -1,5 +1,112 @@
 # 変更履歴
 
+## v2.6.0 — Extension Migration Copy Plan
+
+合言葉: **「v2.5 で計画、v2.6 で copy 候補。まだ実行しない」**
+
+v2.5 の migration plan を一段具体化し、「legacy にしかない pack を
+new path に copy するなら何が対象か」を機械可読に出す段階。実 copy
+/ move / delete は **v2.6 でも一切しない** (`--apply` は v2.7+ で
+慎重に検討)。
+
+### 新規 dataclass: `ExtensionCopyCandidate` / `ExtensionCopyPlan`
+
+```python
+@dataclass(frozen=True)
+class ExtensionCopyCandidate:
+    extension_id: str
+    source: Path              # legacy 側 source
+    target: Path              # new 側 target (まだ存在しない)
+    reason: str
+    safe_to_copy: bool = True
+    overwrite_required: bool = False   # v2.6 では常に False
+
+@dataclass
+class ExtensionCopyPlan:
+    status: str               # "ready" / "empty" / "blocked"
+    candidates: list[ExtensionCopyCandidate]
+    blocked_reasons: list[dict]
+    apply_available: bool = False      # v2.6 では常に False
+```
+
+### `plan_extension_migration(copy_plan=True)`
+
+既存 API を拡張 (default は False で v2.5 と同挙動):
+
+- `copy_plan=False` (default): `ExtensionMigrationPlan.copy_plan = None`、
+  schema_version=`v2.5`
+- `copy_plan=True`: `ExtensionMigrationPlan.copy_plan = ExtensionCopyPlan
+  (...)`、schema_version=`v2.6`、`summary.copy_candidates` /
+  `summary.copy_blocked` を追加
+
+### `copy_plan.status` 判定
+
+| Status | 条件 |
+|--------|------|
+| `blocked` | duplicate_extension_id あり、または invalid_extension_metadata あり、または **全 legacy_only に target_exists** |
+| `ready`   | candidate が 1 件以上ある (一部 skipped でも可、skipped は blocked_reasons に列挙) |
+| `empty`   | legacy_only がなく candidate もない (cleanup 不要) |
+
+### Block 条件 (実 copy 前に必ず止める)
+
+- `duplicate_extension_id`: 案 B により、まず duplicate を解消する
+  必要がある
+- `invalid_extension_metadata`: `extension.yaml` parse 失敗 / `extension
+  _id` 欠落
+- `target_exists`: `new_path/<dir_name>` が既に存在する (overwrite は
+  v2.6 では行わない)
+
+### 新規 CLI flag: `extension migration-plan --copy-plan`
+
+```bash
+lab-executor extension migration-plan --copy-plan
+lab-executor extension migration-plan --copy-plan --json
+lab-executor extension migration-plan --copy-plan --strict
+```
+
+実ファイルは一切変更しない。Human-readable 出力に copy_plan セクション
+(candidates / blocked / skipped + "no files were changed" 表示) を
+追加。
+
+### v2.6 で **やらないこと**
+
+- `--apply` / 実 copy / 実 move / 実 delete
+- target 自動作成 / overwrite
+- install default 変更
+- active_read_paths の優先順位変更
+- extension pack / `.install_meta.json` schema 変更
+- MCP tool 追加 / DSL schema 変更
+
+### Tests (103 件 pass)
+
+新規 `tests/test_v260_copy_plan.py`: 14 件
+
+- `copy_plan_legacy_only_candidates` / `new_only_no_candidates`
+- `copy_plan_duplicate_blocked` / `invalid_metadata_blocked` /
+  `target_exists_skipped_or_blocked`
+- **`copy_plan_no_file_changes`** (v2.6 の核): plan 前後で legacy /
+  new directory tree が変わらないことを snapshot 比較で固定
+- `copy_plan_apply_available_false`
+- `copy_plan_omitted_when_flag_false` (default 互換)
+- CLI: `--copy-plan` help / JSON 出力 / duplicate blocked
+- Boundary: PyVISA / `visa_mcp` 非依存 subprocess gate
+- 回帰: install_default 不変 / Stable 43 + Experimental 7 = 50 不変
+
+### docs / cli docstring
+
+- `docs/extension_path_migration.md`: `--copy-plan` セクション +
+  blocked JSON 例 + ロードマップ表に Status 列 (実装済 / 検討中) 追加
+- `cli.py` module docstring を v2.5.x → v2.6.x へ更新
+
+### 互換性
+
+- 既存 `plan_extension_migration()` (キーワードなし呼出) は v2.5 と
+  完全同一の挙動 (`copy_plan=None`, schema_version=`v2.5`)
+- MCP tool / DSL / extension pack 形式 / `.install_meta.json` /
+  `default_extensions_dir()` 返り値、すべて不変
+
+---
+
 ## v2.5.1 — Docs / Review patch + summary breakdown
 
 v2.5.0 レビュー反映 patch。

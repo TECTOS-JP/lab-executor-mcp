@@ -1,4 +1,4 @@
-"""lab-executor CLI (v2.5.x).
+"""lab-executor CLI (v2.6.x).
 
 v2.0 では minimal CLI / `serve` placeholder のみだったが、v2.1.0 で
 `serve --backend mock` を実装、v2.2.0 で authoring workflow CLI を
@@ -47,6 +47,14 @@ v2.5.0 追加 (Extension Migration Plan + Conflict Resolution Guidance):
   ``InstalledExtension`` を返す。duplicate 時は
   ``ExtensionResolveError("duplicate_extension_id")`` を raise し、
   「黙って先頭採用」を API 境界で禁止する
+
+v2.6.0 追加 (Extension Migration Copy Plan):
+
+- ``extension migration-plan --copy-plan``: legacy_only extension を
+  new path へコピーする場合の **候補** を出力。実 copy は一切しない
+  (``apply_available=False``)。duplicate / invalid_metadata / target
+  既存などがあれば ``copy_plan.status="blocked"`` で candidate 生成を
+  停止する。``--apply`` は v2.7+ で慎重に検討する
 
 Exit code policy (v2.2.1 明文化、v2.4 で extension lifecycle 拡張、
 v2.5 で migration-plan 追加):
@@ -200,6 +208,13 @@ def _build_parser() -> argparse.ArgumentParser:
     ext_mig.add_argument(
         "--strict", action="store_true",
         help="treat warning/error as exit 1",
+    )
+    ext_mig.add_argument(
+        "--copy-plan", dest="copy_plan", action="store_true",
+        help=(
+            "v2.6: include copy candidates for legacy_only "
+            "extensions (still plan only; no files are changed)"
+        ),
     )
 
     ext_paths = ext_sub.add_parser(
@@ -617,10 +632,12 @@ def _cmd_extension(args: argparse.Namespace) -> int:
 
     if sub == "migration-plan":
         # v2.5.0: plan only (no file changes)
+        # v2.6.0: optional --copy-plan adds ExtensionCopyPlan to output
         from lab_executor.extension_migration import (
             plan_extension_migration,
         )
-        plan = plan_extension_migration()
+        want_copy = getattr(args, "copy_plan", False)
+        plan = plan_extension_migration(copy_plan=want_copy)
         data = plan.to_dict()
         if args.json:
             print(json.dumps(data, ensure_ascii=False, indent=2,
@@ -645,6 +662,27 @@ def _cmd_extension(args: argparse.Namespace) -> int:
                     print(f"      -> {a['recommendation']}")
             if not data["actions"]:
                 print("  (no actions; everything looks good)")
+            # v2.6: copy-plan section
+            cp = data.get("copy_plan")
+            if cp is not None:
+                print()
+                print(f"  copy_plan: status={cp['status']} "
+                      f"apply_available={cp['apply_available']}")
+                if cp["candidates"]:
+                    print("  copy candidates:")
+                    for c in cp["candidates"]:
+                        print(f"    - {c['extension_id']}")
+                        print(f"        from: {c['source']}")
+                        print(f"        to:   {c['target']}")
+                if cp["blocked_reasons"]:
+                    print("  blocked / skipped:")
+                    for r in cp["blocked_reasons"]:
+                        rc = (r.get("reason_class")
+                              or r.get("error_class") or "?")
+                        eid = (r.get("extension_id") or
+                               r.get("path") or "")
+                        print(f"    - {rc}: {eid}")
+                print("  (no files were changed)")
         # exit code policy:
         # ok / warning -> 0 ; warning + --strict -> 1 ; error -> 1
         st = data["status"]

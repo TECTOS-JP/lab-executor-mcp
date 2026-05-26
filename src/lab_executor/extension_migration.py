@@ -1,4 +1,4 @@
-"""v2.5.0: Extension Migration Plan + Conflict Resolution Guidance.
+"""v2.5.0 / v2.6.0: Extension Migration Plan + Copy Plan.
 
 v2.4 で導入した dual-path discovery + duplicate detection に対し、
 **実ファイルは変更せず**、現状と推奨 action を構造化して出す:
@@ -8,8 +8,9 @@ v2.4 で導入した dual-path discovery + duplicate detection に対し、
 - duplicate    : 両 path に同じ `extension_id` (案 B により自動採用なし)
 - invalid      : metadata 不正 / YAML 不在
 
-v2.5.0 では **plan のみ** 出力する。`--apply` / 自動 copy / 自動 move
-/ 自動 delete は実装しない (v2.6+ で慎重に検討)。
+v2.5.0 では migration plan を、v2.6.0 では copy plan を追加する。
+両方とも **plan のみ**。`--apply` / 実 copy / 実 move / 実 delete は
+実装しない (v2.7+ で慎重に検討)。
 """
 from __future__ import annotations
 from dataclasses import dataclass, field
@@ -52,17 +53,71 @@ class ExtensionMigrationAction:
         }
 
 
+@dataclass(frozen=True)
+class ExtensionCopyCandidate:
+    """v2.6.0: legacy_only から new path への copy 候補 1 件。
+
+    `safe_to_copy=True` でも v2.6 では実 copy はしない。candidate は
+    **将来 v2.7+ で apply される予定の reference** であり、本 release
+    では情報提供のみ。
+    """
+    extension_id: str
+    source: Path
+    target: Path
+    reason: str = "legacy_only -> new_path copy candidate"
+    safe_to_copy: bool = True
+    overwrite_required: bool = False  # v2.6 では常に False
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "extension_id": self.extension_id,
+            "source": str(self.source),
+            "target": str(self.target),
+            "reason": self.reason,
+            "safe_to_copy": self.safe_to_copy,
+            "overwrite_required": self.overwrite_required,
+        }
+
+
+@dataclass
+class ExtensionCopyPlan:
+    """v2.6.0: copy candidate 群と blocked 状態。
+
+    - status="ready"   : candidate を提示する余地がある
+    - status="empty"   : legacy_only がなく candidate もない
+    - status="blocked" : duplicate / invalid / 既存 target などにより
+                        copy plan 生成自体を止めた状態
+
+    v2.6 では `apply_available=False` 固定。
+    """
+    status: str  # "ready" / "empty" / "blocked"
+    candidates: list[ExtensionCopyCandidate] = field(default_factory=list)
+    blocked_reasons: list[dict[str, Any]] = field(default_factory=list)
+    apply_available: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "status": self.status,
+            "candidates": [c.to_dict() for c in self.candidates],
+            "blocked_reasons": list(self.blocked_reasons),
+            "apply_available": self.apply_available,
+        }
+
+
 @dataclass
 class ExtensionMigrationPlan:
     """`plan_extension_migration()` の戻り値"""
     status: str  # "ok" / "warning" / "error"
-    summary: dict[str, int] = field(default_factory=dict)
+    summary: dict[str, Any] = field(default_factory=dict)
     actions: list[ExtensionMigrationAction] = field(default_factory=list)
     paths: ExtensionPaths | None = None
+    # v2.6.0: `copy_plan=True` で plan_extension_migration を呼ぶと
+    # ここに ExtensionCopyPlan が入る。default は None。
+    copy_plan: ExtensionCopyPlan | None = None
 
     def to_dict(self) -> dict[str, Any]:
         p = self.paths
-        return {
+        d = {
             "status": self.status,
             "legacy_path": str(p.legacy_path) if p else None,
             "new_path": str(p.new_path) if p else None,
@@ -73,13 +128,17 @@ class ExtensionMigrationPlan:
             "duplicate_policy": p.duplicate_policy if p else None,
             "summary": dict(self.summary),
             "actions": [a.to_dict() for a in self.actions],
-            "schema_version": "v2.5",
+            "schema_version": "v2.6" if self.copy_plan else "v2.5",
         }
+        if self.copy_plan is not None:
+            d["copy_plan"] = self.copy_plan.to_dict()
+        return d
 
 
 def plan_extension_migration(
     *,
     paths: ExtensionPaths | None = None,
+    copy_plan: bool = False,
 ) -> ExtensionMigrationPlan:
     """v2.5.0: dual-path 状態を分類し migration plan を返す。
 
@@ -222,9 +281,118 @@ def plan_extension_migration(
     else:
         status = "ok"
 
+    cp: ExtensionCopyPlan | None = None
+    if copy_plan:
+        cp = _build_copy_plan(
+            legacy_only=legacy_only,
+            duplicates=duplicates,
+            discovery_errors=discovery.errors,
+            discovery_warnings=discovery.warnings,
+            new_path=new,
+        )
+        # summary に copy-plan の集計を反映 (v2.6)
+        summary["copy_candidates"] = len(cp.candidates)
+        summary["copy_blocked"] = (cp.status == "blocked")
+
     return ExtensionMigrationPlan(
         status=status,
         summary=summary,
         actions=actions,
         paths=paths,
+        copy_plan=cp,
+    )
+
+
+def _build_copy_plan(
+    *,
+    legacy_only: list[InstalledExtension],
+    duplicates: dict[str, list[InstalledExtension]],
+    discovery_errors: list[dict[str, Any]],
+    discovery_warnings: list[dict[str, Any]],
+    new_path: Path,
+) -> ExtensionCopyPlan:
+    """v2.6.0: legacy_only 群を copy candidate 化する。
+
+    blocked になる条件 (実 ファイルは一切変更しない):
+
+    - duplicate あり (case: 案 B に従い、まず解消が必要)
+    - invalid_extension_metadata あり (case: 修正が必要)
+
+    candidate ごとに skip する条件:
+
+    - target (new_path/<name>) が既に存在する
+    """
+    blocked_reasons: list[dict[str, Any]] = []
+    for ext_id, entries in duplicates.items():
+        blocked_reasons.append({
+            "reason_class": "duplicate_extension_id",
+            "extension_id": ext_id,
+            "locations": [str(e.path) for e in entries],
+        })
+    for err in discovery_errors:
+        if err.get("error_class") == "invalid_extension_metadata":
+            blocked_reasons.append({
+                "reason_class": "invalid_extension_metadata",
+                "path": err.get("path", ""),
+            })
+
+    if blocked_reasons:
+        return ExtensionCopyPlan(
+            status="blocked",
+            candidates=[],
+            blocked_reasons=blocked_reasons,
+            apply_available=False,
+        )
+
+    candidates: list[ExtensionCopyCandidate] = []
+    skipped: list[dict[str, Any]] = []
+    for ext in legacy_only:
+        target = new_path / ext.path.name
+        if target.exists():
+            skipped.append({
+                "reason_class": "target_exists",
+                "extension_id": ext.extension_id,
+                "target": str(target),
+            })
+            continue
+        candidates.append(ExtensionCopyCandidate(
+            extension_id=ext.extension_id,
+            source=ext.path,
+            target=target,
+            reason="legacy_only -> new_path copy candidate",
+            safe_to_copy=True,
+            overwrite_required=False,
+        ))
+
+    if skipped:
+        # candidate 0 / skipped のみ → blocked 扱い (target conflict)
+        if not candidates:
+            return ExtensionCopyPlan(
+                status="blocked",
+                candidates=[],
+                blocked_reasons=skipped,
+                apply_available=False,
+            )
+        # candidate あり + 一部 skipped → blocked_reasons に詳細を残す
+        # が status は ready (CI 用途で部分実行できないのは v2.7+ 議論)
+        return ExtensionCopyPlan(
+            status="ready",
+            candidates=candidates,
+            blocked_reasons=skipped,
+            apply_available=False,
+        )
+
+    if not candidates:
+        return ExtensionCopyPlan(
+            status="empty",
+            candidates=[],
+            blocked_reasons=[],
+            apply_available=False,
+        )
+
+    return ExtensionCopyPlan(
+        status="ready",
+        candidates=candidates,
+        blocked_reasons=[],
+        apply_available=False,
     )

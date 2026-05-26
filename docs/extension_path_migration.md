@@ -71,7 +71,52 @@ lab-executor extension migration-plan --strict
 - `actions[]`: 推奨 action と severity (info / warning / error)
 
 **v2.5 では `--apply` は存在しない**。実ファイルは一切変更しない。
-将来 v2.6+ で copy-plan を、v2.7+ で controlled apply を検討する。
+
+## `lab-executor extension migration-plan --copy-plan` (v2.6)
+
+```bash
+lab-executor extension migration-plan --copy-plan
+lab-executor extension migration-plan --copy-plan --json
+```
+
+v2.6 で追加された **copy candidate 出力**。
+
+- `legacy_only` extension に対し「将来 copy するなら source → target」
+  を `copy_plan.candidates[]` に列挙する
+- **実 copy は一切しない** (`apply_available=False`、v2.6 固定)
+- 以下のいずれかがあれば `copy_plan.status="blocked"` で candidate を
+  出さない:
+  - `duplicate_extension_id` (案 B により先に解消が必要)
+  - `invalid_extension_metadata`
+  - target (`new_path/<name>`) が既に存在する (`target_exists`)
+
+`summary` に v2.6 で追加された field:
+
+- `copy_candidates`: 出力された candidate 数
+- `copy_blocked`: copy_plan が blocked 状態か (bool)
+
+### blocked 例 (duplicate あり)
+
+```json
+{
+  "status": "error",
+  "copy_plan": {
+    "status": "blocked",
+    "candidates": [],
+    "blocked_reasons": [
+      {
+        "reason_class": "duplicate_extension_id",
+        "extension_id": "local.my_pack",
+        "locations": [
+          "~/.lab-executor/extensions/local.my_pack",
+          "~/.visa-mcp/extensions/local.my_pack"
+        ]
+      }
+    ],
+    "apply_available": false
+  }
+}
+```
 
 ## Duplicate を解消する手順 (手作業)
 
@@ -113,11 +158,14 @@ migration_required = False otherwise (new_only のみ等)
 
 ## 将来のロードマップ
 
-| Version | 内容 |
-|---------|------|
-| v2.6.0 | `migration-plan --copy-plan` (dry-run の copy 候補生成) |
-| v2.7.0 | Controlled `--apply` with backup / rollback |
-| v2.8.0 | install default 切替判断 |
+| Version | 内容 | Status |
+|---------|------|------|
+| v2.4.0 | dual-path read + duplicate 検出 | 実装済 |
+| v2.5.0 | migration-plan (現状分類) | 実装済 |
+| v2.6.0 | migration-plan --copy-plan (copy 候補生成、実 copy なし) | 実装済 |
+| v2.7.0 | Controlled `--apply` with backup / rollback | 検討中 |
+| v2.8.0 | migration rollback / verify copied packs | 検討中 |
+| v2.9+   | install default を `~/.lab-executor/extensions/` へ切替判断 | 検討中 |
 
-順序は **検出 → 計画 → dry-run → apply → default 切替** で固定。
+順序は **検出 → 計画 → copy-plan → apply → default 切替** で固定。
 extension path はユーザー環境に直接影響するため、急がない。
