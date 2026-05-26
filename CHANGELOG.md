@@ -1,5 +1,49 @@
 # 変更履歴
 
+## v2.6.1 — Docs / Review patch (target_exists semantics 明文化)
+
+v2.6.0 レビュー反映 patch。コード変更は最小限。
+
+### Docs / CLI 文言
+
+- `cli.py` argparse `description` を「dual-path extension discovery,
+  migration planning, and copy-plan preview (v2.6)」へ更新。v2.5
+  表記を解消。
+- `cli.py` module docstring 末尾の「`~/.lab-executor/extensions/`
+  への切替は v2.5+ で判断」を「v2.7+ で判断」に更新 (v2.6 時点での
+  ロードマップ整合)。
+- `ExtensionMigrationAction` docstring を v2.6 現状に書き直し:
+  「v2.5+ では action は提案のみ。v2.6 で `--copy-plan` を導入したが
+  `apply_available` は引き続き常に False。controlled apply は v2.7+」
+  という表現に統一。
+
+### `target_exists` semantics 明文化
+
+`docs/extension_path_migration.md` に v2.6.0 で実装した
+**partial-skipped 挙動**を明示:
+
+| 状況 | `copy_plan.status` | `blocked_reasons[]` |
+|------|---------------|-----|
+| 全 legacy_only に target_exists | `blocked` | 全件を target_exists で列挙 |
+| 一部のみ target_exists、他は copy 可 | `ready` | skipped 分のみ残す |
+
+`blocked_reasons` は **「status=blocked の理由」とは限らず**、
+「candidate にできなかった件の理由」を列挙する schema。`status=
+ready` でも `blocked_reasons` に skipped 詳細が入りうる、という
+読み方を明文化。
+
+加えて、v2.7 で `--apply` を入れる時の事前条件として
+**「`blocked_reasons` が空であること」を必須にする方針**を docs に
+予約 (skipped を黙って無視しない、案 B の延長)。
+
+### Internal
+
+- version 2.6.0 → 2.6.1 (`__init__.py` / `pyproject.toml`)
+- コア logic (plan_extension_migration / copy plan / CLI ロジック)
+  は不変、tests 103 件 pass
+
+---
+
 ## v2.6.0 — Extension Migration Copy Plan
 
 合言葉: **「v2.5 で計画、v2.6 で copy 候補。まだ実行しない」**

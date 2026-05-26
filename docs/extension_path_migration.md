@@ -95,6 +95,24 @@ v2.6 で追加された **copy candidate 出力**。
 - `copy_candidates`: 出力された candidate 数
 - `copy_blocked`: copy_plan が blocked 状態か (bool)
 
+### `target_exists` の扱い (v2.6.1 明文化)
+
+`new_path/<dir_name>` が既に存在する candidate は **copy できない**
+ものとして処理する。挙動は他 candidate の有無で分岐:
+
+| 状況 | `copy_plan.status` | `blocked_reasons[]` |
+|------|---------------|-----|
+| 全 legacy_only が `target_exists` → candidate が 0 件 | `blocked` | 全件を `target_exists` で列挙 |
+| 一部だけ `target_exists`、他は copy 可能 → candidate >=1 | **`ready`** | skipped 分を `target_exists` で残す |
+
+つまり `blocked_reasons` は status=blocked の理由とは限らず、
+**「candidate にできなかった件の理由」**を列挙する schema。`status=
+ready` でも `blocked_reasons` に skipped 詳細が入りうる。
+
+v2.7 で `--apply` を入れるときは、`blocked_reasons` が空である
+ことを **追加の事前条件**として要求する予定 (現在 candidate になって
+いるものだけを apply 対象とし、skipped を黙って無視しない)。
+
 ### blocked 例 (duplicate あり)
 
 ```json

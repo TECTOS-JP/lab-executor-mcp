@@ -31,9 +31,10 @@ from lab_executor.extension_discovery import (
 class ExtensionMigrationAction:
     """1 件の推奨 action。
 
-    v2.5 では ``apply_available`` は **常に False**。本 release は
-    plan のみを出し、copy / move / delete は実行しない。
-    実際の apply は v2.6+ (copy-plan / controlled apply) で導入予定。
+    v2.5+ では action は **提案のみ**。v2.6 で `--copy-plan` を導入し
+    copy candidate を出せるようになったが、`apply_available` は引き
+    続き **常に False** で、実 copy / move / delete は行わない。
+    controlled apply は v2.7+ で検討。
     """
     action: str
     extension_id: str | None
