@@ -59,10 +59,10 @@ def _make_job_manager(backend: "InstrumentBackend",
     # 遅延 import (PyVISA 不要)
     from lab_executor.job import JobManager, JobStore
     store = JobStore(":memory:")
-    # JobManager は VisaManager 型を要求するが、duck-typed で動く
-    # (実機 query/write は MockBackend が処理)
+    # v2.2.0: `backend=` keyword 推奨経路で渡す (`visa=` は
+    # DeprecationWarning 経路、v3 で削除候補)。
     job_mgr = JobManager(
-        visa=backend,
+        backend=backend,
         session_mgr=session_facade,
         store=store,
     )

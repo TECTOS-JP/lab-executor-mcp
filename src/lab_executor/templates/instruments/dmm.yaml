@@ -1,0 +1,80 @@
+metadata:
+  manufacturer: "{manufacturer}"
+  model: "{model}"
+  description: "TODO: short description (e.g. 6.5-digit DMM)"
+  manual_ref: "TODO: URL or document title + revision + page range"
+  # v1.8.1: CLI category 'dmm' と metadata.category を統一
+  category: "dmm"
+  support_level: "draft"
+  tested_interfaces: []
+  tested_firmware: ""
+
+connection:
+  default_timeout_ms: 5000
+
+commands:
+  identify:
+    scpi: "*IDN?"
+    type: "query"
+    description: "Return *IDN? response."
+    returns:
+      type: "string"
+
+  reset:
+    scpi: "*RST"
+    type: "write"
+    description: >
+      Reset to factory defaults. CAUTION: device-specific behavior.
+      May change input mode / range. Verify against manual.
+
+  measure_voltage_dc:
+    scpi: "MEAS:VOLT:DC?"
+    type: "query"
+    description: "Measure DC voltage (V)."
+    returns:
+      type: "float"
+      unit: "V"
+    polling_safe: true
+
+  measure_voltage_ac:
+    scpi: "MEAS:VOLT:AC?"
+    type: "query"
+    description: "Measure AC voltage (V)."
+    returns:
+      type: "float"
+      unit: "V"
+    polling_safe: true
+
+  measure_current_dc:
+    scpi: "MEAS:CURR:DC?"
+    type: "query"
+    description: "Measure DC current (A)."
+    returns:
+      type: "float"
+      unit: "A"
+    polling_safe: true
+
+  measure_resistance:
+    scpi: "MEAS:RES?"
+    type: "query"
+    description: "Measure resistance (Ohm)."
+    returns:
+      type: "float"
+      unit: "ohm"
+    polling_safe: true
+
+safety:
+  cautions:
+    - "Verify input mode (V/A/Ohm) and range before connecting source."
+    - "Do not exceed input rating (see manufacturer manual)."
+
+state_query:
+  voltage_dc:
+    command: "measure_voltage_dc"
+    unit: "V"
+  voltage_ac:
+    command: "measure_voltage_ac"
+    unit: "V"
+  current_dc:
+    command: "measure_current_dc"
+    unit: "A"

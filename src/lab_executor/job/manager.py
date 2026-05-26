@@ -133,13 +133,40 @@ class JobManager:
 
     def __init__(
         self,
-        visa: VisaManager,
-        session_mgr: SessionManager,
+        visa: "VisaManager | None" = None,
+        session_mgr: "SessionManager | None" = None,
         store: JobStore | None = None,
         scheduler: ResourceScheduler | None = None,
         system_config: SystemConfig | None = None,
+        *,
+        backend: "VisaManager | None" = None,
     ) -> None:
-        self._visa = visa
+        # v2.2.0: `backend=` keyword を推奨。`visa=` は互換維持
+        # (lab-executor-mcp v3.x で削除候補)。
+        if backend is not None and visa is not None:
+            raise TypeError(
+                "JobManager: cannot pass both `visa=` and `backend=`. "
+                "Use `backend=` (v2.2+ recommended)."
+            )
+        if backend is None and visa is None:
+            raise TypeError(
+                "JobManager: either `backend=` (recommended) or "
+                "`visa=` (deprecated) must be provided."
+            )
+        if backend is None:
+            import warnings as _w
+            _w.warn(
+                "JobManager(visa=...) is deprecated since v2.2.0; "
+                "use JobManager(backend=...) instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            backend = visa
+        if session_mgr is None:
+            raise TypeError(
+                "JobManager: session_mgr is required."
+            )
+        self._visa = backend
         self._sessions = session_mgr
         self._store = store or JobStore()
         self._runtimes: dict[str, _JobRuntime] = {}

@@ -1,0 +1,51 @@
+metadata:
+  manufacturer: "{manufacturer}"
+  model: "{model}"
+  description: "TODO: short description (e.g. multi-channel thermocouple datalogger)"
+  manual_ref: "TODO: URL or document title + revision + page range"
+  category: "temperature_meter"
+  support_level: "draft"
+  tested_interfaces: []
+
+connection:
+  default_timeout_ms: 5000
+
+commands:
+  identify:
+    scpi: "*IDN?"
+    type: "query"
+    returns:
+      type: "string"
+
+  measure_temperature:
+    scpi: "MEAS:TEMP?"
+    type: "query"
+    description: "Read present temperature (degC)."
+    returns:
+      type: "float"
+      unit: "degC"
+    polling_safe: true
+
+  measure_temperature_channel:
+    scpi: "MEAS:TEMP? CH{channel}"
+    type: "query"
+    description: "Read channel temperature (degC)."
+    parameters:
+      - name: "channel"
+        type: "integer"
+        required: true
+        range: [1, 64]
+    returns:
+      type: "float"
+      unit: "degC"
+    polling_safe: true
+
+safety:
+  cautions:
+    - "Confirm thermocouple polarity / type before reading."
+    - "Allow stabilization time after probe insertion."
+
+state_query:
+  temperature:
+    command: "measure_temperature"
+    unit: "degC"

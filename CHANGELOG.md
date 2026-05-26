@@ -1,5 +1,98 @@
 # 変更履歴
 
+## v2.2.0 — CLI Authoring Workflow + Backend Naming Cleanup
+
+合言葉: **「v2.1 で server を起動できるようになった runtime を、
+definition pack / instrument 定義を CLI で作れる段階まで育てる」**
+
+v2.1.x で `lab-executor serve --backend mock` が動くようになった。
+v2.2.0 では CLI authoring workflow を拡張し、runtime 内部の
+`visa=` 命名を `backend=` へ移行する。public MCP tool / DSL /
+extension pack 形式すべて不変。
+
+### 新規 CLI subcommands (v1.x `visa-mcp` から port)
+
+- **`lab-executor extension init <pack_name>`**: definition pack を
+  scaffold (template: minimal / mock_basic / instrument_pack)
+- **`lab-executor instrument scaffold <category>`**: instrument YAML
+  を category 別 template から生成 (power_supply / dmm /
+  temperature_meter / generic_scpi、`support_level: draft` 固定)
+- **`lab-executor instrument review-report <path>`**: instrument
+  YAML から markdown 形式 PR review を生成 (strict validate +
+  promote-check 集約)
+- **`lab-executor diagnose tool-surface`**: declared (43+7=50) vs
+  registered MCP tool 数の差分を JSON / text で出力 (v2.1.1 で
+  追加した `diagnose_tool_surface(server)` の CLI 化)
+
+これで lab-executor 単独で「pack 作成 → instrument scaffold →
+doctor → package → verify-package」の authoring loop が完結する。
+
+### Runtime 内部命名整理
+
+**`JobManager(backend=...)` keyword 追加** (v2.2.0 推奨):
+
+```python
+# v2.2.0+ 推奨
+JobManager(backend=mock_backend, session_mgr=..., store=...)
+
+# 旧 (v2.1 まで) — v2.2.0 で DeprecationWarning + v3.x で削除候補
+JobManager(visa=mock_backend, session_mgr=..., store=...)
+```
+
+`visa=` と `backend=` 同時指定は `TypeError`。`server.create_server()`
+は内部で `backend=` 経由に切替済 (DeprecationWarning を triggered
+しない)。
+
+### Templates パッケージ復活
+
+`src/lab_executor/templates/instruments/` (dmm / power_supply /
+temperature_meter / generic_scpi の YAML テンプレ) を v2.2.0 で
+正式に含めた (v2.0 split 時の copy 漏れを修正)。
+`instrument_authoring._load_template()` は
+`lab_executor.templates.instruments.*` を優先、fallback で
+`visa_mcp.templates.instruments.*` も試す。
+
+### tests (`tests/test_v220_cli_authoring.py` 新規 11 件)
+
+- `test_cli_extension_init_help` / `..._generates_pack`
+- `test_cli_instrument_scaffold_help` / `..._generates_yaml`
+- `test_cli_instrument_review_report_help`
+- `test_cli_diagnose_tool_surface_help` / `..._json`
+- `test_job_manager_accepts_backend_keyword`
+- `test_job_manager_visa_keyword_deprecated`
+- `test_job_manager_rejects_both_keywords`
+- `test_create_server_uses_backend_keyword_path`
+  (DeprecationWarning が出ないこと)
+- `test_authoring_cli_no_pyvisa_subprocess`
+  (`instrument scaffold` が PyVISA / visa_mcp なしで動く)
+
+合計 **39 件 pass** (v2.0 + v2.1 + v2.2)
+
+### 互換性
+
+- public API / MCP tool / DSL `dsl_version=0.8` / extension pack
+  形式すべて不変
+- `JobManager(visa=...)` は **動作するが DeprecationWarning** (v3.x
+  で削除候補)
+- `serve --backend mock` の挙動: 不変
+
+### v2.2.0 でやらないこと
+
+- backend plugin system
+- REST / replay backend 本実装
+- `lab-executor extension install / catalog / check` (v2.3 候補)
+- `~/.lab-executor/extensions/` への default 切替 (v2.3+ 候補)
+- MCP tool 追加
+- DSL schema 変更
+
+### v2.3+ 候補
+
+- `lab-executor extension install / check / catalog`
+- `~/.lab-executor/extensions/` への dual-read 設計 + migration
+  dry-run
+- `SessionFacade` を Protocol に昇格 (review P1)
+- Replay backend 設計着手
+
 ## v2.1.1 — v2.1.0 レビュー応答 (README serve table / exit code policy / diagnose_tool_surface)
 
 合言葉: **「v2.1.0 直後の docs / diagnostic 仕上げ」**

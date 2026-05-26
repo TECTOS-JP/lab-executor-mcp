@@ -1,0 +1,39 @@
+metadata:
+  manufacturer: "{manufacturer}"
+  model: "{model}"
+  description: "TODO: short description"
+  manual_ref: "TODO: URL or document title + revision + page range"
+  category: "generic_scpi"
+  support_level: "draft"
+  tested_interfaces: []
+
+connection:
+  default_timeout_ms: 5000
+
+commands:
+  identify:
+    scpi: "*IDN?"
+    type: "query"
+    description: "Return *IDN? response."
+    returns:
+      type: "string"
+
+  reset:
+    scpi: "*RST"
+    type: "write"
+    description: >
+      Reset to factory defaults. CAUTION: device-specific behavior.
+      Verify against manufacturer manual before invoking.
+
+  query_errors:
+    scpi: "SYST:ERR?"
+    type: "query"
+    description: "Read error queue head."
+    returns:
+      type: "string"
+    polling_safe: true
+
+safety:
+  cautions:
+    - "Generic SCPI scaffold; verify all commands against the manual."
+    - "Verify *RST behavior before using reset on real hardware."

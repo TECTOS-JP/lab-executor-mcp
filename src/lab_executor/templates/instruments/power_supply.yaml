@@ -1,0 +1,177 @@
+metadata:
+  manufacturer: "{manufacturer}"
+  model: "{model}"
+  description: "TODO: short description (e.g. 1-channel programmable PSU)"
+  manual_ref: "TODO: URL or document title + revision + page range"
+  category: "power_supply"
+  support_level: "draft"
+  tested_interfaces: []
+  tested_firmware: ""
+
+identification:
+  manufacturer_match: ""
+  model_regex: ""
+
+connection:
+  default_timeout_ms: 5000
+  read_termination: "\n"
+  write_termination: "\n"
+
+commands:
+  identify:
+    scpi: "*IDN?"
+    type: "query"
+    description: "Return *IDN? response."
+    returns:
+      type: "string"
+
+  reset:
+    scpi: "*RST"
+    type: "write"
+    description: >
+      Reset to factory defaults. CAUTION: behavior is device-specific.
+      May turn output OFF, clear protections, reset ranges. Verify
+      against manufacturer manual before invoking on real hardware.
+
+  set_voltage:
+    scpi: "VOLT {voltage}"
+    type: "write"
+    description: "Set output voltage (V)."
+    parameters:
+      - name: "voltage"
+        type: "float"
+        required: true
+        range: [0.0, 30.0]
+    verify:
+      readback_command: "query_voltage"
+      arg_key: "voltage"
+      tolerance: 0.01
+      retry: 1
+
+  query_voltage:
+    scpi: "VOLT?"
+    type: "query"
+    description: "Read voltage setpoint (V)."
+    returns:
+      type: "float"
+      unit: "V"
+    polling_safe: true
+
+  set_current_limit:
+    scpi: "CURR {current}"
+    type: "write"
+    description: "Set current limit (A)."
+    parameters:
+      - name: "current"
+        type: "float"
+        required: true
+        range: [0.0, 10.0]
+    verify:
+      readback_command: "query_current_limit"
+      arg_key: "current"
+      tolerance: 0.01
+
+  query_current_limit:
+    scpi: "CURR?"
+    type: "query"
+    description: "Read current limit (A)."
+    returns:
+      type: "float"
+      unit: "A"
+    polling_safe: true
+
+  measure_voltage:
+    scpi: "MEAS:VOLT?"
+    type: "query"
+    description: "Measure actual output voltage (V)."
+    returns:
+      type: "float"
+      unit: "V"
+    polling_safe: true
+
+  measure_current:
+    scpi: "MEAS:CURR?"
+    type: "query"
+    description: "Measure actual output current (A)."
+    returns:
+      type: "float"
+      unit: "A"
+    polling_safe: true
+
+  set_output:
+    scpi: "OUTP {state}"
+    type: "write"
+    description: "Turn output ON/OFF."
+    parameters:
+      - name: "state"
+        type: "enum"
+        choices: ["ON", "OFF"]
+        required: true
+
+  query_output:
+    scpi: "OUTP?"
+    type: "query"
+    description: "Read output state (1=ON / 0=OFF)."
+    returns:
+      type: "string"
+    polling_safe: true
+
+safety:
+  ratings:
+    voltage:
+      rated: 30.0
+      absolute_max: 31.5
+      recommended_max: 28.0
+      absolute_min: 0.0
+      unit: "V"
+    current:
+      rated: 10.0
+      absolute_max: 11.0
+      recommended_max: 9.0
+      absolute_min: 0.0
+      unit: "A"
+  preconditions:
+    - command: "set_output"
+      when:
+        state: ["ON"]
+      requires:
+        - has_been_called: "set_voltage"
+        - has_been_called: "set_current_limit"
+      severity: "high"
+      reason: "Output ON without prior voltage/current limit is dangerous."
+  cautions:
+    - "Do not connect load before OUTP ON."
+    - "Always set current limit before OUTP ON."
+    - "Verify *RST behavior on this device before using reset."
+
+safe_shutdown:
+  - command: "set_output"
+    args:
+      state: "OFF"
+  - command: "set_voltage"
+    args:
+      voltage: 0
+
+state_query:
+  voltage_set:
+    command: "query_voltage"
+    unit: "V"
+    description: "Voltage setpoint."
+  current_limit:
+    command: "query_current_limit"
+    unit: "A"
+    description: "Current limit setpoint."
+  voltage_measured:
+    command: "measure_voltage"
+    unit: "V"
+    description: "Actual output voltage."
+  current_measured:
+    command: "measure_current"
+    unit: "A"
+    description: "Actual output current."
+  output_state:
+    command: "query_output"
+    description: "Output ON/OFF state."
+    map:
+      "1": "ON"
+      "0": "OFF"
