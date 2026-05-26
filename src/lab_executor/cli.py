@@ -1,25 +1,27 @@
-"""lab-executor CLI (v2.0.0-rc2).
+"""lab-executor CLI (v2.1.0).
 
-v2.0.0 では minimal CLI を提供する。v1.x の `visa-mcp` CLI と機能互換
-にするのは v2.1+ の段階的作業。
+v2.0 では minimal CLI / `serve` placeholder のみだったが、v2.1.0 で
+`serve --backend mock` を実装し、backend-independent な MCP server を
+起動できるようにした。v1.x `visa-mcp` CLI の段階的 port も開始する
+(validate / extension の subset)。
 
-サブコマンド (v2.0.0-rc2 時点):
+サブコマンド (v2.1.0):
 
-- ``lab-executor validate [instrument|plan|extension|benchmark] <path>``
-- ``lab-executor instrument {scaffold|promote-check|review-report} ...``
-- ``lab-executor extension {install|list|uninstall|check|catalog|...}``
-- ``lab-executor serve`` (placeholder, v2.1 で MCP server を起動)
+- ``lab-executor --version``
+- ``lab-executor --help``
+- ``lab-executor serve --backend mock``: MCP server 起動
+- ``lab-executor validate instrument <path>``
+- ``lab-executor validate extension <path>``
+- ``lab-executor extension doctor <pack_dir>``
+- ``lab-executor extension package <pack_dir>``
+- ``lab-executor extension verify-package <zip>``
 
-実装方針:
-  v1.x の `visa_mcp.cli:main` には server / list-resources / raw VISA /
-  validate / extension / instrument / registry の全部が含まれていたが、
-  v2.0 では backend 非依存の subcommand のみ残す。実機 backend が必要
-  なものは `visa-mcp` CLI 側で提供される。
-
-将来 (v2.1+): visa-mcp v1.x からの完全 port (registry / catalog 等)。
+実機 backend (PyVISA / VISA resource discovery / raw VISA) は
+**`visa-mcp serve`** を継続利用。
 """
 from __future__ import annotations
 import argparse
+import json
 import sys
 
 
@@ -28,8 +30,8 @@ def _build_parser() -> argparse.ArgumentParser:
         prog="lab-executor",
         description=(
             "lab-executor-mcp: backend-independent experiment execution "
-            "runtime CLI (v2.0). PyVISA backend が必要な操作は "
-            "`visa-mcp` CLI を使ってください。"
+            "runtime CLI (v2.1). For hardware-backed operations, use "
+            "`visa-mcp` CLI."
         ),
     )
     parser.add_argument(
@@ -38,40 +40,236 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command")
 
-    # serve placeholder
+    # ---- serve (v2.1.0: MockBackend で実起動) -----------------
     sp_serve = sub.add_parser(
         "serve",
-        help="(placeholder, v2.1) MCP server を起動",
+        help="Start MCP server (v2.1: MockBackend only; v2.2+ for "
+              "other backends / plugins)",
     )
     sp_serve.add_argument(
-        "--backend", default="mock",
+        "--backend", default=None,
         choices=["mock"],
-        help="使用する backend (v2.0 では mock のみ)",
+        help="Backend to use (v2.1: mock only); required argument",
+    )
+    sp_serve.add_argument(
+        "--dry-run", action="store_true",
+        help="Compose server and list tools only (no transport start)",
     )
 
-    # validate placeholder (visa-mcp validate と互換)
+    # ---- validate -----------------------------------------------
     sp_val = sub.add_parser(
         "validate",
-        help="(placeholder, v2.1) instrument / plan / extension / "
-              "benchmark を検証",
+        help="Validate instrument / extension (v2.1: 2 targets)",
     )
     sp_val.add_argument(
         "target", nargs="?",
-        choices=["instrument", "plan", "extension", "benchmark",
-                 "registry", "instrument-yaml"],
+        choices=["instrument", "extension"],
     )
-    sp_val.add_argument("path", nargs="?", help="検証対象 path")
+    sp_val.add_argument("path", nargs="?", help="path to validate")
     sp_val.add_argument("--strict", action="store_true")
     sp_val.add_argument("--json", action="store_true")
+
+    # ---- extension subcommands (v2.1.0: doctor / package /
+    #      verify-package) ----------------------------------------
+    sp_ext = sub.add_parser(
+        "extension",
+        help="Extension pack tools (v2.1: doctor / package / verify-package)",
+    )
+    ext_sub = sp_ext.add_subparsers(dest="ext_command")
+
+    ext_doctor = ext_sub.add_parser(
+        "doctor",
+        help="Run health check on extension pack",
+    )
+    ext_doctor.add_argument("pack_dir", help="extension pack directory")
+    ext_doctor.add_argument("--strict", action="store_true")
+    ext_doctor.add_argument("--json", action="store_true")
+
+    ext_package = ext_sub.add_parser(
+        "package",
+        help="Package extension pack into .visa-mcp-ext.zip",
+    )
+    ext_package.add_argument("pack_dir", help="extension pack directory")
+    ext_package.add_argument(
+        "--output", default=None,
+        help="Output .zip path (default: <pack_dir>.visa-mcp-ext.zip)",
+    )
+    ext_package.add_argument("--dry-run", action="store_true")
+    ext_package.add_argument("--json", action="store_true")
+
+    ext_verify = ext_sub.add_parser(
+        "verify-package",
+        help="Verify checksums / manifest of an existing .visa-mcp-ext.zip",
+    )
+    ext_verify.add_argument("zip_path", help=".visa-mcp-ext.zip path")
+    ext_verify.add_argument("--json", action="store_true")
 
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
-    """lab-executor CLI entry point.
+# ============================================================
+# serve
+# ============================================================
 
-    Returns: exit code (0 = success).
-    """
+
+def _cmd_serve(args: argparse.Namespace) -> int:
+    if args.backend is None:
+        # ASCII-only stderr (subprocess decode 安全性)
+        print(
+            "lab-executor serve requires --backend.\n"
+            "  v2.1: only --backend mock is supported.\n"
+            "  For hardware-backed MCP server, install visa-mcp v2.x "
+            "and run `visa-mcp serve`.",
+            file=sys.stderr,
+        )
+        return 2
+
+    if args.backend == "mock":
+        from lab_executor.backends import MockBackend
+        from lab_executor.server import create_server, list_registered_tools
+        backend = MockBackend()
+        server = create_server(backend=backend, name="lab-executor")
+        tools = list_registered_tools(server)
+        if args.dry_run:
+            print(
+                f"lab-executor MCP server (backend=mock) composed OK\n"
+                f"  registered tools: {len(tools)}\n"
+                f"  backend_id: {backend.backend_id}",
+            )
+            for t in sorted(tools):
+                print(f"  - {t}")
+            return 0
+        # 実 transport 起動
+        print(
+            f"lab-executor MCP server starting (backend=mock, "
+            f"tools={len(tools)})...",
+            file=sys.stderr,
+        )
+        try:
+            server.run()
+        except KeyboardInterrupt:
+            return 0
+        return 0
+
+    print(f"unsupported backend: {args.backend}", file=sys.stderr)
+    return 2
+
+
+# ============================================================
+# validate
+# ============================================================
+
+
+def _cmd_validate(args: argparse.Namespace) -> int:
+    if args.target == "instrument" and args.path:
+        from lab_executor.registry import validate_instrument_file
+        rep = validate_instrument_file(args.path, strict=args.strict)
+        if args.json:
+            print(json.dumps(rep.to_dict(), ensure_ascii=False,
+                              indent=2, default=str))
+        else:
+            print(f"errors: {len(rep.errors)}")
+            for e in rep.errors:
+                print(f"  - {e.get('error_class')}: "
+                      f"{e.get('message')}")
+        return 0 if not rep.errors else 1
+
+    if args.target == "extension" and args.path:
+        from lab_executor.extension import validate_extension_file
+        rep = validate_extension_file(args.path, strict=args.strict)
+        data = rep.to_dict() if hasattr(rep, "to_dict") else rep
+        if args.json:
+            print(json.dumps(data, ensure_ascii=False, indent=2,
+                              default=str))
+        else:
+            errs = data.get("errors") or []
+            print(f"extension validation: {len(errs)} error(s)")
+            for e in errs:
+                print(f"  - {e.get('error_class')}: "
+                      f"{e.get('message')}")
+        return 0 if not (data.get("errors") or []) else 1
+
+    print(
+        "lab-executor validate: usage: validate {instrument|extension} "
+        "<path> [--strict] [--json]",
+        file=sys.stderr,
+    )
+    return 2
+
+
+# ============================================================
+# extension
+# ============================================================
+
+
+def _cmd_extension(args: argparse.Namespace) -> int:
+    sub = args.ext_command
+
+    if sub == "doctor":
+        from lab_executor.extension_authoring import doctor_extension
+        rep = doctor_extension(args.pack_dir, strict=args.strict)
+        data = rep.to_dict() if hasattr(rep, "to_dict") else rep
+        if args.json:
+            print(json.dumps(data, ensure_ascii=False, indent=2,
+                              default=str))
+        else:
+            status = data.get("status", "?")
+            print(f"extension doctor: status={status}")
+            for e in (data.get("errors") or []):
+                print(f"  ERROR  {e.get('error_class')}: "
+                      f"{e.get('message')}")
+            for w in (data.get("warnings") or []):
+                print(f"  WARN   {w.get('warning_class')}: "
+                      f"{w.get('message')}")
+        return 0 if data.get("status") == "ok" else 1
+
+    if sub == "package":
+        from lab_executor.extension_packaging import package_extension
+        rep = package_extension(
+            args.pack_dir,
+            output_path=args.output,
+            dry_run=args.dry_run,
+        )
+        data = rep.to_dict() if hasattr(rep, "to_dict") else rep
+        if args.json:
+            print(json.dumps(data, ensure_ascii=False, indent=2,
+                              default=str))
+        else:
+            print(f"package: status={data.get('status', '?')}")
+            if data.get("output_path"):
+                print(f"  output: {data['output_path']}")
+        return 0 if data.get("status") == "ok" else 1
+
+    if sub == "verify-package":
+        from lab_executor.extension_packaging import (
+            verify_extension_package,
+        )
+        rep = verify_extension_package(args.zip_path)
+        data = rep.to_dict() if hasattr(rep, "to_dict") else rep
+        if args.json:
+            print(json.dumps(data, ensure_ascii=False, indent=2,
+                              default=str))
+        else:
+            print(f"verify-package: status={data.get('status', '?')}")
+            for e in (data.get("errors") or []):
+                print(f"  - {e.get('error_class')}: "
+                      f"{e.get('message')}")
+        return 0 if data.get("status") == "ok" else 1
+
+    print(
+        "lab-executor extension: subcommand required "
+        "(doctor / package / verify-package)",
+        file=sys.stderr,
+    )
+    return 2
+
+
+# ============================================================
+# main
+# ============================================================
+
+
+def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
 
@@ -81,37 +279,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "serve":
-        # ASCII-only message to avoid Windows cp932 / locale issues
-        # when invoked from subprocess.
-        print(
-            "lab-executor serve: placeholder in v2.0.x. "
-            "MCP server will be implemented in v2.1.\n"
-            "For hardware-backed MCP server, install visa-mcp v2.x "
-            "and run `visa-mcp serve`.",
-            file=sys.stderr,
-        )
-        return 2
-
+        return _cmd_serve(args)
     if args.command == "validate":
-        if args.target == "instrument" and args.path:
-            from lab_executor.registry import validate_instrument_file
-            rep = validate_instrument_file(args.path, strict=args.strict)
-            if args.json:
-                import json
-                print(json.dumps(rep.to_dict(), ensure_ascii=False,
-                                  indent=2, default=str))
-            else:
-                print(f"errors: {len(rep.errors)}")
-                for e in rep.errors:
-                    print(f"  - {e.get('error_class')}: "
-                          f"{e.get('message')}")
-            return 0 if not rep.errors else 1
-        print(
-            "lab-executor validate: v2.0.0 では instrument のみ対応。\n"
-            "詳細は v2.1 で visa-mcp v1.x から port 予定です。",
-            file=sys.stderr,
-        )
-        return 2
+        return _cmd_validate(args)
+    if args.command == "extension":
+        return _cmd_extension(args)
 
     if args.command is None:
         parser.print_help()

@@ -1,5 +1,99 @@
 # 変更履歴
 
+## v2.1.0 — Mock Runtime Server / CLI Activation
+
+合言葉: **「v2.0 で分離した runtime を、単独で起動できる形に近づける」**
+
+v2.0.x まで placeholder だった `lab-executor serve` を、v2.1.0 で
+**MockBackend 経由で起動可能**にする backend-independent MCP server
+release。新しい MCP tool / DSL 変更 / extension pack 形式変更は無し。
+
+### 新機能
+
+- **`lab_executor.server.create_server(backend=None, *, name=...)`** 公開 API
+  - `InstrumentBackend` を inject して MCP server を構成
+  - 引数省略時は `MockBackend` を default 使用
+  - `list_registered_tools(server)` helper も追加
+- **`lab-executor serve --backend mock`** (CLI)
+  - MockBackend で MCP server 起動 (PyVISA / visa-mcp 非依存)
+  - `--dry-run` で server を compose して tool 一覧を出すだけ
+  - 引数なしは exit 2 + `visa-mcp serve` への誘導 (実機 backend は
+    visa-mcp 側で継続)
+- **`lab-executor validate extension <path>`** port
+- **`lab-executor extension {doctor,package,verify-package}`** port
+
+### tools 登録
+
+`tools/audit/commands/dsl/export/groups/info/jobs/monitor/observation/
+pdf_extractor/recipes/waits` の `register_tools(mcp, ...)` を順に呼び、
+v1.0 凍結の MCP tool surface を expose する。
+
+- 内部 facade: `_SessionFacade` (SessionManager 互換最小実装)
+- JobManager は MockBackend を `visa:` として受ける (duck-typed)
+- 実 registry に登録される tool 数は >= 30 (実装で変動するが core
+  tool はすべて含まれる)
+- `stability.STABLE_TOOLS` / `EXPERIMENTAL_TOOLS` の declaration は
+  **43 + 7 = 50** で不変
+
+### Backend independence
+
+- `lab_executor.server` module 自体は PyVISA / visa_mcp に依存しない
+- `create_server()` 呼び出しも、`visa_mcp` を import 経路から block
+  した状態で動作することを subprocess test で確認
+  (`test_no_pyvisa_when_visa_mcp_blocked_subprocess`)
+
+### tests (`tests/test_v210_server.py` 新規 14 件)
+
+- `test_create_server_with_default_mock_backend`
+- `test_create_server_with_explicit_mock_backend`
+- `test_mock_server_tool_count_is_reasonable`
+- `test_stability_declarations_unchanged` (43 + 7 = 50)
+- `test_server_module_imports_without_pyvisa`
+- `test_server_creates_without_visa_mcp_installed`
+- `test_no_pyvisa_when_visa_mcp_blocked_subprocess`
+- `test_cli_serve_requires_backend` (引数なし → exit 2)
+- `test_cli_serve_backend_mock_dry_run`
+- `test_cli_serve_help`
+- `test_cli_validate_extension_help`
+- `test_cli_extension_help`
+- `test_cli_extension_doctor_help`
+- `test_v2_1_version`
+- `test_no_top_level_visa_mcp_import_added`
+
+合計 25 件 pass (v2.0 smoke 含む)。
+
+### CLI message 言語
+
+`serve` placeholder で得た知見を踏襲し、CLI argparse の help /
+description / stderr message は **ASCII-only** に統一。subprocess test
+が Windows cp932 環境でも安全に動く。
+
+### 互換性
+
+- API / package 構造: 不変
+- MCP tool 数 declaration: 43 + 7 = 50 (v1.0 から不変)
+- DSL `dsl_version=0.8`: 完全互換
+- extension pack 形式: 完全互換
+- `~/.visa-mcp/extensions/` install path: 継続使用
+
+### v2.1.0 でやらないこと
+
+- backend plugin system
+- REST / replay backend 実装
+- remote registry
+- package signing
+- install path default 変更 (v2.2+ で検討)
+- MCP tool 追加
+- DSL schema 変更
+
+### v2.2+ 候補
+
+- `lab-executor extension init / install / catalog`
+- `lab-executor instrument scaffold / review-report`
+- `~/.lab-executor/extensions/` への並走移行計画
+- 他 backend (REST / replay / plugin) の `--backend` choice
+- visa-mcp shim 利用状況を見た Deprecation スケジュール調整
+
 ## v2.0.2 — CI hotfix (TYPE_CHECKING import / ASCII CLI / smoke test scope)
 
 合言葉: **「v2.0.1 で CI 全 job 通すための hotfix」**

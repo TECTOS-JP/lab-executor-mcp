@@ -40,18 +40,42 @@ PyVISA は **必須ではない**。実機 backend が必要な場合は
 pip install visa-mcp     # PyVISA backend + lab-executor-mcp runtime
 ```
 
-## CLI status in v2.0
+## How to start the server (v2.1+)
 
-`lab-executor` CLI は v2.0 時点で **minimal** な構成:
+```bash
+# PyVISA 不要 (mock / dry-run / benchmark / definition pack validation)
+lab-executor serve --backend mock
 
-- `lab-executor --version` / `--help`: available
-- `lab-executor validate instrument <path>`: available
-- `lab-executor serve`: **placeholder** (v2.1 で MCP server 起動を実装)
-- v1.x `visa-mcp` CLI との完全互換 (`extension` / `registry` /
-  `instrument scaffold` 等): **v2.1+** で段階的 port 予定
+# 実機 backend (PyVISA 経由)
+visa-mcp serve
+```
 
-実機 backend を起動する `visa-mcp serve` 互換は visa-mcp 側の CLI で
-従来通り提供される (`pip install visa-mcp` 後 `visa-mcp serve`)。
+`lab-executor serve` には **`--backend mock` が必須**です。引数なしは
+exit 2 で `visa-mcp serve` への案内を出します (v2.1 では mock backend
+のみ。他 backend / plugin は v2.2+ で検討)。
+
+## CLI status in v2.1
+
+v2.1.0 で活性化された範囲:
+
+- `lab-executor --version` / `--help`
+- `lab-executor serve --backend mock` (MockBackend で MCP server 起動)
+- `lab-executor serve --backend mock --dry-run` (server を compose
+  して tool 一覧を出すだけ)
+- `lab-executor validate instrument <path>`
+- `lab-executor validate extension <path>`
+- `lab-executor extension doctor <pack_dir>`
+- `lab-executor extension package <pack_dir>`
+- `lab-executor extension verify-package <zip>`
+
+v2.2+ で port 予定:
+
+- `lab-executor extension init / install / catalog`
+- `lab-executor instrument scaffold / review-report`
+- 他 backend (REST / replay / plugin) の `--backend` choice 追加
+
+実機 backend を起動する経路は引き続き **`visa-mcp serve`** (visa-mcp
+v2.0+ を install)。
 
 ## v2.0 split
 
