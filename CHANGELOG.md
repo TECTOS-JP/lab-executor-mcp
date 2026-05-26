@@ -1,5 +1,137 @@
 # 変更履歴
 
+## v2.0.0 — First stable release (split from visa-mcp v1.11.1)
+
+**`lab-executor-mcp` の最初の安定版 release。** `visa-mcp` v1.x が
+1 リポジトリで持っていた「PyVISA backend」と「実験実行 runtime」を
+v2.0 で 2 リポジトリに分離した、その runtime 側。
+
+### 位置づけ
+
+```
+v1.x までの visa-mcp:
+  PyVISA backend + runtime + DSL + extension ecosystem (一体)
+
+v2.0:
+  lab-executor-mcp ← backend-independent runtime (これ)
+  visa-mcp         ← PyVISA backend + 旧 import shim (v2.0.0-rc1
+                     で並走着手予定)
+```
+
+依存方向: `visa-mcp → lab-executor-mcp` (許可) /
+`lab-executor-mcp → visa-mcp` (禁止)。
+
+### lab-executor-mcp に含まれるもの
+
+- DSL (`ExperimentPlan`, `dsl_version=0.8`) + validator + dry-run
+- Job manager / state machine / scheduler / barrier
+- Group / Map executor
+- Observation API (`timeline` / `live_view` / `summary`)
+- Benchmark runner + repair tasks
+- Definition pack ecosystem (extension `init/install/check/package/
+  catalog/authoring`)
+- Instrument authoring (`scaffold` / `promote-check` / `review-report`)
+- Export / bundle (deterministic reproducibility)
+- Audit / locks / SQLite (user_version=3)
+- `InstrumentBackend` Protocol + `MockBackend`
+- MCP tool: **Stable 43 + Experimental 7 = 50** (v1.0 から不変)
+- minimal `lab-executor` CLI (`--version` / `--help` /
+  `validate instrument`)
+
+### 含まれないもの (visa-mcp 側に残る)
+
+- `PyVisaBackend` (PyVISA 透過 adapter)
+- `VisaManager` / `bus_manager` / `session_manager`
+- Raw VISA tools (env-gated `send_command` / `query_instrument`)
+- `tools/discovery.py` (PyVISA resource 列挙)
+
+### 互換性
+
+- MCP tool 名 / 引数 / response: **完全互換** (v1.0 凍結のまま)
+- DSL `dsl_version=0.8`: **完全互換**
+- extension pack `.visa-mcp-ext.zip` 形式: **完全互換**
+- `.install_meta.json` schema: **完全互換**
+- `~/.visa-mcp/extensions/` install path: **継続使用**
+  (v2.1 以降で `~/.lab-executor/extensions/` 並走検討)
+
+### CLI status (v2.0)
+
+`lab-executor` CLI は v2.0 では **minimal**:
+
+- `lab-executor --version` / `--help`: ✓
+- `lab-executor validate instrument <path>`: ✓
+- `lab-executor serve`: **placeholder** (exit code 2 で v2.1 案内)
+- v1.x `visa-mcp` CLI 完全互換: **v2.1 以降で段階 port 予定**
+
+実機 MCP server 起動は **`visa-mcp serve`** (v2.0.0-rc1 で並走 release
+予定の visa-mcp shim 経由) を継続利用してください。利用者は v2.0 時点
+で CLI を切り替える必要はありません。
+
+### 依存関係
+
+- PyVISA: **不要** (`pip install lab-executor-mcp` のみで動く)
+- 実機 backend が必要なら `pip install visa-mcp` を追加 install
+  (`lab-executor-mcp >= 2.0` を自動 pull)
+
+### 検証済み項目
+
+ローカル (Windows + Python 3.14):
+
+```
+python -m tomllib pyproject.toml          → OK
+python -c "import yaml; yaml.safe_load(ci.yml)"  → OK
+python -m compileall src tests             → OK
+pytest tests/test_v200_split.py            → 10 passed
+lab-executor --version                     → 2.0.0
+lab-executor --help                        → OK
+lab-executor serve (placeholder)           → exit 2, stderr "v2.1"
+import lab_executor without visa-mcp       → OK (sys.meta_path block 検証)
+import lab_executor without pyvisa         → OK
+no top-level "from visa_mcp.*" import      → 0 件 (AST 検査)
+Stable 43 + Experimental 7 = 50            → 不変
+multiline / LF only guard                  → 11 file pass
+```
+
+GitHub Actions (rc4 で確立した 3 job 構成): `test` /
+`pyvisa-not-installed` / `build` の green を v2.0.0 tag でも CI で
+継続検証する。
+
+### 既存ユーザー向け
+
+```bash
+# 実機を使う既存ユーザー (v1.x から)
+pip install --upgrade visa-mcp
+# → 自動的に lab-executor-mcp >= 2.0 も install される
+#   (visa-mcp v2.0.0-rc1 release 後)
+
+# 実機不要 (benchmark / dry-run / validate のみ)
+pip install lab-executor-mcp
+
+# 推奨 import (v2.0+)
+from lab_executor.extension import ExtensionManifest
+from lab_executor.dsl import validate_experiment_plan
+# 旧 import (v2.0 で DeprecationWarning 付きで動作、v2.2+ で削除候補)
+from visa_mcp.extension import ExtensionManifest  # DeprecationWarning
+```
+
+### 次の作業
+
+- **`visa-mcp v2.0.0-rc1`** (並走着手): shim package 化 +
+  `lab-executor-mcp >= 2.0` 依存追加 + `PyVisaBackend` + raw VISA
+  tools + `visa-mcp serve` 互換維持
+- **`lab-executor-mcp v2.1`**: `lab-executor serve` 実装 + CLI
+  完全 port + install path 移行計画
+
+### 履歴
+
+履歴は visa-mcp v1.11.1 から bootstrap (新規 repo として開始)。
+v1.x までの開発履歴は `TECTOS-JP/visa-mcp` を参照。
+
+Source of truth (visa-mcp repo):
+- `docs/separation/module_ownership.yaml`
+- `docs/separation/split_manifest.yaml`
+- `scripts/bootstrap_lab_executor.py`
+
 ## v2.0.0-rc4 — rc3 レビュー応答 (multiline guard / CLI 文言整合 / serve placeholder test)
 
 合言葉: **「正式 v2.0.0 直前の最後の peripheral 整備」**
