@@ -1,7 +1,20 @@
 # lab-executor-mcp
 
+[![CI](https://github.com/TECTOS-JP/lab-executor-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/TECTOS-JP/lab-executor-mcp/actions/workflows/ci.yml)
+
 Backend-independent **experiment execution runtime** for AI agents.
-Split from `visa-mcp` at v2.0 (see `docs/v2_migration.md`).
+Split from `visa-mcp` at v2.0.
+
+> **⚠ Upgrading from visa-mcp v1.x?**
+> **First read [`docs/v2_migration.md`](docs/v2_migration.md).**
+> 実機 backend が必要な既存利用者は **`pip install --upgrade visa-mcp`** が
+> 互換経路 (v2.0 では visa-mcp v2.0 release を待つ必要あり)。
+
+> **Line-ending note**: GitHub raw view may display some files as
+> "collapsed" / "1 line" in certain viewers. The repository uses
+> `.gitattributes` to enforce LF, and CI validates **TOML / YAML
+> parse**, **`compileall`**, **multiline / LF-only guard** on every
+> commit. See `tests/test_v200_split.py`.
 
 ## What it provides
 

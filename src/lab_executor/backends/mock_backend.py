@@ -19,10 +19,14 @@ if TYPE_CHECKING:
 
 
 class MockBackend:
-    """`InstrumentBackend` Protocol を満たす mock adapter (v1.11)
+    """MockBackend implementing InstrumentBackend for lab-executor-mcp.
 
-    `MockVisaManager` を内部に持ち、benchmark / dry-run / CI で PyVISA
-    を必要としない backend として動作する。
+    PyVISA 非依存の mock adapter。内部で `MockVisaManager` を保持し、
+    benchmark / dry-run / CI で実機 backend なしに `InstrumentBackend`
+    Protocol の動作を提供する。
+
+    `MockVisaManager` は v1.x からの legacy internal name で、public
+    な名前は `MockBackend` (利用者はこちらだけを意識すればよい)。
     """
 
     backend_id: str = "mock"

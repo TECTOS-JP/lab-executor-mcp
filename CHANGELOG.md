@@ -1,5 +1,37 @@
 # 変更履歴
 
+## v2.0.1 — v2.0.0 レビュー応答 (README 導線 / line-ending note / MockBackend docstring)
+
+合言葉: **「正式版直後の peripheral 仕上げ」**
+
+v2.0.0 external review (P0/P1/P2) を反映した small patch。
+public API / dependency / extension pack / MCP tool / DSL すべて不変。
+
+### 変更点
+
+- **P0**: `README.md` に **line-ending note** を追加。GitHub raw view
+  の一部 viewer が file を「1 line」と mis-report する件を、
+  `.gitattributes` + CI gate (TOML/YAML parse / compileall /
+  multiline guard) で対処していることを明文化
+- **P1**: `README.md` 冒頭に **migration guide への強い導線**を追加
+  (v1.x ユーザーは v2_migration.md を先に読むよう誘導)
+- **P1**: README に **GitHub Actions CI badge** を追加
+- **P2**: `src/lab_executor/backends/mock_backend.py` の class
+  docstring から v1.11 表記を削除、v2.0 lab-executor-mcp 同梱 backend
+  として書き直し (`MockVisaManager` は legacy internal name と整理)
+
+### 互換性
+
+- API / package 構造: 不変
+- MCP tool 数 (Stable 43 + Experimental 7 = 50): 不変
+- DSL `dsl_version=0.8` / extension pack 形式: 不変
+- wheel build / install path / dependency: 不変
+
+### 次の作業
+
+`visa-mcp v2.0.0-rc1` (shim package 化 + `lab-executor-mcp >= 2.0`
+依存追加) に並走着手予定。
+
 ## v2.0.0 — First stable release (split from visa-mcp v1.11.1)
 
 **`lab-executor-mcp` の最初の安定版 release。** `visa-mcp` v1.x が

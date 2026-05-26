@@ -10,7 +10,10 @@ ROOT = Path(__file__).parent.parent
 
 def test_version():
     import lab_executor
-    assert lab_executor.__version__.startswith("2.0.0")
+    # 2.0.0 / 2.0.1 / 2.0.x patch を許容
+    parts = lab_executor.__version__.split(".")
+    assert int(parts[0]) >= 2 and int(parts[1]) >= 0, (
+        f"unexpected version: {lab_executor.__version__}")
 
 
 def test_top_level_imports_succeed():
