@@ -10,11 +10,22 @@ Split from `visa-mcp` at v2.0.
 > 実機 backend が必要な既存利用者は **`pip install --upgrade visa-mcp`** が
 > 互換経路 (v2.0 では visa-mcp v2.0 release を待つ必要あり)。
 
-> **Line-ending note**: GitHub raw view may display some files as
-> "collapsed" / "1 line" in certain viewers. The repository uses
-> `.gitattributes` to enforce LF, and CI validates **TOML / YAML
-> parse**, **`compileall`**, **multiline / LF-only guard** on every
-> commit. See `tests/test_v200_split.py`.
+> **Line-ending / raw display note** (v2.3.1 補強):
+>
+> Some third-party viewers and LLM-based fetchers occasionally
+> report repository files as "1 line" / "collapsed" when reading
+> `raw.githubusercontent.com`. This is a viewer-side artifact, not
+> a repository defect. **The repository stores all text as LF
+> (verified):**
+>
+> ```bash
+> # Verify yourself:
+> curl -s https://raw.githubusercontent.com/TECTOS-JP/lab-executor-mcp/v2.3.1/src/lab_executor/extension_paths.py \
+>   | python -c "import sys; b=sys.stdin.buffer.read(); print(f'bytes={len(b)} lines={b.count(chr(10).encode())} CR={b.count(chr(13).encode())}')"
+> # Expected: bytes=2441 lines=65 CR=0
+> ```
+>
+> CI enforces this with `tests/test_v200_split.py::test_critical_files_are_multiline_and_lf_only` (11 file >= 10 lines, CR=0). If you see a "collapsed" file, use **clean clone** (`git clone --branch v2.3.1`) or **GitHub file viewer** (not raw URL).
 
 ## What it provides
 
@@ -82,6 +93,10 @@ lab-executor extension paths            # install path resolver 状態
 | `extension package` | package 成功 | 失敗 | usage error |
 | `extension verify-package` | checksums OK | mismatch / 不正 | usage error |
 | `extension init` | pack 生成成功 | 失敗 | usage error |
+| `extension install` | install 成功 / `--dry-run` 成功 | verify 失敗 / 書き込み失敗 | usage error |
+| `extension check` | OK (warning も exit 0) | error あり、または `--strict` で warning | usage error |
+| `extension catalog` | 一覧出力 (空でも exit 0) | 内部 error | usage error |
+| `extension paths` | 出力成功 | — | usage error |
 | `instrument scaffold` | YAML 生成成功 | 失敗 | usage error |
 | `instrument review-report` | markdown 出力成功 | file 不在等の error | usage error |
 | `diagnose tool-surface` | `status == "ok"` または warning + `--strict` 無し | warning + `--strict` | usage error |
@@ -98,25 +113,53 @@ lab-executor extension paths            # install path resolver 状態
 - runtime 内部の `JobManager` は v2.1 時点で `visa=` 引数名を受け取る
   (v1.x からの互換維持)。v2.2+ で `backend=` への rename を検討予定
 
-## CLI status in v2.1
+## CLI status in v2.3
 
-v2.1.0 で活性化された範囲:
+v2.3.1 までに活性化された範囲:
 
+**v2.1.0**:
 - `lab-executor --version` / `--help`
 - `lab-executor serve --backend mock` (MockBackend で MCP server 起動)
-- `lab-executor serve --backend mock --dry-run` (server を compose
-  して tool 一覧を出すだけ)
+- `lab-executor serve --backend mock --dry-run`
 - `lab-executor validate instrument <path>`
 - `lab-executor validate extension <path>`
 - `lab-executor extension doctor <pack_dir>`
 - `lab-executor extension package <pack_dir>`
 - `lab-executor extension verify-package <zip>`
 
-v2.2+ で port 予定:
+**v2.2.0**:
+- `lab-executor extension init <dir>` (pack scaffold 生成)
+- `lab-executor instrument scaffold <category>`
+- `lab-executor instrument promote-check <yaml>`
+- `lab-executor instrument review-report <yaml>`
+- `lab-executor diagnose tool-surface` (Stable 43 + Experimental 7 検査)
 
-- `lab-executor extension init / install / catalog`
-- `lab-executor instrument scaffold / review-report`
+**v2.3.0**:
+- `lab-executor extension install <zip>` (`--dry-run` / `--force` /
+  `--skip-verify`)
+- `lab-executor extension check` (`--extension-id` / `--strict`)
+- `lab-executor extension catalog` (install 済 pack 一覧)
+- `lab-executor extension paths` (path resolver 状態 / `--json`)
+
+### `--skip-verify` の取り扱い (重要)
+
+`extension install --skip-verify` は **test 用途専用**。信頼できない
+配布物 (第三者 zip / 外部レジストリ pull) には **絶対に使わない**こと。
+checksum 検証を skip するため、tampering 検出ができなくなる。
+
+### `--dry-run` semantics (v2.3)
+
+`extension install --dry-run` は v2.3 時点で **package verify のみ** を
+実行する。install 済 `extension_id` の重複検査や install path への
+書き込み権限確認は行わない (v2.4+ で検討)。
+
+### v2.4+ で port 予定 / 検討中
+
+- `extension uninstall` (`.install_meta.json` ベースの安全削除)
+- `extension list-installed` (catalog のエイリアス整理)
 - 他 backend (REST / replay / plugin) の `--backend` choice 追加
+- `default_extensions_dir` の source of truth を `extension_paths
+  .get_extension_paths().current_default` に統合 (現状は 2 系統存在)
 
 実機 backend を起動する経路は引き続き **`visa-mcp serve`** (visa-mcp
 v2.0+ を install)。

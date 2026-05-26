@@ -1,5 +1,39 @@
 # 変更履歴
 
+## v2.3.1 — Docs / Review patch
+
+v2.3.0 レビュー反映 patch。コード変更なし、docs と CHANGELOG の補強のみ。
+
+### Docs
+
+- **README "Line-ending / raw display note"**: viewer 側で
+  `raw.githubusercontent.com` が "1 line / collapsed" と誤表示される
+  ケースについて、誰でも検証できる `curl | python` 1-liner を例示。
+  リポジトリは LF 単独 (CR=0) で保存されており、CI test
+  `test_critical_files_are_multiline_and_lf_only` で gate されている
+  ことを明記。
+- **README "CLI status"**: v2.1 範囲の記述を v2.3 範囲へ更新。v2.2 /
+  v2.3 で追加された CLI (`extension init/install/check/catalog/paths`
+  / `instrument scaffold/promote-check/review-report` /
+  `diagnose tool-surface`) を反映。
+- **Exit code policy table**: v2.3 subcommand
+  (`extension install/check/catalog/paths`) の row を追加。
+- **`--skip-verify` 警告強化**: 「test 用途のみ。信頼できない zip に
+  対しては絶対に使わない」を明示。
+- **`--dry-run` semantics 明確化**: v2.3 dry-run は package verify
+  のみで、install 済 extension_id の重複検査は行わないことを明記
+  (v2.4+ で検討)。
+- **`extension_paths` を v2.4 source of truth 化する旨**を docs TODO
+  として記載 (`default_extensions_dir` → `get_extension_paths()
+  .current_default` 段階移行計画)。
+
+### Internal
+
+- バージョンを 2.3.1 に bump (`__init__.py` / `pyproject.toml`)。
+- コードは無変更、tests / CI 既存 gate は全て pass。
+
+---
+
 ## v2.3.0 — Extension Lifecycle CLI + Path Migration Planning
 
 合言葉: **「v2.2 で作る CLI が揃ったので、v2.3 で install して使う
