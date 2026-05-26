@@ -10,22 +10,27 @@ Split from `visa-mcp` at v2.0.
 > 実機 backend が必要な既存利用者は **`pip install --upgrade visa-mcp`** が
 > 互換経路 (v2.0 では visa-mcp v2.0 release を待つ必要あり)。
 
-> **Line-ending / raw display note** (v2.3.1 補強):
+> **Line-ending / raw display note** (v2.4.1 強化):
 >
 > Some third-party viewers and LLM-based fetchers occasionally
 > report repository files as "1 line" / "collapsed" when reading
-> `raw.githubusercontent.com`. This is a viewer-side artifact, not
-> a repository defect. **The repository stores all text as LF
-> (verified):**
+> `raw.githubusercontent.com`. This is a **viewer-side artifact**,
+> not a repository defect. The repository stores all text as LF.
+>
+> **Ground truth lives in [`RELEASE_VERIFICATION.md`](RELEASE_VERIFICATION.md)**
+> — a tag-time generated manifest listing each critical file's
+> exact `bytes` / `LF` / `CR` / `BOM` counts. Any reviewer can run:
 >
 > ```bash
-> # Verify yourself:
-> curl -s https://raw.githubusercontent.com/TECTOS-JP/lab-executor-mcp/v2.3.1/src/lab_executor/extension_paths.py \
->   | python -c "import sys; b=sys.stdin.buffer.read(); print(f'bytes={len(b)} lines={b.count(chr(10).encode())} CR={b.count(chr(13).encode())}')"
-> # Expected: bytes=2441 lines=65 CR=0
+> git clone --branch v2.4.1 https://github.com/TECTOS-JP/lab-executor-mcp.git
+> cd lab-executor-mcp
+> python scripts/release_verification.py --check
+> # expect: "OK" + exit 0  (CR=0, LF>=10, no BOM for every critical file)
 > ```
 >
-> CI enforces this with `tests/test_v200_split.py::test_critical_files_are_multiline_and_lf_only` (11 file >= 10 lines, CR=0). If you see a "collapsed" file, use **clean clone** (`git clone --branch v2.3.1`) or **GitHub file viewer** (not raw URL).
+> If your viewer disagrees with the manifest, your viewer is wrong.
+> CI also enforces this via
+> `tests/test_v200_split.py::test_critical_files_are_multiline_and_lf_only`.
 
 ## What it provides
 
@@ -49,6 +54,29 @@ PyVISA は **必須ではない**。実機 backend が必要な場合は
 
 ```bash
 pip install visa-mcp     # PyVISA backend + lab-executor-mcp runtime
+```
+
+## Extension path behavior (v2.4)
+
+v2.4 introduces **dual-path read** for installed extension packs while
+keeping the **write default unchanged** (legacy `~/.visa-mcp/extensions/`).
+Duplicate `extension_id` across both paths is **not auto-resolved**:
+it is reported as a warning (or error with `--strict`).
+
+| Aspect | v2.4 behavior |
+|---|---|
+| Read (catalog / check) | `~/.lab-executor/extensions/` **and** `~/.visa-mcp/extensions/` |
+| Write (install) default | `~/.visa-mcp/extensions/` (unchanged) |
+| Duplicate `extension_id` | warning by default, error with `--strict` |
+| Auto-precedence | **none** — duplicates are never silently resolved |
+| Policy id | `duplicate_policy = report_conflict_no_implicit_precedence` |
+
+The default install target will be re-evaluated in v2.5+. v2.4 is a
+**reporting phase** — it sees both paths, but never picks one
+implicitly. Inspect the resolver state with:
+
+```bash
+lab-executor extension paths --json
 ```
 
 ## How to start the server (v2.1+)

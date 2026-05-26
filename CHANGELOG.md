@@ -1,5 +1,67 @@
 # 変更履歴
 
+## v2.4.1 — Docs / Review patch + Release verification manifest
+
+v2.4.0 レビュー反映 patch。コード変更は最小限 (docstring / help 文言
+の更新)、加えて **raw 表示問題の再発防止策**として release-time
+verification manifest を導入する。
+
+### Docs / CLI 文言
+
+- `src/lab_executor/cli.py` module docstring を v2.2.x → v2.4.x へ
+  更新。v2.3 / v2.4 で追加されたサブコマンド (extension install /
+  check / catalog / paths、dual-path discovery、duplicate conflict
+  detection) を反映。
+- `lab-executor extension paths --help` を「v2.3: planning only」→
+  「v2.4: dual-read, legacy write default」へ修正。
+- argparse `description` を v2.4 へ更新。
+- README に **v2.4 path behavior 表**を追加 (read / write / duplicate
+  / auto-precedence / policy id)。
+- `discover_installed_extensions()` docstring に warning ブロックを
+  追加: duplicate がある場合 `extensions[]` に入っている record は
+  **display compatibility 目的**であり「選択された extension」では
+  ない、と明示。downstream `extension_id` 解決は `duplicates` を
+  チェックし `duplicate_extension_id` error を返すべき
+  (v2.5+ で `resolve_extension_by_id()` 実装予定)。
+
+### Raw 表示問題の根本対応 (再発防止)
+
+複数の review で `raw.githubusercontent.com` 経由の file が "1 line
+/ collapsed" と報告されてきたが、curl で実際の bytes を測ると毎回
+LF=数十〜数百 / CR=0 で multi-line 確認できる。これは **viewer 側
+artifact** であり repo 側ではない。
+
+この事実を毎回 review で再証明させるのは非効率なので、release tag
+時に **`RELEASE_VERIFICATION.md`** を自動生成して同梱する運用に変更:
+
+- 新規 script: `scripts/release_verification.py`
+  - critical files のリストを保持
+  - **git canonical bytes** (`git show HEAD:<path>`) を読むことで、
+    Windows の autocrlf 影響を排除して repo 真値で集計
+  - `--check`: 全 critical file が `CR == 0` / `LF >= 10` / no BOM
+    を満たすかを exit code で gate (CI 用)
+  - 引数なし: markdown manifest (bytes / LF / CR / BOM の表) を
+    stdout 出力
+- 新規 file: `RELEASE_VERIFICATION.md` (root に commit)
+  - reviewer が viewer の表示を疑ったとき、まず読むべき ground
+    truth。`clone --branch <tag>` + `release_verification.py --check`
+    で誰でも `OK` を確認できる
+- README の line-ending note を更新し、`RELEASE_VERIFICATION.md`
+  を canonical 参照先として明示
+
+これにより、v2.4.1 以降は「viewer が 1 line と言っている」レビュー
+コメントに対して、**毎回手作業で curl 検証を再実行する必要がなく
+なる**。reviewer 側で `release_verification.py --check` を走らせる
+だけで終わる。
+
+### Internal
+
+- バージョン 2.4.1 に bump (`__init__.py` / `pyproject.toml`)。
+- コード本体 (extension_paths / extension_discovery / cli ロジック)
+  は v2.4.0 から不変。tests 71 件は引き続き pass。
+
+---
+
 ## v2.4.0 — Dual-path Extension Discovery + Duplicate Conflict Detection
 
 合言葉: **「新 path を読み始める。ただし黙って優先しない」**

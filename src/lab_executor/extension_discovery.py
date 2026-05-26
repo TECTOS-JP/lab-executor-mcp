@@ -177,6 +177,17 @@ def discover_installed_extensions(
     record だけを残す (catalog 表示用)。後段の `catalog` / `check`
     で warning / error 化する。
 
+    .. warning::
+
+       duplicate がある場合、`extensions` list に入っている record は
+       **display compatibility のため**であり、「選択された / 有効な
+       extension」ではない。downstream で `extension_id` から実体を
+       解決する場面では、`duplicates` を必ずチェックし、duplicate なら
+       明示的に `duplicate_extension_id` error を返すべき
+       (v2.5+ で `resolve_extension_by_id()` 等として実装予定)。
+       v2.4 自体は **報告段階** であり、自動採用しない方針 (案 B,
+       `report_conflict_no_implicit_precedence`)。
+
     Args:
         paths: 上書き用 ExtensionPaths (test 用)。None なら
             `get_extension_paths()` を使う。

@@ -1,33 +1,50 @@
-"""lab-executor CLI (v2.2.x).
+"""lab-executor CLI (v2.4.x).
 
 v2.0 では minimal CLI / `serve` placeholder のみだったが、v2.1.0 で
 `serve --backend mock` を実装、v2.2.0 で authoring workflow CLI を
-追加した。実機 backend (PyVISA / VISA resource discovery / raw VISA)
-は **`visa-mcp serve`** を継続利用する。
+追加、v2.3.0 で extension lifecycle (install/check/catalog/paths)、
+v2.4.0 で **dual-path extension discovery + duplicate conflict
+detection** を追加した。実機 backend (PyVISA / VISA resource
+discovery / raw VISA) は **`visa-mcp serve`** を継続利用する。
 
 サブコマンド一覧:
 
 v2.1.0 追加:
 - ``lab-executor --version`` / ``--help``
-- ``lab-executor serve --backend mock`` (MCP server 起動)
+- ``lab-executor serve --backend mock``
 - ``lab-executor validate {instrument,extension} <path>``
 - ``lab-executor extension {doctor,package,verify-package}``
 
 v2.2.0 追加:
-- ``lab-executor extension init <pack_name>`` (definition pack scaffold)
-- ``lab-executor instrument scaffold <category> --output <path>``
-- ``lab-executor instrument review-report <path>``
-- ``lab-executor diagnose tool-surface`` (declared vs registered 差分)
+- ``lab-executor extension init <pack_name>``
+- ``lab-executor instrument {scaffold,review-report}``
+- ``lab-executor diagnose tool-surface``
 
-Exit code policy (v2.2.1 明文化):
-- 0:  正常終了 (`status == "ok"`)
-- 1:  validation / doctor warning / mismatch (CI gate として強い)
-- 2:  usage error / 引数不足
+v2.3.0 追加:
+- ``lab-executor extension install <zip> [--dry-run|--force|--skip-verify]``
+- ``lab-executor extension check [--extension-id|--strict]``
+- ``lab-executor extension catalog``
+- ``lab-executor extension paths``
 
-`diagnose tool-surface` は default で warning も exit 1。手元診断で
-warning を許容したい場合は ``--strict`` を **指定しない** こと
-(v2.2.1 で `--strict` が default 化、非 strict は warning を許容
-する mode を提供する… のは v2.3 候補)。
+v2.4.0 追加 (Dual-path Extension Discovery + Duplicate Conflict
+Detection):
+
+- ``extension paths``: dual-path read 構成 (legacy + new) と
+  ``duplicate_policy = report_conflict_no_implicit_precedence`` を表示
+- ``extension catalog``: dual-path discovery を経由して install 済
+  pack を列挙。duplicate 時は ``status=warning`` + ``duplicates``
+  block 出力。``--strict`` で exit 1
+- ``extension check``: dual-path 経由の integrity check。
+  ``summary.duplicate_extension_ids`` を返す。``--strict`` で exit 1
+
+Exit code policy (v2.2.1 明文化、v2.4 で extension lifecycle 拡張):
+
+- 0: 正常終了 (`status == "ok"`)
+- 1: validation / doctor warning / mismatch / ``--strict`` で warning
+- 2: usage error / 引数不足
+
+書き込み default は v2.4 でも ``~/.visa-mcp/extensions/`` 維持
+(legacy)。``~/.lab-executor/extensions/`` への切替は v2.5+ で判断。
 """
 from __future__ import annotations
 import argparse
@@ -40,8 +57,8 @@ def _build_parser() -> argparse.ArgumentParser:
         prog="lab-executor",
         description=(
             "lab-executor-mcp: backend-independent experiment execution "
-            "runtime CLI (v2.1). For hardware-backed operations, use "
-            "`visa-mcp` CLI."
+            "runtime CLI (v2.4: dual-path extension discovery). For "
+            "hardware-backed operations, use `visa-mcp` CLI."
         ),
     )
     parser.add_argument(
@@ -160,8 +177,10 @@ def _build_parser() -> argparse.ArgumentParser:
 
     ext_paths = ext_sub.add_parser(
         "paths",
-        help="Show extension install path resolver state "
-              "(v2.3: planning only, no behavior change)",
+        help=(
+            "Show extension path resolver state "
+            "(v2.4: dual-read, legacy write default)"
+        ),
     )
     ext_paths.add_argument("--json", action="store_true")
 
