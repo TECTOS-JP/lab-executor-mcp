@@ -114,6 +114,53 @@ def _build_parser() -> argparse.ArgumentParser:
     ext_verify.add_argument("zip_path", help=".visa-mcp-ext.zip path")
     ext_verify.add_argument("--json", action="store_true")
 
+    # ---- extension install / check / catalog / paths (v2.3.0) ---
+    ext_install = ext_sub.add_parser(
+        "install",
+        help="Install a definition pack zip (.visa-mcp-ext.zip)",
+    )
+    ext_install.add_argument("zip_path", help=".visa-mcp-ext.zip path")
+    ext_install.add_argument(
+        "--force", action="store_true",
+        help="overwrite existing install",
+    )
+    ext_install.add_argument(
+        "--skip-verify", action="store_true",
+        help="(test only) skip checksum / manifest verification",
+    )
+    ext_install.add_argument(
+        "--dry-run", action="store_true",
+        help="show what would happen without writing",
+    )
+    ext_install.add_argument("--json", action="store_true")
+
+    ext_check = ext_sub.add_parser(
+        "check",
+        help="Check installed extensions (checksum / metadata)",
+    )
+    ext_check.add_argument(
+        "--extension-id", default=None,
+        help="check specific extension id (default: all)",
+    )
+    ext_check.add_argument("--json", action="store_true")
+    ext_check.add_argument(
+        "--strict", action="store_true",
+        help="warning -> exit 1 (default: warning ok)",
+    )
+
+    ext_catalog = ext_sub.add_parser(
+        "catalog",
+        help="List installed extensions catalog",
+    )
+    ext_catalog.add_argument("--json", action="store_true")
+
+    ext_paths = ext_sub.add_parser(
+        "paths",
+        help="Show extension install path resolver state "
+              "(v2.3: planning only, no behavior change)",
+    )
+    ext_paths.add_argument("--json", action="store_true")
+
     # ---- extension init (v2.2.0) ---------------------------------
     ext_init = ext_sub.add_parser(
         "init",
@@ -337,6 +384,127 @@ def _cmd_extension(args: argparse.Namespace) -> int:
             if data.get("output_path"):
                 print(f"  output: {data['output_path']}")
         return 0 if data.get("status") == "ok" else 1
+
+    if sub == "install":
+        from lab_executor.extension_install import (
+            install_definition_pack_from_zip,
+        )
+        if args.dry_run:
+            # v2.3: dry-run は zip verify のみ実行 (実 install せず)
+            from lab_executor.extension_integrity import (
+                verify_extension_package,
+            )
+            rep = verify_extension_package(args.zip_path)
+            data = rep if isinstance(rep, dict) else (
+                rep.to_dict() if hasattr(rep, "to_dict") else {}
+            )
+            data["dry_run"] = True
+            if args.json:
+                print(json.dumps(data, ensure_ascii=False, indent=2,
+                                  default=str))
+            else:
+                status = data.get("status", "?")
+                print(f"extension install --dry-run: verify "
+                      f"status={status}")
+            return 0 if data.get("status") == "ok" else 1
+        rep = install_definition_pack_from_zip(
+            args.zip_path,
+            force=args.force,
+            skip_verify=args.skip_verify,
+        )
+        data = rep.to_dict() if hasattr(rep, "to_dict") else rep
+        if args.json:
+            print(json.dumps(data, ensure_ascii=False, indent=2,
+                              default=str))
+        else:
+            print(f"extension install: status="
+                  f"{data.get('status', '?')}")
+            if data.get("install_path"):
+                print(f"  install_path: {data['install_path']}")
+        return 0 if data.get("status") == "ok" else 1
+
+    if sub == "check":
+        from lab_executor.extension_integrity import (
+            check_installed_extension,
+        )
+        from lab_executor.extension_install import list_installed_packs
+        packs = list_installed_packs()
+        if args.extension_id:
+            packs = [p for p in packs
+                      if p.get("extension_id") == args.extension_id]
+        results: list[dict] = []
+        worst_status = "ok"
+        for p in packs:
+            install_path = p.get("install_path") or p.get("path")
+            if install_path is None:
+                continue
+            rep = check_installed_extension(install_path)
+            d = rep if isinstance(rep, dict) else (
+                rep.to_dict() if hasattr(rep, "to_dict") else {}
+            )
+            d["extension_id"] = p.get("extension_id")
+            results.append(d)
+            if d.get("status") == "error":
+                worst_status = "error"
+            elif (d.get("status") == "warning"
+                    and worst_status != "error"):
+                worst_status = "warning"
+        out = {
+            "status": worst_status,
+            "checked_count": len(results),
+            "results": results,
+        }
+        if args.json:
+            print(json.dumps(out, ensure_ascii=False, indent=2,
+                              default=str))
+        else:
+            print(f"extension check: status={worst_status}, "
+                  f"checked={len(results)}")
+            for r in results:
+                print(f"  - {r.get('extension_id')}: "
+                      f"{r.get('status')}")
+        if worst_status == "ok":
+            return 0
+        if worst_status == "warning":
+            return 1 if args.strict else 0
+        return 1
+
+    if sub == "catalog":
+        from lab_executor.extension_catalog import list_catalog_installed
+        rep = list_catalog_installed()
+        data = rep.to_dict() if hasattr(rep, "to_dict") else rep
+        if args.json:
+            print(json.dumps(data, ensure_ascii=False, indent=2,
+                              default=str))
+        else:
+            entries = data.get("entries") or []
+            print(f"extension catalog: {len(entries)} pack(s) "
+                  f"installed")
+            for e in entries:
+                print(f"  - {e.get('extension_id')} "
+                      f"v{e.get('version', '?')} "
+                      f"[{e.get('support_level', '?')}]")
+        return 0
+
+    if sub == "paths":
+        from lab_executor.extension_paths import get_extension_paths
+        paths = get_extension_paths()
+        data = paths.to_dict()
+        if args.json:
+            print(json.dumps(data, ensure_ascii=False, indent=2,
+                              default=str))
+        else:
+            print("extension paths (v2.3, planning only):")
+            print(f"  current_default:         "
+                  f"{data['current_default']}")
+            print(f"  future_default_candidate: "
+                  f"{data['future_default_candidate']}")
+            print(f"  active_read_paths:")
+            for p in data["active_read_paths"]:
+                print(f"    - {p}")
+            print(f"  migration_required: "
+                  f"{data['migration_required']}")
+        return 0
 
     if sub == "init":
         from lab_executor.extension_authoring import init_extension_pack

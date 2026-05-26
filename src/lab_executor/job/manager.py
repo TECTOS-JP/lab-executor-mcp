@@ -17,12 +17,16 @@ import uuid
 from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    # v1.11: backend layer の top-level import を排除
-    # (KNOWN_V111_TO_RESOLVE 解消)。JobManager は外部 (server / CLI)
-    # から SessionManager / VisaManager を注入される composition root の
-    # 一段下。v2.0 では `InstrumentBackend` Protocol を持つ。
-    from visa_mcp.session_manager import SessionManager
-    from visa_mcp.visa_manager import VisaManager
+    # v2.3.0: lab-executor 側 Protocol へ置換 (v2.2 までは visa_mcp.*
+    # を参照していたが、TYPE_CHECKING 内からも分離後 repo の型を
+    # 使う方向に整理)。実体は外部から inject されるので、Protocol
+    # で構造的に表現すれば十分。
+    from lab_executor.backends.base import (
+        InstrumentBackend as VisaManager,  # legacy alias
+    )
+    from lab_executor.session import (
+        SessionFacade as SessionManager,  # legacy alias
+    )
 
 from lab_executor.experiment_ir import (
     CommandStep, Plan, WaitStep,

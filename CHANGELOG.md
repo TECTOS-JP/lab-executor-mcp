@@ -1,5 +1,103 @@
 # 変更履歴
 
+## v2.3.0 — Extension Lifecycle CLI + Path Migration Planning
+
+合言葉: **「v2.2 で作る CLI が揃ったので、v2.3 で install して使う
+CLI を揃える。path 移行は実装せず planning に留める」**
+
+v2.2.x で `extension init / instrument scaffold / doctor / package /
+verify-package` が揃った。v2.3.0 では **install → check → catalog**
+までを `lab-executor` 側 CLI で完結できるようにし、`~/.lab-executor/
+extensions/` への migration は **planning のみ** (path resolver +
+`extension paths` CLI) で実装は v2.4+。並走して `SessionFacade`
+Protocol 化と `JobManager` TYPE_CHECKING cleanup を実施。
+
+### 新規 CLI subcommands (P0)
+
+- **`lab-executor extension install <zip>`**: definition pack を
+  `~/.visa-mcp/extensions/` に install (`--dry-run` で verify のみ、
+  `--force` で上書き、`--skip-verify` は test 用)
+- **`lab-executor extension check`**: install 済 extension の整合性
+  検査 (checksum / manifest / metadata)。`--extension-id <id>` で
+  対象を絞れる。`--strict` で warning → exit 1 (default は exit 0)
+- **`lab-executor extension catalog`**: install 済 extension 一覧
+  (extension_id / version / support_level)
+- **`lab-executor extension paths`**: install path resolver の現状
+  を表示 (v2.3 では planning only、default 動作は v2.2 から不変)
+
+### Path migration planning
+
+`lab_executor.extension_paths.get_extension_paths()` 公開 API
+追加。`ExtensionPaths` dataclass で:
+
+- `current_default`: 現在 install 先 (`~/.visa-mcp/extensions/`)
+- `future_default_candidate`: 切替候補 (`~/.lab-executor/extensions/`)
+- `active_read_paths`: catalog / check が読む path 一覧 (v2.3 は
+  `current_default` 単独、v2.4 で dual-read 検討)
+- `migration_required`: v2.3 では常に `False`
+
+**v2.3 では default path 変更を行わない**。v2.4 で dual-read 設計、
+v2.5+ で default 切替判断、というロードマップを `paths` CLI 出力で
+明示する。
+
+### Internal cleanup (P1)
+
+- **`lab_executor.session.SessionFacade`** Protocol 新規追加
+  (`runtime_checkable`):
+  - `get_session(resource) -> Any` の最小 surface
+  - `server._SessionFacade` / `visa-mcp` 側 `SessionManager` 双方が
+    満たすことで、tool 層から見た session lookup の contract を明示
+- **`src/lab_executor/job/manager.py` TYPE_CHECKING cleanup**:
+  v2.2 まで残っていた `from visa_mcp.session_manager import
+  SessionManager` / `from visa_mcp.visa_manager import VisaManager`
+  を、lab-executor 側 Protocol へ置換 (`InstrumentBackend as
+  VisaManager` / `SessionFacade as SessionManager` legacy alias)。
+  これで `src/lab_executor/` 配下から `visa_mcp` 参照が完全に消えた
+  (TYPE_CHECKING 含む)
+
+### tests (`tests/test_v230_extension_lifecycle.py` 新規 12 件)
+
+- `test_extension_paths_module_importable` / `..._default_legacy_path`
+  / `..._to_dict`
+- `test_cli_extension_paths_help` / `..._json`
+- `test_cli_extension_install_help`
+- `test_cli_extension_check_help`
+- `test_cli_extension_catalog_help`
+- `test_session_facade_protocol_importable`
+- `test_session_facade_runtime_checkable` (内部 `_SessionFacade` が
+  Protocol を満たす確認)
+- `test_job_manager_type_checking_no_visa_mcp_reference`
+- `test_no_pyvisa_for_extension_paths_subprocess`
+- `test_mcp_tool_surface_unchanged` (43 + 7 = 50 不変)
+
+合計 **53 件 pass** (v2.0 + v2.1 + v2.2 + v2.3)
+
+### 互換性
+
+- API / package 構造 / MCP tool / DSL / extension pack 形式: 不変
+- **install path default**: `~/.visa-mcp/extensions/` (v2.2 から不変)
+- `.install_meta.json` schema: 不変
+- `SessionFacade` Protocol は新規追加のみ (既存 `_SessionFacade` /
+  `SessionManager` の挙動を変えない)
+- `JobManager` TYPE_CHECKING の rename は `visa_mcp` → 同名 alias
+  なので呼び出し側コードは無修正
+
+### v2.3.0 でやらないこと
+
+- `~/.lab-executor/extensions/` への default 切替
+- dual-read 実装 (v2.4 候補)
+- remote registry / signature / trust store
+- backend plugin system / replay backend
+- MCP tool 追加 / DSL schema 変更
+
+### v2.4+ 候補
+
+- `~/.lab-executor/extensions/` dual-read support
+- duplicate extension id の優先順位ルール
+- migration dry-run / migration command
+- catalog filtering (`--tag` / `--support-level`)
+- Replay backend 設計着手
+
 ## v2.2.1 — v2.2.0 レビュー応答 (docstring 更新 / --id help / diagnose --strict / README exit code)
 
 合言葉: **「v2.2.0 直後の docs / exit code policy 仕上げ」**

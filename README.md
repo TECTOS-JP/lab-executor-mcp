@@ -63,6 +63,13 @@ lab-executor extension doctor my_pack/
 # 4) Package + verify
 lab-executor extension package my_pack/ --output my_pack.visa-mcp-ext.zip
 lab-executor extension verify-package my_pack.visa-mcp-ext.zip
+
+# 5) Install + lifecycle (v2.3+)
+lab-executor extension install my_pack.visa-mcp-ext.zip --dry-run
+lab-executor extension install my_pack.visa-mcp-ext.zip
+lab-executor extension catalog          # installed pack 一覧
+lab-executor extension check            # checksum / manifest 検査
+lab-executor extension paths            # install path resolver 状態
 ```
 
 ### Exit code policy (v2.1.1)
