@@ -33,10 +33,11 @@ from lab_executor.extension_discovery import (
 class ExtensionMigrationAction:
     """1 件の推奨 action。
 
-    v2.5+ では action は **提案のみ**。v2.6 で `--copy-plan` を導入し
-    copy candidate を出せるようになったが、`apply_available` は引き
-    続き **常に False** で、実 copy / move / delete は行わない。
-    controlled apply は v2.7+ で検討。
+    v2.5+ では action は **提案情報のみ**。`apply_available` は引き
+    続き **常に False** (本 dataclass 経由で copy を実行することは
+    ない)。v2.7 で controlled apply を導入したが、実 copy 実行は
+    `ExtensionCopyPlan` / `apply_extension_copy_plan()` の厳格条件下
+    でのみ行う。`ExtensionMigrationAction` は recommend 用途に閉じる。
     """
     action: str
     extension_id: str | None
@@ -60,9 +61,11 @@ class ExtensionMigrationAction:
 class ExtensionCopyCandidate:
     """v2.6.0: legacy_only から new path への copy 候補 1 件。
 
-    `safe_to_copy=True` でも v2.6 では実 copy はしない。candidate は
-    **将来 v2.7+ で apply される予定の reference** であり、本 release
-    では情報提供のみ。
+    `safe_to_copy=True` でも v2.6 単独 (`--copy-plan` のみ) では実
+    copy はしない。v2.7 で `--copy-plan --apply` を併用した場合に
+    `apply_extension_copy_plan()` の厳格な事前条件下で **実 copy 対象
+    となる candidate**。`overwrite_required` は v2.7 でも常に False
+    (target 上書きはしない、target 既存なら apply 自体が blocked)。
     """
     extension_id: str
     source: Path
@@ -431,7 +434,11 @@ class ExtensionCopyApplyResult:
     - status: "ok" / "blocked" / "partial_failure"
     - copied / failed / skipped: copy 1 件ごとの記録 (dict)
     - manifest_path: `~/.lab-executor/migration_logs/...` に保存した
-      manifest の path (status=blocked 時は None もあり)
+      manifest の path。v2.7 では **status が ok / blocked /
+      partial_failure いずれの場合も保存する**ため原則として
+      非 None。manifest の保存自体が失敗したケースのみ None になり
+      うる (将来的には案 A: 保存失敗 → 全体 partial_failure 扱いに
+      格上げする方針。v2.8+ で実装検討)。
     - delete_performed / overwrite_performed: v2.7 では **常に False**
     - blocked_reasons: status=blocked / partial_failure 時の理由
     """

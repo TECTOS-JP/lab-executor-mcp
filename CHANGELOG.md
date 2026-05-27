@@ -1,5 +1,57 @@
 # 変更履歴
 
+## v2.7.1 — Docs / Review patch (v2.7 表記整合 + 仕様明文化)
+
+v2.7.0 レビュー反映。コード変更なし。
+
+### Docs / CLI 文言
+
+- `cli.py` argparse `description` を「dual-path extension discovery,
+  migration planning, copy-plan preview, **and controlled copy apply**
+  (v2.7)」へ更新。v2.6 表記を解消。
+- `cli.py` module docstring 末尾の「`~/.lab-executor/extensions/` への
+  切替は v2.7+ で判断」を「v2.8+ 以降の future release で判断」に
+  更新 (v2.7 では切替していないことを明示)。
+- `ExtensionMigrationAction` docstring: 「controlled apply は v2.7+
+  で検討」表現を v2.7 実装済の事実に合わせて書き直し。本 dataclass
+  は recommend 用途に閉じ、実 copy は `ExtensionCopyPlan` /
+  `apply_extension_copy_plan()` 経由のみという責務分離を明示。
+- `ExtensionCopyCandidate` docstring: 「将来 v2.7+ で apply される予定」
+  を v2.7 実装済へ更新。v2.7 で `--copy-plan --apply` を併用すれば
+  実 copy 対象になる、と書き直し。
+- `ExtensionCopyApplyResult.manifest_path` docstring を実装に合わせ
+  「v2.7 では ok / blocked / partial_failure すべてで保存するため
+  原則として非 None」に修正。manifest 保存自体が失敗したケースだけ
+  None になりうる、と注記。
+
+### `target_exists` の検出タイミング別 status 明文化
+
+`docs/extension_path_migration.md` に表で明示:
+
+| 検出タイミング | status | 動作 |
+|------|------|------|
+| pre-apply (copy_plan 段階で target が既存) | `blocked` | candidate=0、manifest 保存 |
+| during apply (copy 直前の再確認で target が出現) | `partial_failure` | skipped に記録、以降を fail-fast 停止 |
+
+いずれも **overwrite はしない**。後者は他プロセスの plan 表示後
+race ケース。
+
+### manifest 保存失敗時の方針 (v2.8+ 実装予定)
+
+docs に **案 A** を予約として明記:
+
+> manifest 保存に失敗した場合、実 copy の成否にかかわらず全体を
+> `partial_failure` 扱いに格上げし、`failed[]` に `manifest_write_
+> failed` を記録。manifest なしの copy 成功は audit 上「成功」と
+> みなさない。
+
+### Internal
+
+- version 2.7.0 → 2.7.1 (`__init__.py` / `pyproject.toml`)
+- コア logic (apply / plan / discovery) は無変更、tests 119 件 pass
+
+---
+
 ## v2.7.0 — Controlled Extension Copy Apply
 
 合言葉: **「v2.6 で copy 候補、v2.7 で実 copy。ただし source は触らず

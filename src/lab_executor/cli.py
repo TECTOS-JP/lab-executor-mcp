@@ -72,8 +72,9 @@ v2.5 で migration-plan 追加):
 - 1: validation / doctor warning / mismatch / ``--strict`` で warning
 - 2: usage error / 引数不足
 
-書き込み default は v2.6 でも ``~/.visa-mcp/extensions/`` 維持
-(legacy)。``~/.lab-executor/extensions/`` への切替は v2.7+ で判断。
+書き込み default は v2.7 でも ``~/.visa-mcp/extensions/`` 維持
+(legacy)。``~/.lab-executor/extensions/`` への切替は v2.8+ 以降の
+future release で判断。
 """
 from __future__ import annotations
 import argparse
@@ -87,8 +88,8 @@ def _build_parser() -> argparse.ArgumentParser:
         description=(
             "lab-executor-mcp: backend-independent experiment execution "
             "runtime CLI with dual-path extension discovery, migration "
-            "planning, and copy-plan preview (v2.6). For hardware-backed "
-            "operations, use `visa-mcp` CLI."
+            "planning, copy-plan preview, and controlled copy apply "
+            "(v2.7). For hardware-backed operations, use `visa-mcp` CLI."
         ),
     )
     parser.add_argument(

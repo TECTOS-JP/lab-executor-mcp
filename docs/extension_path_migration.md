@@ -165,6 +165,30 @@ v2.7 で追加された **controlled copy apply**。legacy にしかない pack
 }
 ```
 
+### `target_exists` の検出タイミング別 status (v2.7.1 明文化)
+
+`target_exists` は **検出されたタイミングで status が変わる**:
+
+| 検出タイミング | 結果 status | manifest |
+|------|-------|------|
+| pre-apply (`copy_plan` 段階で既に target が存在) | `blocked` | 保存 (copied=空) |
+| during apply (実 copy 直前の再確認で target が出現) | `partial_failure` | 保存 (skipped に記録) |
+
+いずれのケースでも **overwrite は行わない**。後者は他プロセスが
+plan 表示後に target を作ったレースケース。実装上は `copytree`
+直前にもう一度 `target.exists()` を確認し、存在すれば skipped に
+記録して以降の candidate を停止する (fail-fast)。
+
+### manifest 保存失敗時の方針 (v2.8+ で実装予定)
+
+現在は manifest 書き込み失敗時の挙動が未定義。v2.8 で次の **案 A**
+を実装予定:
+
+> manifest 保存に失敗した場合、実 copy の成否にかかわらず全体を
+> `partial_failure` 扱いに格上げし、`failed[]` に `manifest_write_
+> failed` を記録する。manifest なしの copy 成功は audit 上「成功」と
+> みなさない方針。
+
 ### v2.7 で **やらないこと**
 
 - source delete / legacy path 自動 cleanup
@@ -172,6 +196,8 @@ v2.7 で追加された **controlled copy apply**。legacy にしかない pack
 - install default 変更
 - duplicate 自動解決
 - 自動 rollback (manifest 保存のみで人手復旧前提)
+- copy 後の verify (v2.8 で導入予定: file_count / bytes 一致、
+  extension.yaml が読めること、`extension check` で通ること)
 
 ### blocked 例 (duplicate あり)
 
