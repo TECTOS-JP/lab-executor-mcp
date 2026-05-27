@@ -1,4 +1,4 @@
-"""lab-executor CLI (v2.10.x).
+"""lab-executor CLI (v2.11.x).
 
 v2.0 では minimal CLI / `serve` placeholder のみだったが、v2.1.0 で
 `serve --backend mock` を実装、v2.2.0 で authoring workflow CLI を
@@ -55,6 +55,16 @@ v2.6.0 追加 (Extension Migration Copy Plan):
   (``apply_available=False``)。duplicate / invalid_metadata / target
   既存などがあれば ``copy_plan.status="blocked"`` で candidate 生成を
   停止する
+
+v2.11.0 追加 (Cleanup / Rollback Apply Preflight):
+
+- `migration-log {rollback-plan,cleanup-plan} --preflight`: apply 可否
+  を機械的に評価する。実 ファイル変更は一切しない
+- `apply_supported=False` / `apply_available=False` 固定 (v2.11 は
+  preflight のみ、実 apply は v2.12+ で慎重に検討)
+- `required_confirmation`: 将来 `--confirm` で要求する token
+  (`cleanup:<count>:<manifest_stem>` / `rollback:<count>:<...>`)
+- `future_trash_root` を docs/preflight 出力に明示
 
 v2.10.0 追加 (Rollback / Cleanup Plan Refinement):
 
@@ -305,6 +315,13 @@ def _build_parser() -> argparse.ArgumentParser:
         "--latest", action="store_true",
         help="v2.10: use the latest extension_copy_apply manifest",
     )
+    mlog_rb.add_argument(
+        "--preflight", action="store_true",
+        help=(
+            "v2.11: evaluate apply preconditions instead of plan "
+            "output (no file changes, apply not implemented)"
+        ),
+    )
 
     mlog_cu = mlog_sub.add_parser(
         "cleanup-plan",
@@ -322,6 +339,13 @@ def _build_parser() -> argparse.ArgumentParser:
     mlog_cu.add_argument(
         "--latest", action="store_true",
         help="v2.10: use the latest extension_copy_apply manifest",
+    )
+    mlog_cu.add_argument(
+        "--preflight", action="store_true",
+        help=(
+            "v2.11: evaluate apply preconditions instead of plan "
+            "output (no file changes, apply not implemented)"
+        ),
     )
 
     # ---- extension migration-plan (v2.5.0) ----------------------
@@ -895,6 +919,8 @@ def _cmd_extension(args: argparse.Namespace) -> int:
             from lab_executor.extension_migration_log import (
                 plan_extension_rollback_from_log,
                 plan_extension_cleanup_from_log,
+                evaluate_rollback_apply_preconditions,
+                evaluate_cleanup_apply_preconditions,
             )
             mp, rc = _resolve_manifest(args)
             if mp is None:
@@ -905,6 +931,47 @@ def _cmd_extension(args: argparse.Namespace) -> int:
             else:
                 plan = plan_extension_cleanup_from_log(mp)
                 label = "cleanup-plan"
+
+            # v2.11: --preflight mode
+            if getattr(args, "preflight", False):
+                if mc == "rollback-plan":
+                    pf = evaluate_rollback_apply_preconditions(plan)
+                else:
+                    pf = evaluate_cleanup_apply_preconditions(plan)
+                pdata = pf.to_dict()
+                if args.json:
+                    print(json.dumps(pdata, ensure_ascii=False,
+                                      indent=2, default=str))
+                else:
+                    pre = pdata["preflight"]
+                    print(f"migration-log {label} --preflight: "
+                          f"status={pdata['status']}")
+                    print(f"  eligible:          {pre['eligible']}")
+                    print(f"  candidate_count:   "
+                          f"{pre['candidate_count']}")
+                    print(f"  apply_supported:   "
+                          f"{pdata['apply_supported']}")
+                    print(f"  apply_available:   "
+                          f"{pdata['apply_available']}")
+                    if pre["required_confirmation"]:
+                        print(f"  future --confirm:  "
+                              f"{pre['required_confirmation']}")
+                    for chk in pre["checks"]:
+                        print(f"  [{chk['status']:5s}] "
+                              f"{chk['check_id']}: {chk['message']}")
+                    for b in pre["blocked_reasons"]:
+                        print(f"  BLOCKED {b.get('reason_class')}: "
+                              f"{b.get('extension_id') or ''}")
+                    print(f"  future_trash_root: "
+                          f"{pre['future_trash_root']}")
+                    print(f"  note: {pdata['note']}")
+                # exit code: eligible=true -> 0、それ以外 -> 1
+                # v2.11 では apply_supported=false それ自体は error
+                # にしない (release 仕様)
+                if pdata["status"] == "ok":
+                    return 0
+                return 1
+
             data = plan.to_dict()
             if args.json:
                 print(json.dumps(data, ensure_ascii=False,

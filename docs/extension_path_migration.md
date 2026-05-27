@@ -165,6 +165,46 @@ v2.7 で追加された **controlled copy apply**。legacy にしかない pack
 }
 ```
 
+## v2.11: Apply Preflight (削除前提条件評価)
+
+```bash
+lab-executor extension migration-log cleanup-plan  --latest --preflight
+lab-executor extension migration-log rollback-plan --latest --preflight
+```
+
+実 ファイルは変更しない。**実 apply は v2.12+ で慎重に検討**。
+preflight は次を評価する:
+
+| Check | 内容 |
+|-------|------|
+| `has_candidates` | candidate >=1 |
+| `plan_blocked_reasons_empty` | plan に blocked が無い |
+| target / legacy source 存在 | preflight 時点で再確認 |
+| target ≠ legacy source | 同一 path だと事故防止のため block |
+
+`apply_supported` / `apply_available` は v2.11 では **常に False**。
+preflight が `eligible=true` でも実 apply はできない。
+
+### Confirmation token (v2.12+ で `--confirm` で要求)
+
+```
+cleanup:<candidate_count>:<manifest_stem>
+rollback:<candidate_count>:<manifest_stem>
+```
+
+v2.12+ で `cleanup-plan --apply --confirm cleanup:2:extension-copy-...`
+のように使う想定。v2.11 では preflight 出力に表示のみ。
+
+### Trash strategy (v2.12+ 方針)
+
+cleanup / rollback の実 apply 時は **完全削除せず trash 移動**を予定:
+
+```
+~/.lab-executor/migration_trash/<manifest_stem>/
+```
+
+preflight 出力に `future_trash_root` field で明示。
+
 ## v2.10: status semantics & `--latest`
 
 ### `--latest` flag
@@ -365,7 +405,9 @@ migration_required = False otherwise (new_only のみ等)
 | v2.8.0 | migration-log list / inspect / verify (実 copy 後の追跡 / 検証) | 実装済 |
 | v2.9.0 | rollback-plan / cleanup-plan (plan only、削除なし) | 実装済 |
 | v2.10.0 | plan refinement (`--latest` / `already_absent` 分離 / status 整理 / verify 統合) | 実装済 |
-| v2.11+ | rollback / cleanup `--apply` (慎重に検討) | 検討中 |
+| v2.11.0 | cleanup / rollback `--preflight` (apply 前提条件評価、削除なし) | 実装済 |
+| v2.12+ | controlled cleanup `--apply` (trash 移動、`--confirm` 必須) | 検討中 |
+| v2.13+ | controlled rollback `--apply` | 検討中 |
 | v2.9+   | install default を `~/.lab-executor/extensions/` へ切替判断 | 検討中 |
 
 順序は **検出 → 計画 → copy-plan → apply → default 切替** で固定。

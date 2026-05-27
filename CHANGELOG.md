@@ -1,5 +1,130 @@
 # 変更履歴
 
+## v2.11.0 — Cleanup / Rollback Apply Preflight
+
+合言葉: **「削除実行に進む直前に、許可条件だけを固定する」**
+
+v2.10 で plan refinement が完了。次は削除系 apply に進む前に **実行
+可能か機械的に評価する preflight だけ**を入れる段階。実 ファイル変更
+は v2.11 でも一切しない。
+
+### 新規 API (`extension_migration_log.py`)
+
+```python
+@dataclass(frozen=True)
+class ApplyPreconditionCheck:
+    check_id: str
+    status: str   # "ok" / "warning" / "error"
+    message: str
+    details: dict
+
+@dataclass(frozen=True)
+class ApplyPreflightResult:
+    operation: str
+    status: str
+    eligible: bool
+    apply_supported: bool   # v2.11 では常に False
+    apply_available: bool   # v2.11 では常に False
+    candidate_count: int
+    checks: list[ApplyPreconditionCheck]
+    blocked_reasons: list[dict]
+    required_confirmation: str | None
+    future_trash_root: str = "~/.lab-executor/migration_trash"
+    note: str
+
+def evaluate_cleanup_apply_preconditions(plan) -> ApplyPreflightResult
+def evaluate_rollback_apply_preconditions(plan) -> ApplyPreflightResult
+```
+
+### 評価する Precondition
+
+**cleanup-plan preflight**:
+- `has_candidates`: candidate >=1
+- `plan_blocked_reasons_empty`: plan に blocked が無い
+- candidate ごとの `target.exists()` / `legacy_source.exists()`
+- target が legacy source と同一 path でないこと
+
+**rollback-plan preflight**:
+- `has_candidates`: candidate >=1
+- `plan_blocked_reasons_empty`
+- candidate ごとの `target.exists()` / `legacy_source.exists()`
+- target ≠ legacy source
+
+いずれも eligible=true でも `apply_available=False` / `apply_supported
+=False` 固定。
+
+### Confirmation token
+
+`<kind>:<count>:<manifest_stem>` (v2.12+ で `--confirm` で要求予定):
+
+```
+cleanup:2:extension-copy-20260527-103012
+rollback:1:extension-copy-20260527-103012
+```
+
+eligible 時に `required_confirmation` field に格納。v2.11 では note /
+出力で表示のみ。
+
+### 新規 CLI flag: `--preflight`
+
+```bash
+lab-executor extension migration-log cleanup-plan  --latest --preflight
+lab-executor extension migration-log rollback-plan --latest --preflight
+```
+
+- `--latest` / 明示 manifest / `--json` と組合せ可能
+- Exit code: `eligible=true` → 0、`eligible=false` → 1
+- `apply_supported=false` 自体は error にしない (release 仕様)
+
+### Trash / Backup strategy (v2.12+ で実装予定)
+
+cleanup / rollback の実 apply 時は **完全削除せず trash 移動**:
+
+```
+~/.lab-executor/migration_trash/<manifest_stem>/
+```
+
+preflight 出力に `future_trash_root` field で明示済。
+
+### v2.11 で **やらないこと**
+
+- cleanup `--apply` / rollback `--apply`
+- target 削除 / legacy source 削除 / trash 移動の実行
+- source 復元 / overwrite / install default 変更
+- active_read_paths 優先順位変更
+- manifest schema 破壊変更
+
+### Tests (200 件 pass)
+
+`tests/test_v2_11_apply_preflight.py`: 19 件
+
+- cleanup preflight: ok / no_candidates_blocked / plan_blocked /
+  verify_error_blocked / confirmation_token_format / apply_available=False
+- rollback preflight: ok / no_candidates_blocked /
+  legacy_missing_blocked / apply_available=False
+- **preflight_does_not_change_files** (snapshot 比較で固定)
+- CLI: cleanup-plan/rollback-plan --preflight JSON / --latest 併用 /
+  blocked → exit 1
+- Boundary: PyVISA / `visa_mcp` 非依存
+- 回帰: install_default / tool surface 不変
+
+### docs / cli docstring
+
+- `docs/extension_path_migration.md`: v2.11 セクション (preflight、
+  confirmation token、trash strategy) を追加、roadmap 表を更新
+- `cli.py` module docstring を v2.10.x → v2.11.x
+
+### 互換性
+
+- 既存 `rollback-plan` / `cleanup-plan` (default、`--preflight` 無し)
+  の挙動は v2.10 と完全同一
+- `ApplyPreflightResult.to_dict()` の `schema_version` は新規 `v2.11`
+  (plan schema とは別物)
+- MCP tool / DSL / extension pack 形式 / `.install_meta.json` /
+  `default_extensions_dir()` 返り値、すべて不変
+
+---
+
 ## v2.10.0 — Rollback / Cleanup Plan Refinement
 
 合言葉: **「削除実行に進む前に、plan の精度と UX を上げる」**

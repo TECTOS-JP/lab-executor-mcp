@@ -1,4 +1,5 @@
-"""v2.8.0 / v2.9.0: Migration Log Inspection + Rollback/Cleanup Plan.
+"""v2.8.0 / v2.9.0 / v2.10.0 / v2.11.0: Migration Log Inspection,
+Rollback / Cleanup Plan, Apply Preflight.
 
 v2.7 で `~/.lab-executor/migration_logs/extension-copy-<stamp>.json`
 に保存し始めた apply manifest を、CLI / API で **読む / 検証する /
@@ -786,3 +787,223 @@ def plan_extension_cleanup_from_log(
     else:
         plan.status = "ok"
     return plan
+
+
+# ============================================================
+# v2.11.0: Cleanup / Rollback Apply Preflight (plan only)
+# ============================================================
+
+
+@dataclass(frozen=True)
+class ApplyPreconditionCheck:
+    """1 件の precondition 評価結果。"""
+    check_id: str
+    status: str  # "ok" / "warning" / "error"
+    message: str
+    details: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "check_id": self.check_id,
+            "status": self.status,
+            "message": self.message,
+            "details": dict(self.details),
+        }
+
+
+@dataclass(frozen=True)
+class ApplyPreflightResult:
+    """v2.11.0: cleanup / rollback apply の preflight 結果。
+
+    v2.11 では **apply は実装しない** ため:
+
+    - `apply_supported`: 常に False (v2.12+ で True 候補)
+    - `apply_available`: 常に False (eligible でも実行は不可)
+    - `required_confirmation`: 将来 `--confirm` で要求する token
+      (v2.12+ で実利用、v2.11 では表示のみ)
+    """
+    operation: str
+    status: str
+    eligible: bool
+    apply_supported: bool
+    apply_available: bool
+    candidate_count: int
+    manifest_path: Path
+    checks: list[ApplyPreconditionCheck] = field(default_factory=list)
+    blocked_reasons: list[dict[str, Any]] = field(default_factory=list)
+    required_confirmation: str | None = None
+    future_trash_root: str = "~/.lab-executor/migration_trash"
+    note: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "operation": self.operation,
+            "status": self.status,
+            "manifest_path": str(self.manifest_path),
+            "apply_supported": self.apply_supported,
+            "apply_available": self.apply_available,
+            "preflight": {
+                "eligible": self.eligible,
+                "candidate_count": self.candidate_count,
+                "checks": [c.to_dict() for c in self.checks],
+                "blocked_reasons": list(self.blocked_reasons),
+                "required_confirmation": self.required_confirmation,
+                "future_trash_root": self.future_trash_root,
+            },
+            "note": self.note,
+            "schema_version": "v2.11",
+        }
+
+
+def _confirmation_token(kind: str, count: int, mp: Path) -> str:
+    return f"{kind}:{count}:{mp.stem}"
+
+
+def evaluate_cleanup_apply_preconditions(
+    plan: ExtensionCleanupPlan,
+) -> ApplyPreflightResult:
+    """v2.11.0: cleanup-plan を受け取り、apply 可否を評価する。"""
+    checks: list[ApplyPreconditionCheck] = []
+    blocked: list[dict[str, Any]] = []
+
+    cand = len(plan.candidates)
+    if cand >= 1:
+        checks.append(ApplyPreconditionCheck(
+            "has_candidates", "ok",
+            f"{cand} cleanup candidate(s) available"))
+    else:
+        checks.append(ApplyPreconditionCheck(
+            "has_candidates", "error", "No cleanup candidates"))
+        blocked.append({"reason_class": "no_cleanup_candidates"})
+
+    if plan.blocked_reasons:
+        checks.append(ApplyPreconditionCheck(
+            "plan_blocked_reasons_empty", "error",
+            f"cleanup-plan has {len(plan.blocked_reasons)} blocked "
+            "reasons; resolve before apply"))
+        for r in plan.blocked_reasons:
+            blocked.append({
+                "reason_class": r.get("reason_class", "plan_blocked"),
+                "extension_id": r.get("extension_id"),
+                "message": r.get("message", ""),
+            })
+    else:
+        checks.append(ApplyPreconditionCheck(
+            "plan_blocked_reasons_empty", "ok",
+            "no plan-level blocked reasons"))
+
+    for c in plan.candidates:
+        if not c.copied_target.exists():
+            blocked.append({
+                "reason_class": "target_missing_at_preflight",
+                "extension_id": c.extension_id,
+                "target": str(c.copied_target),
+            })
+        if not c.legacy_source.exists():
+            blocked.append({
+                "reason_class": "legacy_source_missing_at_preflight",
+                "extension_id": c.extension_id,
+                "legacy_source": str(c.legacy_source),
+            })
+        if c.copied_target == c.legacy_source:
+            blocked.append({
+                "reason_class": "target_equals_legacy_source",
+                "extension_id": c.extension_id,
+                "path": str(c.copied_target),
+            })
+
+    eligible = not blocked and cand >= 1
+    status = "ok" if eligible else "error"
+    token = (
+        _confirmation_token("cleanup", cand, plan.manifest_path)
+        if eligible else None
+    )
+    note = (
+        "v2.11 does not delete files. Preflight only. "
+        f"Future apply (v2.12+) will require --confirm {token}"
+        if token else "v2.11 does not delete files. Preflight only."
+    )
+    return ApplyPreflightResult(
+        operation="cleanup_apply_preflight",
+        status=status, eligible=eligible,
+        apply_supported=False, apply_available=False,
+        candidate_count=cand,
+        manifest_path=plan.manifest_path,
+        checks=checks, blocked_reasons=blocked,
+        required_confirmation=token, note=note,
+    )
+
+
+def evaluate_rollback_apply_preconditions(
+    plan: ExtensionRollbackPlan,
+) -> ApplyPreflightResult:
+    """v2.11.0: rollback-plan を受け取り、apply 可否を評価する。"""
+    checks: list[ApplyPreconditionCheck] = []
+    blocked: list[dict[str, Any]] = []
+
+    cand = len(plan.candidates)
+    if cand >= 1:
+        checks.append(ApplyPreconditionCheck(
+            "has_candidates", "ok",
+            f"{cand} rollback candidate(s) available"))
+    else:
+        checks.append(ApplyPreconditionCheck(
+            "has_candidates", "error", "No rollback candidates"))
+        blocked.append({"reason_class": "no_rollback_candidates"})
+
+    if plan.blocked_reasons:
+        checks.append(ApplyPreconditionCheck(
+            "plan_blocked_reasons_empty", "error",
+            f"rollback-plan has {len(plan.blocked_reasons)} blocked "
+            "reasons; resolve before apply"))
+        for r in plan.blocked_reasons:
+            blocked.append({
+                "reason_class": r.get("reason_class", "plan_blocked"),
+                "extension_id": r.get("extension_id"),
+                "message": r.get("message", ""),
+            })
+    else:
+        checks.append(ApplyPreconditionCheck(
+            "plan_blocked_reasons_empty", "ok",
+            "no plan-level blocked reasons"))
+
+    for c in plan.candidates:
+        if not c.target.exists():
+            blocked.append({
+                "reason_class": "target_missing_at_preflight",
+                "extension_id": c.extension_id,
+                "target": str(c.target),
+            })
+        if c.legacy_source is None or not c.legacy_source.exists():
+            blocked.append({
+                "reason_class": "legacy_source_missing_at_preflight",
+                "extension_id": c.extension_id,
+            })
+        if (c.legacy_source is not None
+                and c.target == c.legacy_source):
+            blocked.append({
+                "reason_class": "target_equals_legacy_source",
+                "extension_id": c.extension_id,
+                "path": str(c.target),
+            })
+
+    eligible = not blocked and cand >= 1
+    status = "ok" if eligible else "error"
+    token = (
+        _confirmation_token("rollback", cand, plan.manifest_path)
+        if eligible else None
+    )
+    note = (
+        "v2.11 does not delete files. Preflight only. "
+        f"Future apply (v2.12+) will require --confirm {token}"
+        if token else "v2.11 does not delete files. Preflight only."
+    )
+    return ApplyPreflightResult(
+        operation="rollback_apply_preflight",
+        status=status, eligible=eligible,
+        apply_supported=False, apply_available=False,
+        candidate_count=cand,
+        manifest_path=plan.manifest_path,
+        checks=checks, blocked_reasons=blocked,
+        required_confirmation=token, note=note,
+    )
