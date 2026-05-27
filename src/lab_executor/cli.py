@@ -1,4 +1,4 @@
-"""lab-executor CLI (v2.8.x).
+"""lab-executor CLI (v2.9.x).
 
 v2.0 では minimal CLI / `serve` placeholder のみだったが、v2.1.0 で
 `serve --backend mock` を実装、v2.2.0 で authoring workflow CLI を
@@ -56,6 +56,17 @@ v2.6.0 追加 (Extension Migration Copy Plan):
   既存などがあれば ``copy_plan.status="blocked"`` で candidate 生成を
   停止する
 
+v2.9.0 追加 (Rollback Plan / Cleanup Plan):
+
+- ``extension migration-log rollback-plan <manifest>``: copy を取り
+  消すなら何が対象になるかを表示。target が無い / legacy source が
+  無い / manifest 改ざんで blocked。**実 削除は一切しない**
+- ``extension migration-log cleanup-plan <manifest>``: copied target
+  が verify ok の場合に legacy source を整理する候補を表示。target
+  に問題があれば blocked、source が既に無ければ
+  ``already_cleaned_or_missing`` warning。**実 削除は一切しない**
+- どちらも ``apply_available=False`` 固定、`--apply` は未実装
+
 v2.8.0 追加 (Migration Log Inspection + Copied Pack Verification):
 
 - ``extension migration-log list`` / ``inspect`` / ``verify``: v2.7 で
@@ -99,9 +110,9 @@ def _build_parser() -> argparse.ArgumentParser:
         description=(
             "lab-executor-mcp: backend-independent experiment execution "
             "runtime CLI with dual-path extension discovery, migration "
-            "planning, copy-plan preview, controlled copy apply, and "
-            "migration log inspection (v2.8). For hardware-backed "
-            "operations, use `visa-mcp` CLI."
+            "planning, copy-plan preview, controlled copy apply, log "
+            "inspection, and rollback/cleanup planning (v2.9). For "
+            "hardware-backed operations, use `visa-mcp` CLI."
         ),
     )
     parser.add_argument(
@@ -247,6 +258,29 @@ def _build_parser() -> argparse.ArgumentParser:
         "--strict", action="store_true",
         help="treat warning as exit 1 (default: exit 0)",
     )
+
+    # v2.9.0: rollback-plan / cleanup-plan (plan only, no file changes)
+    mlog_rb = mlog_sub.add_parser(
+        "rollback-plan",
+        help=(
+            "v2.9: show what would be reverted if copy were undone "
+            "(plan only; no file changes)"
+        ),
+    )
+    mlog_rb.add_argument("manifest", help="manifest .json path")
+    mlog_rb.add_argument("--json", action="store_true")
+    mlog_rb.add_argument("--strict", action="store_true")
+
+    mlog_cu = mlog_sub.add_parser(
+        "cleanup-plan",
+        help=(
+            "v2.9: show legacy source candidates that could be "
+            "cleaned up (plan only; no file changes)"
+        ),
+    )
+    mlog_cu.add_argument("manifest", help="manifest .json path")
+    mlog_cu.add_argument("--json", action="store_true")
+    mlog_cu.add_argument("--strict", action="store_true")
 
     # ---- extension migration-plan (v2.5.0) ----------------------
     ext_mig = ext_sub.add_parser(
@@ -776,9 +810,65 @@ def _cmd_extension(args: argparse.Namespace) -> int:
                 return 1 if getattr(args, "strict", False) else 0
             return 1
 
+        if mc in ("rollback-plan", "cleanup-plan"):
+            from lab_executor.extension_migration_log import (
+                plan_extension_rollback_from_log,
+                plan_extension_cleanup_from_log,
+            )
+            if mc == "rollback-plan":
+                plan = plan_extension_rollback_from_log(args.manifest)
+                label = "rollback-plan"
+            else:
+                plan = plan_extension_cleanup_from_log(args.manifest)
+                label = "cleanup-plan"
+            data = plan.to_dict()
+            if args.json:
+                print(json.dumps(data, ensure_ascii=False,
+                                  indent=2, default=str))
+            else:
+                s = data["summary"]
+                print(f"migration-log {label}: "
+                      f"status={data['status']}")
+                if mc == "rollback-plan":
+                    print(f"  rollback_candidates: "
+                          f"{s['rollback_candidates']}")
+                else:
+                    print(f"  cleanup_candidates:  "
+                          f"{s['cleanup_candidates']}")
+                print(f"  blocked: {s['blocked']}")
+                print(f"  warnings: {s['warnings']}")
+                for c in data["candidates"]:
+                    eid = c.get("extension_id", "?")
+                    print(f"  CANDIDATE {eid}")
+                    if mc == "rollback-plan":
+                        print(f"    target:        {c['target']}")
+                        print(f"    legacy_source: "
+                              f"{c.get('legacy_source')}")
+                    else:
+                        print(f"    legacy_source: "
+                              f"{c['legacy_source']}")
+                        print(f"    copied_target: "
+                              f"{c['copied_target']}")
+                    print(f"    safe_to_plan:  {c['safe_to_plan']}")
+                for b in data["blocked_reasons"]:
+                    print(f"  BLOCKED {b.get('reason_class')}: "
+                          f"{b.get('extension_id') or ''}")
+                for w in data["warnings"]:
+                    print(f"  WARN    {w.get('warning_class')}: "
+                          f"{w.get('extension_id') or ''}")
+                print(f"  apply_available: "
+                      f"{data['apply_available']}")
+                print("  (no files were changed)")
+            st = data["status"]
+            if st == "ok":
+                return 0
+            if st == "warning":
+                return 1 if getattr(args, "strict", False) else 0
+            return 1
+
         print(
             "extension migration-log: subcommand required "
-            "(list / inspect / verify)",
+            "(list / inspect / verify / rollback-plan / cleanup-plan)",
             file=sys.stderr,
         )
         return 2

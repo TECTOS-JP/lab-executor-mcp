@@ -165,6 +165,25 @@ v2.7 で追加された **controlled copy apply**。legacy にしかない pack
 }
 ```
 
+## Command matrix (which one to use when)
+
+| コマンド | 目的 | 実ファイル変更 |
+|----------|------|---|
+| `migration-log verify <manifest>` | copy 結果が健全か確認 | なし |
+| `migration-log rollback-plan <manifest>` | 戻すなら何を target 削除候補にするか表示 | なし |
+| `migration-log cleanup-plan <manifest>` | legacy source 整理候補を表示 (target が verify ok 前提) | なし |
+| `migration-log rollback --apply` | **未実装** (v2.10+ 候補) | — |
+| `migration-log cleanup --apply` | **未実装** (v2.10+ 候補) | — |
+
+`rollback-plan` と `cleanup-plan` は **方向が逆**:
+
+- `rollback-plan` = migration を **取り消す**方向 → target 側を削除
+  候補、legacy source が必要
+- `cleanup-plan` = migration を **進める**方向 → legacy source を
+  削除候補、target が verify ok 必要
+
+混同すると危険なので、目的と削除対象が逆になることを意識すること。
+
 ## `lab-executor extension migration-log` (v2.8)
 
 ```bash
@@ -314,7 +333,8 @@ migration_required = False otherwise (new_only のみ等)
 | v2.6.0 | migration-plan --copy-plan (copy 候補生成、実 copy なし) | 実装済 |
 | v2.7.0 | Controlled `--apply` (実 copy、no delete / no overwrite) | 実装済 |
 | v2.8.0 | migration-log list / inspect / verify (実 copy 後の追跡 / 検証) | 実装済 |
-| v2.9.0 | rollback-plan / cleanup-plan (plan only) | 検討中 |
+| v2.9.0 | rollback-plan / cleanup-plan (plan only、削除なし) | 実装済 |
+| v2.10+ | rollback / cleanup `--apply` (慎重に検討) | 検討中 |
 | v2.9+   | install default を `~/.lab-executor/extensions/` へ切替判断 | 検討中 |
 
 順序は **検出 → 計画 → copy-plan → apply → default 切替** で固定。

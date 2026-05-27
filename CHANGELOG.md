@@ -1,5 +1,143 @@
 # 変更履歴
 
+## v2.9.0 — Extension Rollback / Cleanup Planning
+
+合言葉: **「v2.7 で copy、v2.8 で verify、v2.9 で戻すか進めるかの
+計画。まだ削除しない」**
+
+v2.8 で `verify_extension_migration_log()` を使い copy 結果を検証
+できるようになった次の段階。**rollback (取り消し)** と **cleanup
+(legacy 整理)** の方向性が逆の 2 種類の計画を CLI / API で出せる
+ようにする。実削除は v2.9 でも一切しない (`apply_available=False`
+固定)。
+
+### 新規 API (`extension_migration_log.py`)
+
+```python
+@dataclass(frozen=True)
+class ExtensionRollbackCandidate:
+    extension_id: str
+    target: Path                  # 取り消し時に削除候補
+    legacy_source: Path | None    # 戻る先 (存在必須)
+    target_exists: bool
+    legacy_source_exists: bool
+    safe_to_plan: bool
+    apply_available: bool = False
+
+@dataclass
+class ExtensionRollbackPlan:
+    status: str / candidates / blocked_reasons / warnings
+    apply_available: bool = False
+
+@dataclass(frozen=True)
+class ExtensionCleanupCandidate:
+    extension_id: str
+    legacy_source: Path           # 整理時に削除候補
+    copied_target: Path           # verify ok 前提
+    target_verified: bool
+    legacy_source_exists: bool
+    safe_to_plan: bool
+    apply_available: bool = False
+
+@dataclass
+class ExtensionCleanupPlan:
+    status: str / candidates / blocked_reasons / warnings
+    apply_available: bool = False
+
+def plan_extension_rollback_from_log(manifest_path) -> ExtensionRollbackPlan
+def plan_extension_cleanup_from_log(manifest_path)  -> ExtensionCleanupPlan
+```
+
+### rollback-plan 条件
+
+**candidate**:
+- manifest 読める / schema 対応
+- copied[] に target がある、target が存在する
+- legacy source が存在する (戻る先が必要)
+
+**blocked**:
+- `target_missing` (既に消えている)
+- `legacy_source_missing` (戻す先が無い)
+- `delete_performed_unexpected` / `overwrite_performed_unexpected`
+  (manifest 改ざん)
+- `manifest_schema_unsupported` / `manifest_not_found`
+
+### cleanup-plan 条件
+
+**candidate**:
+- manifest 読める / schema 対応
+- target が存在し `extension.yaml` が読め `extension_id` 一致 (verify
+  ok 相当)
+- legacy source が存在する
+
+**blocked**:
+- `target_missing` / `target_extension_yaml_missing` /
+  `target_extension_yaml_unreadable` / `extension_id_mismatch`
+- `delete_performed_unexpected` / `overwrite_performed_unexpected`
+- `manifest_schema_unsupported`
+
+**warning** (candidate にしない):
+- `already_cleaned_or_missing` (legacy source が既に無い → 整理不要)
+
+### rollback ↔ cleanup の **方向が逆**
+
+| Plan | 目的 | 削除候補 | 必要な前提 |
+|------|------|----------|------------|
+| rollback-plan | migration を **取り消す** | target | legacy source あり |
+| cleanup-plan  | migration を **進める**   | legacy source | target が verify ok |
+
+混同すると危険なため、docs に command matrix を追加した。
+
+### 新規 CLI
+
+```bash
+lab-executor extension migration-log rollback-plan <manifest> [--json] [--strict]
+lab-executor extension migration-log cleanup-plan  <manifest> [--json] [--strict]
+```
+
+Exit code は既存の `verify` と同じ (ok=0、warning=0/`--strict`で1、
+error=1、usage=2)。candidate あり時は `plan-only` warning が必ず
+入るため、default の status は warning になる (実 apply はまだ
+できない、という reminder)。
+
+### v2.9 で **やらないこと**
+
+- rollback `--apply` / cleanup `--apply`
+- target 削除 / legacy source 削除 / source 復元
+- overwrite / install default 変更
+- active_read_paths 優先順位変更
+- extension pack / `.install_meta.json` schema 変更
+
+### Tests (163 件 pass)
+
+`tests/test_v290_rollback_cleanup_plan.py`: 22 件
+
+- rollback: ok / target_missing / legacy_source_missing /
+  schema_unsupported / delete_performed_unexpected / **does not
+  delete files** (snapshot 比較で固定)
+- cleanup: ok / target_missing / extension_id_mismatch /
+  source_missing → already_cleaned warning / overwrite_unexpected /
+  **does not delete files**
+- CLI: rollback-plan / cleanup-plan の help / JSON / `--strict`
+- Boundary: PyVISA / `visa_mcp` 非依存 subprocess gate
+- 回帰: install_default / tool surface 不変
+
+### docs / cli docstring
+
+- `docs/extension_path_migration.md`: command matrix 追加 (rollback
+  と cleanup の方向の違いを明示)、ロードマップ表に v2.9 を実装済と
+  して追加
+- `cli.py` module docstring を v2.8.x → v2.9.x
+
+### 互換性
+
+- `ExtensionCopyApplyResult` / `MigrationLogVerificationResult` 等
+  既存 API は無変更
+- MCP tool / DSL / extension pack 形式 / `.install_meta.json` /
+  `default_extensions_dir()` 返り値、すべて不変
+
+---
+
 ## v2.8.0 — Migration Log Inspection + Copied Pack Verification
 
 合言葉: **「v2.7 で copy した結果を追跡・検証できるようにする。
