@@ -1,4 +1,4 @@
-"""lab-executor CLI (v2.11.x).
+"""lab-executor CLI (v2.12.x).
 
 v2.0 では minimal CLI / `serve` placeholder のみだったが、v2.1.0 で
 `serve --backend mock` を実装、v2.2.0 で authoring workflow CLI を
@@ -55,6 +55,17 @@ v2.6.0 追加 (Extension Migration Copy Plan):
   (``apply_available=False``)。duplicate / invalid_metadata / target
   既存などがあれば ``copy_plan.status="blocked"`` で candidate 生成を
   停止する
+
+v2.12.0 追加 (Controlled Cleanup Apply):
+
+- `migration-log cleanup-plan --apply --confirm <token>`: cleanup
+  candidate を **trash 移動**で実行する。`--confirm` 必須、apply 直前
+  に plan + preflight を再計算、trash target が既存なら blocked、
+  cross-device error は failed (copy+delete fallback なし)、partial
+  failure は fail-fast、cleanup manifest を必ず保存
+- **permanent_delete_performed=False / overwrite_performed=False
+  固定**。完全削除も上書きもしない (trash 移動のみ)
+- rollback `--apply` は v2.12 でも未実装 (exit 2)
 
 v2.11.0 追加 (Cleanup / Rollback Apply Preflight):
 
@@ -322,6 +333,17 @@ def _build_parser() -> argparse.ArgumentParser:
             "output (no file changes, apply not implemented)"
         ),
     )
+    mlog_rb.add_argument(
+        "--apply", action="store_true",
+        help=(
+            "v2.12: rollback apply is NOT implemented; this flag "
+            "returns exit 2"
+        ),
+    )
+    mlog_rb.add_argument(
+        "--confirm", default=None,
+        help="placeholder; rollback apply not implemented",
+    )
 
     mlog_cu = mlog_sub.add_parser(
         "cleanup-plan",
@@ -345,6 +367,20 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             "v2.11: evaluate apply preconditions instead of plan "
             "output (no file changes, apply not implemented)"
+        ),
+    )
+    mlog_cu.add_argument(
+        "--apply", action="store_true",
+        help=(
+            "v2.12: execute cleanup apply (legacy source -> trash "
+            "move). Requires --confirm. Never permanently deletes."
+        ),
+    )
+    mlog_cu.add_argument(
+        "--confirm", default=None,
+        help=(
+            "v2.12: confirmation token from --preflight output "
+            "(format: cleanup:<count>:<manifest_stem>)"
         ),
     )
 
@@ -931,6 +967,65 @@ def _cmd_extension(args: argparse.Namespace) -> int:
             else:
                 plan = plan_extension_cleanup_from_log(mp)
                 label = "cleanup-plan"
+
+            # v2.12: --apply mode (cleanup-plan only)
+            if mc == "cleanup-plan" and getattr(args, "apply", False):
+                from lab_executor.extension_migration_log import (
+                    apply_extension_cleanup_plan,
+                )
+                if not getattr(args, "confirm", None):
+                    print(
+                        "cleanup-plan --apply requires --confirm "
+                        "<token> (run --preflight first)",
+                        file=sys.stderr,
+                    )
+                    return 2
+                ap = apply_extension_cleanup_plan(
+                    mp, confirm=args.confirm,
+                )
+                adata = ap.to_dict()
+                if args.json:
+                    print(json.dumps(adata, ensure_ascii=False,
+                                      indent=2, default=str))
+                else:
+                    print(f"cleanup-plan --apply: "
+                          f"status={adata['status']}")
+                    for m in adata["moved_to_trash"]:
+                        print(f"  TRASHED {m['extension_id']}")
+                        print(f"    from: {m['from']}")
+                        print(f"    to:   {m['to']}")
+                    for f in adata["failed"]:
+                        print(f"  FAILED  {f.get('reason_class')}: "
+                              f"{f.get('extension_id') or ''}")
+                    for s in adata["skipped"]:
+                        print(f"  SKIPPED {s.get('reason_class')}: "
+                              f"{s.get('extension_id') or ''}")
+                    for b in adata["blocked_reasons"]:
+                        print(f"  BLOCKED {b.get('reason_class')}")
+                    if adata["trash_root"]:
+                        print(f"  trash_root: {adata['trash_root']}")
+                    if adata["manifest_path"]:
+                        print(f"  manifest:   "
+                              f"{adata['manifest_path']}")
+                    print(f"  permanent_delete_performed: "
+                          f"{adata['permanent_delete_performed']}")
+                    print(f"  overwrite_performed:        "
+                          f"{adata['overwrite_performed']}")
+                    print(f"  trash_move_performed:       "
+                          f"{adata['trash_move_performed']}")
+                if adata["status"] == "ok":
+                    return 0
+                return 1
+
+            # v2.12: rollback-plan --apply は未実装
+            if (mc == "rollback-plan"
+                    and getattr(args, "apply", False)):
+                print(
+                    "rollback-plan --apply is not implemented "
+                    "(v2.13+ candidate)",
+                    file=sys.stderr,
+                )
+                return 2
 
             # v2.11: --preflight mode
             if getattr(args, "preflight", False):

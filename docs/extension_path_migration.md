@@ -165,6 +165,69 @@ v2.7 で追加された **controlled copy apply**。legacy にしかない pack
 }
 ```
 
+## v2.12: Controlled Cleanup Apply (trash 移動)
+
+```bash
+# 1. preflight で confirmation token を取得
+lab-executor extension migration-log cleanup-plan --latest --preflight --json
+
+# 2. token を --confirm に渡して apply
+lab-executor extension migration-log cleanup-plan --latest --apply \
+  --confirm cleanup:2:extension-copy-20260527-103012
+```
+
+### 安全保証 (実装で固定)
+
+- legacy source は **完全削除しない**。`~/.lab-executor/migration_
+  trash/<manifest_stem>/` へ移動するだけ (`permanent_delete_performed
+  =False` 固定)
+- **target (new path) は変更しない**
+- target に何もしないため `overwrite_performed=False` 固定
+- apply 直前に plan + preflight を **再計算**。UI 表示後の filesystem
+  変化があれば blocked
+- `--confirm` 必須。token は `cleanup:<count>:<manifest_stem>`
+- token 不一致 → blocked、`--confirm` 無し → exit 2
+- trash target 既存 → blocked (上書きしない)
+- cross-device error (EXDEV) → failed (copy+delete fallback なし)
+- partial failure は **fail-fast**
+- cleanup manifest を `~/.lab-executor/migration_logs/extension-
+  cleanup-<stamp>.json` に必ず保存 (blocked 時も保存)
+
+### Cleanup manifest schema (v2.12)
+
+```json
+{
+  "schema_version": "v2.12",
+  "operation": "extension_cleanup_apply",
+  "source_manifest": ".../extension-copy-...json",
+  "confirmation_token": "cleanup:2:extension-copy-...",
+  "trash_root": "~/.lab-executor/migration_trash/...",
+  "status": "ok",
+  "moved_to_trash": [...],
+  "failed": [],
+  "skipped": [],
+  "blocked_reasons": [],
+  "delete_performed": false,
+  "permanent_delete_performed": false,
+  "overwrite_performed": false,
+  "trash_move_performed": true
+}
+```
+
+`migration-log list / inspect` は v2.12 で cleanup manifest も対象に
+含まれる (`verify` は当面 copy manifest のみ)。
+
+### rollback-plan への影響
+
+cleanup apply 後は legacy source が trash へ移動しているため、同じ
+copy manifest から `rollback-plan` を見ると legacy source missing
+扱いで blocked になる (戻す先が無い)。trash 内容から手作業で復元
+する必要がある。
+
+### rollback apply は **v2.12 でも未実装**
+
+`rollback-plan --apply` は exit 2。v2.14+ で慎重に検討する。
+
 ## v2.11: Apply Preflight (削除前提条件評価)
 
 ```bash
@@ -406,8 +469,9 @@ migration_required = False otherwise (new_only のみ等)
 | v2.9.0 | rollback-plan / cleanup-plan (plan only、削除なし) | 実装済 |
 | v2.10.0 | plan refinement (`--latest` / `already_absent` 分離 / status 整理 / verify 統合) | 実装済 |
 | v2.11.0 | cleanup / rollback `--preflight` (apply 前提条件評価、削除なし) | 実装済 |
-| v2.12+ | controlled cleanup `--apply` (trash 移動、`--confirm` 必須) | 検討中 |
-| v2.13+ | controlled rollback `--apply` | 検討中 |
+| v2.12.0 | controlled cleanup `--apply` (trash 移動、`--confirm` 必須、永久削除なし) | 実装済 |
+| v2.13+ | cleanup manifest verify / trash inspection | 検討中 |
+| v2.14+ | controlled rollback `--apply` | 検討中 |
 | v2.9+   | install default を `~/.lab-executor/extensions/` へ切替判断 | 検討中 |
 
 順序は **検出 → 計画 → copy-plan → apply → default 切替** で固定。

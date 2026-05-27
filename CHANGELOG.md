@@ -1,5 +1,134 @@
 # 変更履歴
 
+## v2.12.0 — Controlled Cleanup Apply
+
+合言葉: **「ついに削除系操作。ただし完全削除ではなく trash 移動」**
+
+v2.11 で preflight が入った次の段階。**cleanup apply のみ** を実装
+する (rollback apply は v2.14+ に後ろ送り)。legacy source を完全削除
+せず、`~/.lab-executor/migration_trash/<manifest_stem>/` へ移動する。
+
+### 新規 API
+
+```python
+@dataclass(frozen=True)
+class ExtensionCleanupApplyResult:
+    status: str   # "ok" / "blocked" / "partial_failure"
+    moved_to_trash: list[dict]
+    failed: list[dict]
+    skipped: list[dict]
+    blocked_reasons: list[dict]
+    manifest_path: Path | None
+    trash_root: Path | None
+    confirmation_token: str | None
+    source_manifest: Path | None
+    permanent_delete_performed: bool = False  # v2.12 固定
+    overwrite_performed: bool = False         # v2.12 固定
+    trash_move_performed: bool = False
+
+def apply_extension_cleanup_plan(
+    manifest_path, *, confirm, log_dir=None, trash_root_base=None,
+) -> ExtensionCleanupApplyResult:
+    ...
+```
+
+### 厳格な事前条件
+
+- **`--confirm` 必須** (token: `cleanup:<count>:<manifest_stem>`)
+- 実行直前に **plan + preflight を再計算**。UI 表示後の filesystem
+  変化があれば blocked に倒す
+- `preflight.eligible` が False なら blocked
+- `confirm` 不一致は blocked
+
+### 安全方針 (実装で固定)
+
+- legacy source は **trash 移動のみ**。完全削除しない
+  (`permanent_delete_performed=False` 固定)
+- target (new path) は **触らない**
+- trash target が既存 → blocked (上書きしない、
+  `overwrite_performed=False` 固定)
+- cross-device error (EXDEV) → failed (copy+delete fallback なし)
+- partial failure は **fail-fast** (途中失敗で停止、成功済 trash 移動
+  は残す)
+- cleanup manifest を `extension-cleanup-<stamp>.json` に必ず保存
+  (blocked / partial_failure 時も保存)
+- manifest 保存失敗時は v2.8 と同じく `partial_failure` 格上げ +
+  `failed[]` に `manifest_write_failed`
+
+### `evaluate_cleanup_apply_preconditions()` 仕様変更
+
+v2.11 では `apply_supported=False` / `apply_available=False` 固定
+だったが、v2.12 で cleanup apply が実装されたため:
+
+- `apply_supported=True` (cleanup のみ)
+- `apply_available=True` (`eligible=True` の場合のみ)
+
+rollback preflight は引き続き `apply_supported=False` /
+`apply_available=False` (rollback apply は v2.14+ で検討)。
+
+### 新規 CLI flag
+
+```bash
+lab-executor extension migration-log cleanup-plan <manifest|--latest> \
+  --apply --confirm cleanup:2:extension-copy-... [--json]
+```
+
+- `--apply` は `--confirm <token>` を要求 (無ければ exit 2)
+- token 不一致 → blocked → exit 1
+- `rollback-plan --apply` は **未実装** (exit 2 with "not implemented")
+
+### migration-log list / load の cleanup manifest 対応
+
+`SUPPORTED_OPERATIONS` に `extension_cleanup_apply` を追加、
+`SUPPORTED_MANIFEST_SCHEMAS` に `v2.12` を追加。`list` / `inspect`
+は cleanup manifest も対象になる (`verify` / `find_latest_*` は
+copy manifest のみのまま)。
+
+### v2.12 で **やらないこと**
+
+- rollback `--apply` (v2.14+ 検討)
+- 完全削除 / `--force` / overwrite
+- trash 内ファイルの削除 / 整理
+- cross-device の copy+delete fallback
+- install default 変更 / active_read_paths 優先順位変更
+- duplicate 自動解決
+- cleanup manifest の verify (v2.13+ 候補)
+
+### Tests (218 件 pass)
+
+`tests/test_v2_12_cleanup_apply.py`: 18 件
+
+- preconditions: requires_confirm / rejects_wrong_confirm /
+  preflight_ineligible_blocked / recomputes_preflight
+- 正常系: **moves_legacy_source_to_trash** (legacy が trash へ、
+  target は残る、を実 ファイル check)
+- 安全: does_not_permanently_delete / overwrite_performed=False /
+  trash_target_exists → skipped / fail-fast
+- manifest: ok 時 / blocked 時もどちらも保存
+- preflight 仕様変更: cleanup `apply_supported=True` /
+  rollback `apply_supported=False`
+- CLI: cleanup_apply ok / requires_confirm exit 2 /
+  rollback_apply not_implemented exit 2
+- Boundary: PyVISA / `visa_mcp` 非依存
+- 回帰: install_default / tool surface 不変
+
+v2.11 tests を v2.12 schema へ更新 (cleanup preflight の
+apply_supported/available=True 期待)。
+
+### 互換性
+
+- 既存 `cleanup-plan` (`--apply` 無し) の挙動は v2.10 / v2.11 と同一
+- `evaluate_cleanup_apply_preconditions()` の戻り値の
+  `apply_supported` / `apply_available` が v2.11 と変化 (False →
+  True 方向、安全側ではない)。CI で `apply_supported is False` を
+  assert していた箇所は要更新
+- cleanup manifest は **新規 schema_version=v2.12** (copy manifest
+  の v2.7 とは別物)
+- MCP tool / DSL / extension pack 形式 / `.install_meta.json` /
+  `default_extensions_dir()` 返り値、すべて不変
+
+---
+
 ## v2.11.0 — Cleanup / Rollback Apply Preflight
 
 合言葉: **「削除実行に進む直前に、許可条件だけを固定する」**

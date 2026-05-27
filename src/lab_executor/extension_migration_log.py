@@ -149,8 +149,11 @@ def list_extension_migration_logs(
     if not log_dir.exists() or not log_dir.is_dir():
         return []
     out: list[MigrationLogSummary] = []
-    for p in sorted(log_dir.glob("extension-copy-*.json"),
-                    reverse=True):
+    patterns = ("extension-copy-*.json", "extension-cleanup-*.json")
+    paths: list[Path] = []
+    for pat in patterns:
+        paths.extend(log_dir.glob(pat))
+    for p in sorted(paths, key=lambda x: x.name, reverse=True):
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
         except Exception as e:
@@ -923,10 +926,12 @@ def evaluate_cleanup_apply_preconditions(
         f"Future apply (v2.12+) will require --confirm {token}"
         if token else "v2.11 does not delete files. Preflight only."
     )
+    # v2.12: cleanup apply が実装されたため、cleanup preflight では
+    # apply_supported=True とする (rollback は v2.12 でも未対応)
     return ApplyPreflightResult(
         operation="cleanup_apply_preflight",
         status=status, eligible=eligible,
-        apply_supported=False, apply_available=False,
+        apply_supported=True, apply_available=eligible,
         candidate_count=cand,
         manifest_path=plan.manifest_path,
         checks=checks, blocked_reasons=blocked,
@@ -1007,3 +1012,301 @@ def evaluate_rollback_apply_preconditions(
         checks=checks, blocked_reasons=blocked,
         required_confirmation=token, note=note,
     )
+
+
+# ============================================================
+# v2.12.0: Controlled Cleanup Apply (legacy source → trash move)
+# ============================================================
+
+import shutil as _shutil_v212
+from datetime import datetime as _datetime_v212, timezone as _timezone_v212
+
+
+@dataclass(frozen=True)
+class ExtensionCleanupApplyResult:
+    """v2.12.0: `apply_extension_cleanup_plan()` の戻り値。
+
+    - status: "ok" / "blocked" / "partial_failure"
+    - moved_to_trash: 成功した移動の記録
+    - failed / skipped: 失敗 / skipped 記録
+    - manifest_path: 保存した cleanup manifest (失敗時は None もあり)
+    - trash_root: 使用した trash root
+    - **permanent_delete_performed / overwrite_performed**: v2.12 では
+      常に False (完全削除も上書きもしない、trash 移動のみ)
+    """
+    status: str
+    moved_to_trash: list[dict[str, Any]] = field(default_factory=list)
+    failed: list[dict[str, Any]] = field(default_factory=list)
+    skipped: list[dict[str, Any]] = field(default_factory=list)
+    blocked_reasons: list[dict[str, Any]] = field(default_factory=list)
+    manifest_path: Path | None = None
+    trash_root: Path | None = None
+    confirmation_token: str | None = None
+    source_manifest: Path | None = None
+    permanent_delete_performed: bool = False
+    overwrite_performed: bool = False
+    trash_move_performed: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "status": self.status,
+            "operation": "extension_cleanup_apply",
+            "moved_to_trash": list(self.moved_to_trash),
+            "failed": list(self.failed),
+            "skipped": list(self.skipped),
+            "blocked_reasons": list(self.blocked_reasons),
+            "manifest_path": (
+                str(self.manifest_path) if self.manifest_path else None
+            ),
+            "trash_root": (
+                str(self.trash_root) if self.trash_root else None
+            ),
+            "confirmation_token": self.confirmation_token,
+            "source_manifest": (
+                str(self.source_manifest)
+                if self.source_manifest else None
+            ),
+            "permanent_delete_performed": self.permanent_delete_performed,
+            "overwrite_performed": self.overwrite_performed,
+            "trash_move_performed": self.trash_move_performed,
+            "schema_version": "v2.12",
+        }
+
+
+def _trash_root_for(manifest_path: Path,
+                     trash_root_base: Path | None = None) -> Path:
+    base = trash_root_base or (
+        Path.home() / ".lab-executor" / "migration_trash")
+    return base / manifest_path.stem
+
+
+def _now_stamp_v212() -> str:
+    return _datetime_v212.now(_timezone_v212.utc).strftime(
+        "%Y%m%dT%H%M%SZ")
+
+
+def _write_cleanup_manifest(
+    *,
+    log_dir: Path,
+    result: "ExtensionCleanupApplyResult",
+    source_manifest: Path,
+) -> Path:
+    log_dir.mkdir(parents=True, exist_ok=True)
+    fname = f"extension-cleanup-{_now_stamp_v212()}.json"
+    fpath = log_dir / fname
+    payload = {
+        "schema_version": "v2.12",
+        "operation": "extension_cleanup_apply",
+        "created_at": _datetime_v212.now(_timezone_v212.utc).isoformat(
+            timespec="seconds"),
+        "source_manifest": str(source_manifest),
+        "confirmation_token": result.confirmation_token,
+        "trash_root": (
+            str(result.trash_root) if result.trash_root else None
+        ),
+        "status": result.status,
+        "moved_to_trash": list(result.moved_to_trash),
+        "failed": list(result.failed),
+        "skipped": list(result.skipped),
+        "blocked_reasons": list(result.blocked_reasons),
+        "delete_performed": False,
+        "permanent_delete_performed": False,
+        "overwrite_performed": False,
+        "trash_move_performed": result.trash_move_performed,
+    }
+    fpath.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return fpath
+
+
+def _replace_cleanup_manifest_path(
+    result: ExtensionCleanupApplyResult, *, manifest_path: Path,
+) -> ExtensionCleanupApplyResult:
+    return ExtensionCleanupApplyResult(
+        status=result.status,
+        moved_to_trash=result.moved_to_trash,
+        failed=result.failed,
+        skipped=result.skipped,
+        blocked_reasons=result.blocked_reasons,
+        confirmation_token=result.confirmation_token,
+        source_manifest=result.source_manifest,
+        trash_root=result.trash_root,
+        manifest_path=manifest_path,
+        permanent_delete_performed=result.permanent_delete_performed,
+        overwrite_performed=result.overwrite_performed,
+        trash_move_performed=result.trash_move_performed,
+    )
+
+
+def apply_extension_cleanup_plan(
+    manifest_path: Path | str,
+    *,
+    confirm: str | None,
+    log_dir: Path | None = None,
+    trash_root_base: Path | None = None,
+) -> ExtensionCleanupApplyResult:
+    """v2.12.0: cleanup-plan の controlled apply。legacy source を
+    完全削除せず **trash root へ移動**する。
+
+    安全方針:
+
+    - `confirm` が None / 不一致なら即 blocked
+    - **必ず直前に** plan + preflight を再計算 (UI 表示後の filesystem
+      変化をケア)
+    - preflight が `eligible=false` なら blocked
+    - trash target が既に存在すれば blocked (overwrite しない)
+    - cross-device rename 失敗時は failed (copy+delete fallback はしない)
+    - partial failure は fail-fast (途中失敗で停止、成功済 trash 移動は
+      残す)
+    - manifest を必ず保存。書き込み失敗時は `status=partial_failure`
+      に格上げ + `failed[]` に `manifest_write_failed`
+    """
+    p = Path(manifest_path)
+    log_dir = log_dir or default_migration_log_dir()
+
+    # 1) 直前再計算 (plan + preflight)
+    plan = plan_extension_cleanup_from_log(p)
+    preflight = evaluate_cleanup_apply_preconditions(plan)
+
+    blocked: list[dict[str, Any]] = []
+    if confirm is None:
+        blocked.append({
+            "reason_class": "confirmation_required",
+            "message": (
+                "--confirm <token> is required for cleanup apply"
+            ),
+        })
+    if not preflight.eligible:
+        blocked.append({
+            "reason_class": "preflight_not_eligible",
+            "preflight_blocked": list(preflight.blocked_reasons),
+        })
+    expected = preflight.required_confirmation
+    if confirm is not None and expected != confirm:
+        blocked.append({
+            "reason_class": "confirmation_mismatch",
+            "expected": expected,
+            "given": confirm,
+        })
+
+    if blocked:
+        result = ExtensionCleanupApplyResult(
+            status="blocked",
+            blocked_reasons=blocked,
+            confirmation_token=expected,
+            source_manifest=p,
+            trash_root=_trash_root_for(p, trash_root_base),
+        )
+        try:
+            mp = _write_cleanup_manifest(
+                log_dir=log_dir, result=result, source_manifest=p)
+            result = _replace_cleanup_manifest_path(
+                result, manifest_path=mp)
+        except Exception:
+            pass
+        return result
+
+    # 2) trash 移動 (fail-fast)
+    trash_root = _trash_root_for(p, trash_root_base)
+    moved: list[dict[str, Any]] = []
+    failed: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+
+    for cand in plan.candidates:
+        source = cand.legacy_source
+        trash_target = trash_root / source.name
+
+        if trash_target.exists():
+            skipped.append({
+                "reason_class": "trash_target_exists",
+                "extension_id": cand.extension_id,
+                "trash_target": str(trash_target),
+            })
+            break  # fail-fast
+
+        if not source.exists():
+            failed.append({
+                "reason_class": "legacy_source_missing_at_apply",
+                "extension_id": cand.extension_id,
+                "source": str(source),
+            })
+            break
+
+        trash_root.mkdir(parents=True, exist_ok=True)
+        try:
+            source.rename(trash_target)
+        except OSError as e:
+            failed.append({
+                "reason_class": "trash_move_failed",
+                "extension_id": cand.extension_id,
+                "source": str(source),
+                "trash_target": str(trash_target),
+                "error": str(e),
+                "errno": getattr(e, "errno", None),
+            })
+            break
+
+        moved.append({
+            "extension_id": cand.extension_id,
+            "from": str(source),
+            "to": str(trash_target),
+        })
+
+    status = "ok"
+    if failed or skipped:
+        status = "partial_failure"
+
+    result = ExtensionCleanupApplyResult(
+        status=status,
+        moved_to_trash=moved,
+        failed=failed,
+        skipped=skipped,
+        blocked_reasons=[],
+        confirmation_token=confirm,
+        source_manifest=p,
+        trash_root=trash_root,
+        permanent_delete_performed=False,
+        overwrite_performed=False,
+        trash_move_performed=bool(moved),
+    )
+
+    # 3) manifest 保存 (失敗時は partial_failure 格上げ)
+    try:
+        mp = _write_cleanup_manifest(
+            log_dir=log_dir, result=result, source_manifest=p)
+        result = _replace_cleanup_manifest_path(
+            result, manifest_path=mp)
+    except Exception as e:
+        new_failed = list(result.failed) + [{
+            "reason_class": "manifest_write_failed",
+            "message": (
+                f"Cleanup apply completed (moved={len(moved)}) but "
+                f"manifest could not be written: {e}"
+            ),
+        }]
+        result = ExtensionCleanupApplyResult(
+            status="partial_failure",
+            moved_to_trash=result.moved_to_trash,
+            failed=new_failed,
+            skipped=result.skipped,
+            blocked_reasons=result.blocked_reasons,
+            confirmation_token=result.confirmation_token,
+            source_manifest=result.source_manifest,
+            trash_root=result.trash_root,
+            manifest_path=None,
+            permanent_delete_performed=False,
+            overwrite_performed=False,
+            trash_move_performed=result.trash_move_performed,
+        )
+    return result
+
+
+# v2.12: list_extension_migration_logs と load_extension_migration_log
+# は cleanup manifest も受け付ける (find_latest_extension_copy_manifest
+# は copy のみのまま)
+SUPPORTED_OPERATIONS = SUPPORTED_OPERATIONS + (
+    "extension_cleanup_apply",
+)
+SUPPORTED_MANIFEST_SCHEMAS = SUPPORTED_MANIFEST_SCHEMAS + ("v2.12",)

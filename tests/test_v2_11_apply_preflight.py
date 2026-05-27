@@ -77,8 +77,9 @@ def test_cleanup_preflight_ok(tmp_path):
     assert pf.operation == "cleanup_apply_preflight"
     assert pf.status == "ok"
     assert pf.eligible is True
-    assert pf.apply_supported is False
-    assert pf.apply_available is False
+    # v2.12: cleanup apply 実装済
+    assert pf.apply_supported is True
+    assert pf.apply_available is True
     assert pf.candidate_count == 1
     assert pf.blocked_reasons == []
     assert pf.required_confirmation is not None
@@ -154,7 +155,10 @@ def test_cleanup_preflight_confirmation_token_format(tmp_path):
     assert parts[2] == mp.stem
 
 
-def test_cleanup_preflight_apply_available_false(tmp_path):
+def test_cleanup_preflight_apply_available_v211_legacy(tmp_path):
+    """v2.11 では cleanup apply 未実装だったが、v2.12 で実装された
+    ため apply_supported=True / apply_available=True (eligible 時)
+    に変わった。本テストは v2.12 以降の挙動を確認する."""
     from lab_executor.extension_migration_log import (
         plan_extension_cleanup_from_log,
         evaluate_cleanup_apply_preconditions,
@@ -162,10 +166,10 @@ def test_cleanup_preflight_apply_available_false(tmp_path):
     mp = _apply(tmp_path)
     plan = plan_extension_cleanup_from_log(mp)
     pf = evaluate_cleanup_apply_preconditions(plan)
-    # eligible=true でも実行不可
     assert pf.eligible is True
-    assert pf.apply_supported is False
-    assert pf.apply_available is False
+    # v2.12: cleanup apply 実装済
+    assert pf.apply_supported is True
+    assert pf.apply_available is True
 
 
 # ============================================================
@@ -269,8 +273,9 @@ def test_cli_cleanup_preflight_json(tmp_path):
     data = json.loads(buf.getvalue())
     assert data["operation"] == "cleanup_apply_preflight"
     assert data["status"] == "ok"
-    assert data["apply_supported"] is False
-    assert data["apply_available"] is False
+    # v2.12: cleanup apply 実装済
+    assert data["apply_supported"] is True
+    assert data["apply_available"] is True
     assert data["preflight"]["eligible"] is True
     assert data["preflight"]["candidate_count"] == 1
     assert data["preflight"]["required_confirmation"].startswith(
