@@ -1,5 +1,120 @@
 # 変更履歴
 
+## v2.8.0 — Migration Log Inspection + Copied Pack Verification
+
+合言葉: **「v2.7 で copy した結果を追跡・検証できるようにする。
+rollback も delete もまだしない」**
+
+v2.7 で `~/.lab-executor/migration_logs/extension-copy-<stamp>.json`
+として残し始めた apply manifest を、CLI / API で読み返し、copied
+target が現在も健全かを検証する段階。実 rollback / target 削除 /
+overwrite は v2.8 でも一切しない。
+
+### 新規 module: `lab_executor.extension_migration_log`
+
+```python
+@dataclass(frozen=True)
+class MigrationLogSummary: ...
+@dataclass(frozen=True)
+class ExtensionCopyApplyManifest: ...
+@dataclass
+class MigrationLogVerificationResult: ...
+
+def list_extension_migration_logs(*, log_dir=None) -> list[MigrationLogSummary]
+def load_extension_migration_log(path) -> ExtensionCopyApplyManifest
+def verify_extension_migration_log(path) -> MigrationLogVerificationResult
+```
+
+`operation == extension_copy_apply` のみを対象 (将来別 operation が
+増えても混在しない)。`schema_version == "v2.7"` を必須 (将来後方
+互換のため SUPPORTED_MANIFEST_SCHEMAS で扱う)。
+
+### `verify_extension_migration_log()` の検出項目
+
+**error**:
+
+- `target_missing`
+- `target_extension_yaml_missing` / `target_extension_yaml_unreadable`
+- `extension_id_mismatch`
+- `delete_performed_unexpected` (manifest が改ざんで `delete_performed
+  =true` になっている)
+- `overwrite_performed_unexpected`
+- `manifest_schema_unsupported` / `manifest_not_found`
+
+**warning**:
+
+- `source_missing` (source は将来整理される可能性があるため warning)
+
+### manifest 保存失敗時 → `partial_failure` 格上げ (P0)
+
+v2.7.1 で予約した **案 A** を実装。`apply_extension_copy_plan()`
+内で `_write_manifest()` が例外を出した場合:
+
+```
+status = "partial_failure"
+manifest_path = None
+failed[] に {"error_class": "manifest_write_failed", "message": ...}
+```
+
+実 copy は完了していても audit 上「成功」扱いしない。manifest なしの
+copy は後から検証・説明できないため。
+
+### 新規 CLI subcommands
+
+```bash
+lab-executor extension migration-log list [--json]
+lab-executor extension migration-log inspect <manifest> [--json]
+lab-executor extension migration-log verify <manifest> [--json] [--strict]
+```
+
+- `list`: timestamp 降順で表示
+- `inspect`: `delete_performed=false` / `overwrite_performed=false`
+  を目立たせる (ユーザーが「このマイグレーションは削除も上書きも
+  していない」と確認できる)
+- `verify`: exit code は `check` / `migration-plan` と整合
+  (ok=0、warning=0/`--strict`で1、error=1、usage=2)
+
+### v2.8 で **やらないこと**
+
+- rollback `--apply` / target 削除 / legacy source 削除
+- overwrite / `--force`
+- install default 変更
+- active_read_paths 優先順位変更
+- extension pack / `.install_meta.json` schema 変更
+- remote registry / signing / trust store
+
+### Tests (141 件 pass)
+
+`tests/test_v280_migration_log.py`: 22 件
+
+- list (empty / after apply)
+- load + schema rejection (unsupported schema_version / operation)
+- verify (ok / target_missing / extension_id_mismatch /
+  source_missing warning / delete_performed_unexpected /
+  overwrite_performed_unexpected)
+- `manifest_write_failure_marks_partial_failure` (P0 の核 -
+  `_write_manifest` を monkeypatch で例外化)
+- CLI: list/inspect/verify JSON + verify strict 挙動
+- Boundary: PyVISA / `visa_mcp` 非依存 subprocess gate
+- 回帰: install_default 不変 / Stable 43 + Experimental 7 = 50 不変
+
+### docs / cli docstring
+
+- `docs/extension_path_migration.md`: `migration-log` セクション +
+  error/warning 一覧 + manifest 保存失敗時の挙動 + roadmap 表に v2.8
+  を実装済として追加 / v2.9 を rollback-plan へ更新
+- `cli.py` module docstring を v2.7.x → v2.8.x
+
+### 互換性
+
+- `apply_extension_copy_plan()` の戻り値 schema (`ExtensionCopy
+  ApplyResult`) は v2.7 と同じ。`manifest_path=None` のケースが
+  v2.8 で増えた点のみ要注意 (manifest 保存失敗時)
+- MCP tool / DSL / extension pack 形式 / `.install_meta.json` /
+  `default_extensions_dir()` 返り値、すべて不変
+
+---
+
 ## v2.7.1 — Docs / Review patch (v2.7 表記整合 + 仕様明文化)
 
 v2.7.0 レビュー反映。コード変更なし。

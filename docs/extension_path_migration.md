@@ -165,6 +165,51 @@ v2.7 で追加された **controlled copy apply**。legacy にしかない pack
 }
 ```
 
+## `lab-executor extension migration-log` (v2.8)
+
+```bash
+lab-executor extension migration-log list
+lab-executor extension migration-log inspect <manifest>
+lab-executor extension migration-log verify <manifest>
+```
+
+v2.7 で生成した apply manifest を CLI で読み返す段階。実 ファイル
+変更は一切しない (rollback / delete / overwrite は未実装)。
+
+- **`list`**: `~/.lab-executor/migration_logs/extension-copy-*.json`
+  を timestamp 降順で列挙。各 entry に
+  `created_at` / `status` / `copied_count` / `failed_count` /
+  `skipped_count` / `manifest_path`
+- **`inspect <manifest>`**: 1 件の manifest を parse + schema 検査して
+  表示。`delete_performed=false` / `overwrite_performed=false` を
+  目立たせる
+- **`verify <manifest>`**: copied[] の target が現在も存在し、
+  `extension.yaml` が読め、`extension_id` が manifest と一致するかを
+  確認
+
+### verify が検出する error / warning
+
+| 種別 | error_class / warning_class |
+|------|------|
+| error | `target_missing` / `target_extension_yaml_missing` / `target_extension_yaml_unreadable` / `extension_id_mismatch` / `delete_performed_unexpected` / `overwrite_performed_unexpected` / `manifest_schema_unsupported` / `manifest_not_found` |
+| warning | `source_missing` (source は将来整理される可能性があるため warning) |
+
+`source_missing` のみなら status=warning、それ以外が混じれば
+status=error。`--strict` で warning も exit 1。
+
+### manifest 保存失敗時 (v2.8 で実装)
+
+v2.7.1 で予約した案 A を実装:
+
+```
+manifest 保存成功 → 通常どおり ok / partial_failure
+manifest 保存失敗 → status=partial_failure に格上げ
+                  + failed[] に manifest_write_failed
+                  + manifest_path = None
+```
+
+manifest なしの copy 成功は audit 上「成功」とみなさない。
+
 ### `target_exists` の検出タイミング別 status (v2.7.1 明文化)
 
 `target_exists` は **検出されたタイミングで status が変わる**:
@@ -268,7 +313,8 @@ migration_required = False otherwise (new_only のみ等)
 | v2.5.0 | migration-plan (現状分類) | 実装済 |
 | v2.6.0 | migration-plan --copy-plan (copy 候補生成、実 copy なし) | 実装済 |
 | v2.7.0 | Controlled `--apply` (実 copy、no delete / no overwrite) | 実装済 |
-| v2.8.0 | verify copied packs / rollback planning | 検討中 |
+| v2.8.0 | migration-log list / inspect / verify (実 copy 後の追跡 / 検証) | 実装済 |
+| v2.9.0 | rollback-plan / cleanup-plan (plan only) | 検討中 |
 | v2.9+   | install default を `~/.lab-executor/extensions/` へ切替判断 | 検討中 |
 
 順序は **検出 → 計画 → copy-plan → apply → default 切替** で固定。

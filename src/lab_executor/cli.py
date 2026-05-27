@@ -1,4 +1,4 @@
-"""lab-executor CLI (v2.7.x).
+"""lab-executor CLI (v2.8.x).
 
 v2.0 では minimal CLI / `serve` placeholder のみだったが、v2.1.0 で
 `serve --backend mock` を実装、v2.2.0 で authoring workflow CLI を
@@ -56,6 +56,17 @@ v2.6.0 追加 (Extension Migration Copy Plan):
   既存などがあれば ``copy_plan.status="blocked"`` で candidate 生成を
   停止する
 
+v2.8.0 追加 (Migration Log Inspection + Copied Pack Verification):
+
+- ``extension migration-log list`` / ``inspect`` / ``verify``: v2.7 で
+  保存した apply manifest を一覧 / 詳細表示 / 検証する。verify は
+  copied target が現在も存在し metadata が一致するかを確認する。
+  manifest が改ざんされて ``delete_performed=true`` /
+  ``overwrite_performed=true`` になっていれば error
+- apply 時の manifest 保存失敗を **`partial_failure` に格上げ** する
+  実装 (v2.7.1 で予約した案 A)。manifest なしの copy 成功は audit 上
+  「成功」とみなさない
+
 v2.7.0 追加 (Controlled Extension Copy Apply):
 
 - ``extension migration-plan --copy-plan --apply``: copy candidate を
@@ -88,8 +99,9 @@ def _build_parser() -> argparse.ArgumentParser:
         description=(
             "lab-executor-mcp: backend-independent experiment execution "
             "runtime CLI with dual-path extension discovery, migration "
-            "planning, copy-plan preview, and controlled copy apply "
-            "(v2.7). For hardware-backed operations, use `visa-mcp` CLI."
+            "planning, copy-plan preview, controlled copy apply, and "
+            "migration log inspection (v2.8). For hardware-backed "
+            "operations, use `visa-mcp` CLI."
         ),
     )
     parser.add_argument(
@@ -204,6 +216,36 @@ def _build_parser() -> argparse.ArgumentParser:
     ext_catalog.add_argument(
         "--strict", action="store_true",
         help="v2.4: duplicate_extension_id -> exit 1 (default: exit 0)",
+    )
+
+    # ---- extension migration-log (v2.8.0) -----------------------
+    ext_mlog = ext_sub.add_parser(
+        "migration-log",
+        help=(
+            "v2.8: list / inspect / verify extension copy apply "
+            "manifests (no file changes)"
+        ),
+    )
+    mlog_sub = ext_mlog.add_subparsers(dest="mlog_command")
+
+    mlog_list = mlog_sub.add_parser(
+        "list", help="List extension copy apply manifests")
+    mlog_list.add_argument("--json", action="store_true")
+
+    mlog_inspect = mlog_sub.add_parser(
+        "inspect", help="Inspect one manifest file")
+    mlog_inspect.add_argument("manifest", help="manifest .json path")
+    mlog_inspect.add_argument("--json", action="store_true")
+
+    mlog_verify = mlog_sub.add_parser(
+        "verify",
+        help="Verify copied targets still exist and match metadata",
+    )
+    mlog_verify.add_argument("manifest", help="manifest .json path")
+    mlog_verify.add_argument("--json", action="store_true")
+    mlog_verify.add_argument(
+        "--strict", action="store_true",
+        help="treat warning as exit 1 (default: exit 0)",
     )
 
     # ---- extension migration-plan (v2.5.0) ----------------------
@@ -648,6 +690,98 @@ def _cmd_extension(args: argparse.Namespace) -> int:
             return 0
         # warning: --strict なら exit 1, なければ exit 0
         return 1 if getattr(args, "strict", False) else 0
+
+    if sub == "migration-log":
+        # v2.8.0: list / inspect / verify apply manifests
+        from lab_executor.extension_migration_log import (
+            list_extension_migration_logs,
+            load_extension_migration_log,
+            verify_extension_migration_log,
+        )
+        mc = getattr(args, "mlog_command", None)
+        if mc == "list":
+            logs = list_extension_migration_logs()
+            data = {
+                "status": "ok",
+                "count": len(logs),
+                "logs": [s.to_dict() for s in logs],
+            }
+            if args.json:
+                print(json.dumps(data, ensure_ascii=False,
+                                  indent=2, default=str))
+            else:
+                print(f"extension migration-log list: "
+                      f"{len(logs)} entries")
+                for s in logs:
+                    print(f"  - {s.created_at} {s.status} "
+                          f"copied={s.copied_count} "
+                          f"failed={s.failed_count} "
+                          f"skipped={s.skipped_count}")
+                    print(f"    {s.manifest_path}")
+            return 0
+
+        if mc == "inspect":
+            try:
+                m = load_extension_migration_log(args.manifest)
+            except (FileNotFoundError, ValueError) as e:
+                print(f"inspect failed: {e}", file=sys.stderr)
+                return 1
+            data = m.to_dict()
+            if args.json:
+                print(json.dumps(data, ensure_ascii=False,
+                                  indent=2, default=str))
+            else:
+                print(f"migration-log inspect: "
+                      f"schema={m.schema_version} "
+                      f"operation={m.operation}")
+                print(f"  created_at:   {m.created_at}")
+                print(f"  status:       {m.status}")
+                print(f"  source:       {m.source_default}")
+                print(f"  target:       {m.target_default}")
+                print(f"  copied:       {len(m.copied)}")
+                print(f"  failed:       {len(m.failed)}")
+                print(f"  skipped:      {len(m.skipped)}")
+                # 重要 invariant
+                print(f"  delete_performed:    "
+                      f"{m.delete_performed}")
+                print(f"  overwrite_performed: "
+                      f"{m.overwrite_performed}")
+            return 0
+
+        if mc == "verify":
+            res = verify_extension_migration_log(args.manifest)
+            data = res.to_dict()
+            if args.json:
+                print(json.dumps(data, ensure_ascii=False,
+                                  indent=2, default=str))
+            else:
+                print(f"migration-log verify: status={data['status']}")
+                for c in data["checked"]:
+                    ok = (c["target_exists"]
+                          and c["extension_yaml_readable"]
+                          and c["extension_id_match"])
+                    flag = "OK " if ok else "NG "
+                    print(f"  {flag} {c['extension_id']}")
+                    print(f"     target: {c['target']}")
+                for f in data["failed"]:
+                    print(f"  ERROR {f.get('error_class')}: "
+                          f"{f.get('extension_id') or ''}")
+                for w in data["warnings"]:
+                    print(f"  WARN  {w.get('warning_class')}: "
+                          f"{w.get('extension_id') or ''}")
+            st = data["status"]
+            if st == "ok":
+                return 0
+            if st == "warning":
+                return 1 if getattr(args, "strict", False) else 0
+            return 1
+
+        print(
+            "extension migration-log: subcommand required "
+            "(list / inspect / verify)",
+            file=sys.stderr,
+        )
+        return 2
 
     if sub == "migration-plan":
         # v2.5.0: plan only (no file changes)

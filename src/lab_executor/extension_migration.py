@@ -626,15 +626,30 @@ def apply_extension_copy_plan(
     elif skipped:
         status = "partial_failure"
 
-    manifest_path = _write_manifest(
-        log_dir=log_dir,
-        status=status,
-        copied=copied,
-        failed=failed,
-        skipped=skipped,
-        blocked_reasons=[],
-        paths=paths,
-    )
+    # v2.8.0: manifest 保存失敗時は実 copy の成否にかかわらず
+    # status=partial_failure に格上げ + failed[] に
+    # manifest_write_failed を記録する (案 A)
+    manifest_path: Path | None
+    try:
+        manifest_path = _write_manifest(
+            log_dir=log_dir,
+            status=status,
+            copied=copied,
+            failed=failed,
+            skipped=skipped,
+            blocked_reasons=[],
+            paths=paths,
+        )
+    except Exception as e:
+        manifest_path = None
+        failed.append({
+            "error_class": "manifest_write_failed",
+            "message": (
+                f"Copy completed (copied={len(copied)}) but manifest "
+                f"could not be written: {e}"
+            ),
+        })
+        status = "partial_failure"
 
     return ExtensionCopyApplyResult(
         status=status,
