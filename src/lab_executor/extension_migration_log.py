@@ -35,6 +35,22 @@ def default_migration_log_dir() -> Path:
     return Path.home() / ".lab-executor" / "migration_logs"
 
 
+def find_latest_extension_copy_manifest(
+    *,
+    log_dir: Path | None = None,
+) -> Path | None:
+    """v2.10.0: 最新の `extension_copy_apply` manifest path を返す。
+
+    `operation == extension_copy_apply` のもののみ対象。timestamp 降順
+    で最初に見つかった file を返す。見つからなければ None。
+    """
+    summaries = list_extension_migration_logs(log_dir=log_dir)
+    for s in summaries:
+        if s.operation == "extension_copy_apply":
+            return s.manifest_path
+    return None
+
+
 # ============================================================
 # Models
 # ============================================================
@@ -385,14 +401,19 @@ class ExtensionRollbackCandidate:
 
 @dataclass
 class ExtensionRollbackPlan:
-    """v2.9.0: `plan_extension_rollback_from_log()` の戻り値。"""
+    """v2.9.0 / v2.10.0: `plan_extension_rollback_from_log()` の戻り値。
+
+    v2.10 で `already_absent` を分離 (target が既に無いものは blocked
+    ではなく「rollback 不要」として扱う)。
+    """
     status: str  # "ok" / "warning" / "error"
     manifest_path: Path
     candidates: list[ExtensionRollbackCandidate] = field(
         default_factory=list)
+    already_absent: list[dict[str, Any]] = field(default_factory=list)
     blocked_reasons: list[dict[str, Any]] = field(default_factory=list)
     warnings: list[dict[str, Any]] = field(default_factory=list)
-    apply_available: bool = False  # v2.9 では常に False
+    apply_available: bool = False  # v2.9+ で常に False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -401,14 +422,16 @@ class ExtensionRollbackPlan:
             "manifest_path": str(self.manifest_path),
             "summary": {
                 "rollback_candidates": len(self.candidates),
+                "already_absent": len(self.already_absent),
                 "blocked": len(self.blocked_reasons),
                 "warnings": len(self.warnings),
             },
             "candidates": [c.to_dict() for c in self.candidates],
+            "already_absent": list(self.already_absent),
             "blocked_reasons": list(self.blocked_reasons),
             "warnings": list(self.warnings),
             "apply_available": self.apply_available,
-            "schema_version": "v2.9",
+            "schema_version": "v2.10",
         }
 
 
@@ -440,10 +463,18 @@ class ExtensionCleanupCandidate:
 
 @dataclass
 class ExtensionCleanupPlan:
-    """v2.9.0: `plan_extension_cleanup_from_log()` の戻り値。"""
+    """v2.9.0 / v2.10.0: `plan_extension_cleanup_from_log()` の戻り値。
+
+    v2.10 で `legacy_source_missing` を分離 (v2.9 までは
+    `already_cleaned_or_missing` warning にまとめていたが、実 cleanup
+    がまだ無い段階では「already cleaned」と断定できないため、現状を
+    そのまま `legacy_source_missing` リストとして報告する)。
+    """
     status: str  # "ok" / "warning" / "error"
     manifest_path: Path
     candidates: list[ExtensionCleanupCandidate] = field(
+        default_factory=list)
+    legacy_source_missing: list[dict[str, Any]] = field(
         default_factory=list)
     blocked_reasons: list[dict[str, Any]] = field(default_factory=list)
     warnings: list[dict[str, Any]] = field(default_factory=list)
@@ -456,14 +487,16 @@ class ExtensionCleanupPlan:
             "manifest_path": str(self.manifest_path),
             "summary": {
                 "cleanup_candidates": len(self.candidates),
+                "legacy_source_missing": len(self.legacy_source_missing),
                 "blocked": len(self.blocked_reasons),
                 "warnings": len(self.warnings),
             },
             "candidates": [c.to_dict() for c in self.candidates],
+            "legacy_source_missing": list(self.legacy_source_missing),
             "blocked_reasons": list(self.blocked_reasons),
             "warnings": list(self.warnings),
             "apply_available": self.apply_available,
-            "schema_version": "v2.9",
+            "schema_version": "v2.10",
         }
 
 
@@ -535,12 +568,15 @@ def plan_extension_rollback_from_log(
         source_exists = source.exists()
 
         if not target_exists:
-            plan.blocked_reasons.append({
+            # v2.10: target が無い = rollback 不要 (already_absent)
+            # blocked ではなく「対象外」として分類
+            plan.already_absent.append({
                 "extension_id": ext_id,
-                "reason_class": "target_missing",
+                "target": str(target),
+                "reason": "target_missing",
                 "message": (
-                    "Copied target is already missing; nothing to "
-                    "rollback for this entry."
+                    "Copied target is already missing; rollback is "
+                    "not needed for this entry."
                 ),
             })
             continue
@@ -569,23 +605,22 @@ def plan_extension_rollback_from_log(
             reason="copied target exists; legacy source available",
         ))
 
-    # plan-only reminder warning
+    # plan-only reminder warning (informational only)
     plan.warnings.append({
         "warning_class": "rollback_is_plan_only",
         "message": (
-            "No files were changed. v2.9 only displays rollback "
+            "No files were changed. v2.9+ only displays rollback "
             "candidates; --apply is not available."
         ),
     })
 
+    # v2.10: 案 A — status は real problem だけで決める
+    # plan-only warning や already_absent は status を warning に
+    # しない (warnings に残すだけ)
     if plan.blocked_reasons:
         plan.status = "error" if not plan.candidates else "warning"
-    elif plan.warnings and not plan.candidates:
-        # warning only + no candidates -> warning
-        plan.status = "warning"
-    elif plan.candidates:
-        # plan-only warning は常に入るので、candidate ある時は warning
-        plan.status = "warning"
+    else:
+        plan.status = "ok"
     return plan
 
 
@@ -656,61 +691,72 @@ def plan_extension_cleanup_from_log(
         })
         return plan
 
-    # 個別 verify をやり直して entry ごとに OK/NG を判定
-    # (verify_extension_migration_log は overall を返すので、ここでは
-    #  copied[] を 1 件ずつ確認する)
+    # v2.10: verify_extension_migration_log() を内部で使い、entry
+    # ごとに verify error/warning を cleanup-plan の blocked/warning へ
+    # 変換する (verify 条件を一元化)
+    verify_res = verify_extension_migration_log(p)
+
+    # verify が出した entry 別 error/warning を extension_id → 詳細
+    # マップにする
+    failed_by_id: dict[str, list[dict[str, Any]]] = {}
+    for f in verify_res.failed:
+        eid = f.get("extension_id") or f.get("expected") or ""
+        failed_by_id.setdefault(str(eid), []).append(f)
+    # verify 自体のメタ error (manifest schema / delete_/overwrite_
+    # unexpected) は cleanup-plan を全体 block
+    overall_meta_errors = [
+        f for f in verify_res.failed
+        if f.get("error_class") in (
+            "delete_performed_unexpected",
+            "overwrite_performed_unexpected",
+        )
+    ]
+    if overall_meta_errors:
+        for f in overall_meta_errors:
+            plan.blocked_reasons.append({
+                "reason_class": f.get("error_class"),
+                "message": f.get("message", ""),
+            })
+        plan.status = "error"
+        return plan
+
     for entry in m.copied:
-        ext_id = entry.get("extension_id")
+        ext_id = entry.get("extension_id") or ""
         target = Path(entry.get("target", ""))
         source = Path(entry.get("source", ""))
 
-        # target が無ければ blocked
-        if not target.exists():
-            plan.blocked_reasons.append({
-                "extension_id": ext_id,
-                "reason_class": "target_missing",
-                "message": (
-                    "Copied target is missing; cleanup of legacy "
-                    "source is unsafe."
-                ),
-            })
+        # この entry に対する verify failed があるか
+        entry_failed = failed_by_id.get(str(ext_id), [])
+        # cleanup を妨げる error class
+        BLOCKING = {
+            "target_missing",
+            "target_extension_yaml_missing",
+            "target_extension_yaml_unreadable",
+            "extension_id_mismatch",
+        }
+        blocking = [f for f in entry_failed
+                    if f.get("error_class") in BLOCKING]
+        if blocking:
+            for f in blocking:
+                plan.blocked_reasons.append({
+                    "extension_id": ext_id,
+                    "reason_class": f.get("error_class"),
+                    "message": f.get("message", ""),
+                })
             continue
 
-        yaml_p = target / "extension.yaml"
-        if not yaml_p.exists():
-            plan.blocked_reasons.append({
-                "extension_id": ext_id,
-                "reason_class": "target_extension_yaml_missing",
-            })
-            continue
-        try:
-            ydata = yaml.safe_load(
-                yaml_p.read_text(encoding="utf-8")) or {}
-        except Exception as e:
-            plan.blocked_reasons.append({
-                "extension_id": ext_id,
-                "reason_class": "target_extension_yaml_unreadable",
-                "error": str(e),
-            })
-            continue
-
-        if ydata.get("extension_id") != ext_id:
-            plan.blocked_reasons.append({
-                "extension_id": ext_id,
-                "reason_class": "extension_id_mismatch",
-                "expected": ext_id,
-                "actual": ydata.get("extension_id"),
-            })
-            continue
-
-        # ここまでで verify ok 相当
+        # ここまでで verify ok 相当 (target 健全)
+        # v2.10: source missing は legacy_source_missing リストへ
+        # (warning にまとめず、構造化して報告)
         if not source.exists():
-            plan.warnings.append({
+            plan.legacy_source_missing.append({
                 "extension_id": ext_id,
-                "warning_class": "already_cleaned_or_missing",
+                "legacy_source": str(source),
+                "copied_target": str(target),
                 "message": (
-                    "Legacy source is already absent; no cleanup "
-                    "action required."
+                    "Legacy source is not present. v2.10 cannot tell "
+                    "whether this is from a prior cleanup or an "
+                    "unexpected absence; treat as informational."
                 ),
             })
             continue
@@ -725,19 +771,18 @@ def plan_extension_cleanup_from_log(
             reason="copied target verified; legacy source can be cleaned",
         ))
 
+    # plan-only reminder warning (informational)
     plan.warnings.append({
         "warning_class": "cleanup_is_plan_only",
         "message": (
-            "No files were changed. v2.9 only displays cleanup "
+            "No files were changed. v2.9+ only displays cleanup "
             "candidates; --apply is not available."
         ),
     })
 
+    # v2.10 案 A: status は real problem だけで決める
     if plan.blocked_reasons:
         plan.status = "error" if not plan.candidates else "warning"
-    elif plan.candidates:
-        plan.status = "warning"
     else:
-        # nothing to cleanup, but warnings (plan-only / already_cleaned)
-        plan.status = "warning" if plan.warnings else "ok"
+        plan.status = "ok"
     return plan

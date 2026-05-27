@@ -165,6 +165,36 @@ v2.7 で追加された **controlled copy apply**。legacy にしかない pack
 }
 ```
 
+## v2.10: status semantics & `--latest`
+
+### `--latest` flag
+
+`inspect` / `verify` / `rollback-plan` / `cleanup-plan` で `--latest`
+を指定すると、`operation == extension_copy_apply` の最新 manifest を
+自動選択する。明示 path との併用は usage error (exit 2)。
+
+### Plan-only warning は status を変えない (案 A)
+
+v2.10 で **plan-only warning と real problem を分離**:
+
+- 実 problem (blocked / verify error / manifest 改ざん) があれば
+  `status="warning"` または `"error"`
+- 実 problem が無く plan-only warning だけなら `status="ok"`
+- `--strict` は real problem だけで exit 1 化 (plan-only では落ちない)
+
+これにより CI で `--strict` を使っても plan-only 状態で false fail
+しない。
+
+## rollback / cleanup の状態別 ふるまい
+
+| 状態 | rollback-plan | cleanup-plan |
+|------|---------------|--------------|
+| target あり / legacy source あり | rollback candidate | cleanup candidate になり得る |
+| target なし / legacy source あり | **already_absent** | cleanup 対象外 |
+| target あり / legacy source なし | blocked | legacy_source_missing リスト |
+| target verify error | rollback candidate にしない | blocked |
+| manifest 異常 | blocked | blocked |
+
 ## Command matrix (which one to use when)
 
 | コマンド | 目的 | 実ファイル変更 |
@@ -334,7 +364,8 @@ migration_required = False otherwise (new_only のみ等)
 | v2.7.0 | Controlled `--apply` (実 copy、no delete / no overwrite) | 実装済 |
 | v2.8.0 | migration-log list / inspect / verify (実 copy 後の追跡 / 検証) | 実装済 |
 | v2.9.0 | rollback-plan / cleanup-plan (plan only、削除なし) | 実装済 |
-| v2.10+ | rollback / cleanup `--apply` (慎重に検討) | 検討中 |
+| v2.10.0 | plan refinement (`--latest` / `already_absent` 分離 / status 整理 / verify 統合) | 実装済 |
+| v2.11+ | rollback / cleanup `--apply` (慎重に検討) | 検討中 |
 | v2.9+   | install default を `~/.lab-executor/extensions/` へ切替判断 | 検討中 |
 
 順序は **検出 → 計画 → copy-plan → apply → default 切替** で固定。

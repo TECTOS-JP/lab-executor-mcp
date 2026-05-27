@@ -1,5 +1,138 @@
 # 変更履歴
 
+## v2.10.0 — Rollback / Cleanup Plan Refinement
+
+合言葉: **「削除実行に進む前に、plan の精度と UX を上げる」**
+
+v2.9 で `rollback-plan` / `cleanup-plan` が入った次の段階。**実削除
+には進まず**、分類整理 / verify 統合 / `--latest` UX / status semantics
+を改善する。`--apply` は v2.11+ で慎重に検討。
+
+### `--latest` flag (P0)
+
+`migration-log {inspect,verify,rollback-plan,cleanup-plan}` 全てで
+`--latest` を導入:
+
+```bash
+lab-executor extension migration-log verify --latest
+lab-executor extension migration-log rollback-plan --latest
+lab-executor extension migration-log cleanup-plan --latest
+```
+
+- `operation == extension_copy_apply` の最新 manifest を自動選択
+- 明示 manifest path との併用は usage error (exit 2)
+- 該当 manifest が無ければ exit 1
+
+新 API: `find_latest_extension_copy_manifest(log_dir=None) -> Path | None`
+
+### Rollback plan 分類改善 (P0)
+
+`target_missing` を `blocked_reasons` から **`already_absent` リスト
+に分離**。「削除対象が既に無い = 異常ではなく対象外」を明示。
+
+```python
+@dataclass
+class ExtensionRollbackPlan:
+    status: str
+    candidates: list[...]
+    already_absent: list[dict]   # ← v2.10 新規
+    blocked_reasons: list[dict]  # ← legacy_source_missing 等の real block のみ
+    warnings: list[dict]
+```
+
+summary に `already_absent` カウントを追加。schema_version=`v2.10`。
+
+### Cleanup plan 改善 (P0)
+
+1. **verify 統合**: 内部で `verify_extension_migration_log()` を呼び、
+   verify の error/warning を cleanup-plan の blocked/warning に変換。
+   verify 条件が一元化される。
+2. **`already_cleaned_or_missing` warning を `legacy_source_missing`
+   リストに分離**。v2.10 時点では実 cleanup が無いため「既に整理済」
+   と断定できない。構造化して報告するに留める。
+3. `delete_performed_unexpected` / `overwrite_performed_unexpected`
+   等の overall meta error は cleanup-plan を全体 block する。
+
+```python
+@dataclass
+class ExtensionCleanupPlan:
+    status: str
+    candidates: list[...]
+    legacy_source_missing: list[dict]   # ← v2.10 新規
+    blocked_reasons: list[dict]
+    warnings: list[dict]
+```
+
+### Plan-only warning と status の分離 (P0、案 A)
+
+v2.9 では `plan_only` warning を常に追加するため status が常に
+warning になっていた。v2.10 で **案 A** を採用:
+
+- 実 problem が無ければ `status="ok"`
+- plan-only warning は `warnings[]` に残るが status を格上げしない
+- `--strict` は real problem だけで exit 1 化 (plan-only では exit 0)
+
+これにより CI で `--strict` を安全に使えるようになる (plan-only
+状態で false fail しない)。
+
+### CLI 挙動
+
+```bash
+# 正常系: status=ok / exit 0 / --strict でも 0
+lab-executor extension migration-log rollback-plan --latest --strict
+
+# duplicate / target missing for cleanup 等の real problem
+# -> status=warning|error / --strict で exit 1
+```
+
+### v2.10 で **やらないこと**
+
+- rollback `--apply` / cleanup `--apply`
+- target 削除 / legacy source 削除 / source 復元
+- overwrite / install default 変更
+- manifest schema 破壊変更
+- extension pack / `.install_meta.json` schema 変更
+- remote registry / signing / trust store
+
+### Tests (181 件 pass)
+
+`tests/test_v2_10_rollback_cleanup_refinement.py`: 18 件
+
+- `find_latest_extension_copy_manifest` (順序 / empty)
+- `--latest` CLI (verify / inspect / rollback-plan / cleanup-plan)
+- `--latest` と明示 path の併用は exit 2
+- 該当 manifest 無し → exit 1
+- cleanup-plan が verify 結果を使うこと (extension_id_mismatch /
+  delete_performed_unexpected 全体 block)
+- plan-only warning だけなら status=ok / `--strict` でも exit 0
+- rollback の already_absent / blocked 分離
+- no_file_changes (snapshot 比較)
+- Boundary: PyVISA / `visa_mcp` 非依存
+- 回帰: install_default / tool surface 不変
+
+既存 v2.9 tests を v2.10 schema へ更新 (status=ok 期待、
+already_absent / legacy_source_missing リスト、schema_version=
+`v2.10`)。
+
+### docs / cli docstring
+
+- `docs/extension_path_migration.md`: v2.10 セクション追加 (`--latest`
+  / 案 A status semantics / 状態別ふるまい表 / Command matrix)
+- `cli.py` module docstring を v2.9.x → v2.10.x
+
+### 互換性
+
+- `ExtensionRollbackPlan` / `ExtensionCleanupPlan` の dict 表現に
+  `already_absent` / `legacy_source_missing` field が追加 (v2.9 では
+  存在しなかった)
+- schema_version は v2.9 → v2.10 に上がる
+- status 値の semantics が変化 (v2.9 までは plan-only でも warning、
+  v2.10 から ok)。CI で `--strict` を使っていた箇所は安全側に動く
+- MCP tool / DSL / extension pack 形式 / `.install_meta.json` /
+  `default_extensions_dir()` 返り値、すべて不変
+
+---
+
 ## v2.9.0 — Extension Rollback / Cleanup Planning
 
 合言葉: **「v2.7 で copy、v2.8 で verify、v2.9 で戻すか進めるかの

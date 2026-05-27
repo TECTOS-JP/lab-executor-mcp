@@ -67,13 +67,13 @@ def _snapshot(p: Path) -> set[tuple[str, int]]:
 
 
 def test_rollback_plan_ok(tmp_path):
+    """v2.10: plan-only warning だけなら status="ok" (案 A)"""
     from lab_executor.extension_migration_log import (
         plan_extension_rollback_from_log,
     )
     mp = _apply(tmp_path)
     plan = plan_extension_rollback_from_log(mp)
-    # candidate あり、plan_only warning が必ず入るため status=warning
-    assert plan.status == "warning"
+    assert plan.status == "ok"
     assert len(plan.candidates) == 1
     c = plan.candidates[0]
     assert c.extension_id == "local.a"
@@ -82,12 +82,13 @@ def test_rollback_plan_ok(tmp_path):
     assert c.safe_to_plan is True
     assert c.apply_available is False
     assert plan.apply_available is False
-    # plan-only warning が含まれる
+    # plan-only warning は warnings に残る
     wcs = [w["warning_class"] for w in plan.warnings]
     assert "rollback_is_plan_only" in wcs
 
 
-def test_rollback_plan_target_missing_blocked(tmp_path):
+def test_rollback_plan_target_missing_already_absent(tmp_path):
+    """v2.10: target_missing は blocked ではなく already_absent"""
     from lab_executor.extension_migration_log import (
         plan_extension_rollback_from_log,
     )
@@ -95,8 +96,10 @@ def test_rollback_plan_target_missing_blocked(tmp_path):
     _sh.rmtree(tmp_path / "new" / "local_a")
     plan = plan_extension_rollback_from_log(mp)
     assert plan.candidates == []
-    rcs = [b["reason_class"] for b in plan.blocked_reasons]
-    assert "target_missing" in rcs
+    assert plan.blocked_reasons == []
+    assert len(plan.already_absent) == 1
+    assert plan.already_absent[0]["reason"] == "target_missing"
+    assert plan.status == "ok"  # already_absent は問題ではない
 
 
 def test_rollback_plan_legacy_source_missing_blocked(tmp_path):
@@ -160,12 +163,13 @@ def test_rollback_plan_does_not_delete_files(tmp_path):
 
 
 def test_cleanup_plan_ok(tmp_path):
+    """v2.10: plan-only warning は status を warning にしない"""
     from lab_executor.extension_migration_log import (
         plan_extension_cleanup_from_log,
     )
     mp = _apply(tmp_path)
     plan = plan_extension_cleanup_from_log(mp)
-    assert plan.status == "warning"  # plan-only warning が必ず入る
+    assert plan.status == "ok"
     assert len(plan.candidates) == 1
     c = plan.candidates[0]
     assert c.extension_id == "local.a"
@@ -205,8 +209,8 @@ def test_cleanup_plan_extension_id_mismatch_blocked(tmp_path):
     assert "extension_id_mismatch" in rcs
 
 
-def test_cleanup_plan_source_missing_already_cleaned(tmp_path):
-    """source が既に無い場合は cleanup 不要 (already_cleaned warning)"""
+def test_cleanup_plan_source_missing_legacy_source_missing(tmp_path):
+    """v2.10: source が既に無い場合は legacy_source_missing リストへ"""
     from lab_executor.extension_migration_log import (
         plan_extension_cleanup_from_log,
     )
@@ -214,8 +218,10 @@ def test_cleanup_plan_source_missing_already_cleaned(tmp_path):
     _sh.rmtree(tmp_path / "legacy" / "local_a")
     plan = plan_extension_cleanup_from_log(mp)
     assert plan.candidates == []
-    wcs = [w["warning_class"] for w in plan.warnings]
-    assert "already_cleaned_or_missing" in wcs
+    assert len(plan.legacy_source_missing) == 1
+    assert plan.legacy_source_missing[0]["extension_id"] == "local.a"
+    # status は ok (legacy_source_missing は problem ではない)
+    assert plan.status == "ok"
 
 
 def test_cleanup_plan_does_not_delete_files(tmp_path):
@@ -279,10 +285,11 @@ def test_cli_rollback_plan_json(tmp_path):
                     str(mp), "--json"])
     data = json.loads(buf.getvalue())
     assert data["operation"] == "extension_copy_rollback_plan"
-    assert data["schema_version"] == "v2.9"
+    assert data["schema_version"] == "v2.10"
     assert data["apply_available"] is False
     assert data["summary"]["rollback_candidates"] == 1
-    # warning + default -> 0
+    # v2.10: status=ok なので rc=0
+    assert data["status"] == "ok"
     assert rc == 0
 
 
@@ -297,13 +304,15 @@ def test_cli_cleanup_plan_json(tmp_path):
                     str(mp), "--json"])
     data = json.loads(buf.getvalue())
     assert data["operation"] == "extension_cleanup_plan"
-    assert data["schema_version"] == "v2.9"
+    assert data["schema_version"] == "v2.10"
     assert data["apply_available"] is False
     assert data["summary"]["cleanup_candidates"] == 1
+    assert data["status"] == "ok"
     assert rc == 0
 
 
-def test_cli_rollback_plan_strict(tmp_path):
+def test_cli_rollback_plan_strict_passes_on_plan_only(tmp_path):
+    """v2.10: plan-only warning だけなら --strict でも exit 0"""
     mp = _apply(tmp_path)
     from lab_executor.cli import main
     import io
@@ -312,10 +321,11 @@ def test_cli_rollback_plan_strict(tmp_path):
     with redirect_stdout(buf):
         rc = main(["extension", "migration-log", "rollback-plan",
                     str(mp), "--json", "--strict"])
-    assert rc == 1
+    assert rc == 0
 
 
-def test_cli_cleanup_plan_strict(tmp_path):
+def test_cli_cleanup_plan_strict_passes_on_plan_only(tmp_path):
+    """v2.10: plan-only warning だけなら --strict でも exit 0"""
     mp = _apply(tmp_path)
     from lab_executor.cli import main
     import io
@@ -324,7 +334,7 @@ def test_cli_cleanup_plan_strict(tmp_path):
     with redirect_stdout(buf):
         rc = main(["extension", "migration-log", "cleanup-plan",
                     str(mp), "--json", "--strict"])
-    assert rc == 1
+    assert rc == 0
 
 
 # ============================================================

@@ -1,4 +1,4 @@
-"""lab-executor CLI (v2.9.x).
+"""lab-executor CLI (v2.10.x).
 
 v2.0 では minimal CLI / `serve` placeholder のみだったが、v2.1.0 で
 `serve --backend mock` を実装、v2.2.0 で authoring workflow CLI を
@@ -55,6 +55,20 @@ v2.6.0 追加 (Extension Migration Copy Plan):
   (``apply_available=False``)。duplicate / invalid_metadata / target
   既存などがあれば ``copy_plan.status="blocked"`` で candidate 生成を
   停止する
+
+v2.10.0 追加 (Rollback / Cleanup Plan Refinement):
+
+- 全 `migration-log {inspect,verify,rollback-plan,cleanup-plan}` で
+  ``--latest`` を導入。`operation == extension_copy_apply` の最新
+  manifest を自動選択する。明示 path との併用は exit 2
+- `rollback-plan`: `target_missing` を ``blocked_reasons`` から
+  ``already_absent`` リストに分離 (削除対象が無いだけ = 異常ではない)
+- `cleanup-plan`: ``already_cleaned_or_missing`` warning を構造化
+  された ``legacy_source_missing`` リストへ分離。検証ロジックは
+  ``verify_extension_migration_log()`` に統合
+- 案 A: **plan-only warning は status を warning に格上げしない**。
+  実 problem が無ければ ``status="ok"`` のまま、plan-only は warnings
+  に残す。`--strict` は real problem だけで exit 1 化
 
 v2.9.0 追加 (Rollback Plan / Cleanup Plan):
 
@@ -245,18 +259,32 @@ def _build_parser() -> argparse.ArgumentParser:
 
     mlog_inspect = mlog_sub.add_parser(
         "inspect", help="Inspect one manifest file")
-    mlog_inspect.add_argument("manifest", help="manifest .json path")
+    mlog_inspect.add_argument(
+        "manifest", nargs="?", default=None,
+        help="manifest .json path (omit when using --latest)",
+    )
     mlog_inspect.add_argument("--json", action="store_true")
+    mlog_inspect.add_argument(
+        "--latest", action="store_true",
+        help="v2.10: use the latest extension_copy_apply manifest",
+    )
 
     mlog_verify = mlog_sub.add_parser(
         "verify",
         help="Verify copied targets still exist and match metadata",
     )
-    mlog_verify.add_argument("manifest", help="manifest .json path")
+    mlog_verify.add_argument(
+        "manifest", nargs="?", default=None,
+        help="manifest .json path (omit when using --latest)",
+    )
     mlog_verify.add_argument("--json", action="store_true")
     mlog_verify.add_argument(
         "--strict", action="store_true",
         help="treat warning as exit 1 (default: exit 0)",
+    )
+    mlog_verify.add_argument(
+        "--latest", action="store_true",
+        help="v2.10: use the latest extension_copy_apply manifest",
     )
 
     # v2.9.0: rollback-plan / cleanup-plan (plan only, no file changes)
@@ -267,9 +295,16 @@ def _build_parser() -> argparse.ArgumentParser:
             "(plan only; no file changes)"
         ),
     )
-    mlog_rb.add_argument("manifest", help="manifest .json path")
+    mlog_rb.add_argument(
+        "manifest", nargs="?", default=None,
+        help="manifest .json path (omit when using --latest)",
+    )
     mlog_rb.add_argument("--json", action="store_true")
     mlog_rb.add_argument("--strict", action="store_true")
+    mlog_rb.add_argument(
+        "--latest", action="store_true",
+        help="v2.10: use the latest extension_copy_apply manifest",
+    )
 
     mlog_cu = mlog_sub.add_parser(
         "cleanup-plan",
@@ -278,9 +313,16 @@ def _build_parser() -> argparse.ArgumentParser:
             "cleaned up (plan only; no file changes)"
         ),
     )
-    mlog_cu.add_argument("manifest", help="manifest .json path")
+    mlog_cu.add_argument(
+        "manifest", nargs="?", default=None,
+        help="manifest .json path (omit when using --latest)",
+    )
     mlog_cu.add_argument("--json", action="store_true")
     mlog_cu.add_argument("--strict", action="store_true")
+    mlog_cu.add_argument(
+        "--latest", action="store_true",
+        help="v2.10: use the latest extension_copy_apply manifest",
+    )
 
     # ---- extension migration-plan (v2.5.0) ----------------------
     ext_mig = ext_sub.add_parser(
@@ -727,12 +769,45 @@ def _cmd_extension(args: argparse.Namespace) -> int:
 
     if sub == "migration-log":
         # v2.8.0: list / inspect / verify apply manifests
+        # v2.9.0: rollback-plan / cleanup-plan
+        # v2.10.0: --latest resolution for inspect/verify/rollback-/cleanup-plan
         from lab_executor.extension_migration_log import (
             list_extension_migration_logs,
             load_extension_migration_log,
             verify_extension_migration_log,
+            find_latest_extension_copy_manifest,
         )
         mc = getattr(args, "mlog_command", None)
+
+        # v2.10: resolve --latest for subcommands that take a manifest
+        def _resolve_manifest(args):
+            want_latest = getattr(args, "latest", False)
+            given = getattr(args, "manifest", None)
+            if want_latest and given:
+                print(
+                    "extension migration-log: --latest cannot be "
+                    "combined with an explicit manifest path",
+                    file=sys.stderr,
+                )
+                return None, 2
+            if want_latest:
+                p = find_latest_extension_copy_manifest()
+                if p is None:
+                    print(
+                        "extension migration-log: no "
+                        "extension_copy_apply manifest found",
+                        file=sys.stderr,
+                    )
+                    return None, 1
+                return str(p), 0
+            if not given:
+                print(
+                    "extension migration-log: manifest path is "
+                    "required (or use --latest)",
+                    file=sys.stderr,
+                )
+                return None, 2
+            return given, 0
         if mc == "list":
             logs = list_extension_migration_logs()
             data = {
@@ -755,8 +830,11 @@ def _cmd_extension(args: argparse.Namespace) -> int:
             return 0
 
         if mc == "inspect":
+            mp, rc = _resolve_manifest(args)
+            if mp is None:
+                return rc
             try:
-                m = load_extension_migration_log(args.manifest)
+                m = load_extension_migration_log(mp)
             except (FileNotFoundError, ValueError) as e:
                 print(f"inspect failed: {e}", file=sys.stderr)
                 return 1
@@ -783,7 +861,10 @@ def _cmd_extension(args: argparse.Namespace) -> int:
             return 0
 
         if mc == "verify":
-            res = verify_extension_migration_log(args.manifest)
+            mp, rc = _resolve_manifest(args)
+            if mp is None:
+                return rc
+            res = verify_extension_migration_log(mp)
             data = res.to_dict()
             if args.json:
                 print(json.dumps(data, ensure_ascii=False,
@@ -815,11 +896,14 @@ def _cmd_extension(args: argparse.Namespace) -> int:
                 plan_extension_rollback_from_log,
                 plan_extension_cleanup_from_log,
             )
+            mp, rc = _resolve_manifest(args)
+            if mp is None:
+                return rc
             if mc == "rollback-plan":
-                plan = plan_extension_rollback_from_log(args.manifest)
+                plan = plan_extension_rollback_from_log(mp)
                 label = "rollback-plan"
             else:
-                plan = plan_extension_cleanup_from_log(args.manifest)
+                plan = plan_extension_cleanup_from_log(mp)
                 label = "cleanup-plan"
             data = plan.to_dict()
             if args.json:

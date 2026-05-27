@@ -60,6 +60,7 @@ CRITICAL_FILES = [
     "src/lab_executor/session.py",
     "src/lab_executor/job/manager.py",
     "src/lab_executor/server.py",
+    "tests/test_v2_10_rollback_cleanup_refinement.py",
     "tests/test_v290_rollback_cleanup_plan.py",
     "tests/test_v280_migration_log.py",
     "tests/test_v270_copy_apply.py",
