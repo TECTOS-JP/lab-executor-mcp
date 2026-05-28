@@ -145,6 +145,32 @@ def test_mcp_tool_surface_unchanged_v213():
     assert len(exp) == 7
 
 
+def test_v2_13_1_experiment_plan_persistence_hooks_present():
+    """v2.13.1: _run_experiment_plan_job (DSL path) でも recipe path
+    と同じく record_step_started / record_step_completed /
+    step_started / step_completed events を発火していること。
+
+    v2.13.0 までこれが欠けており、実機 E2E で get_experiment_results
+    rows=0 / total_steps=0 / timeline 空 が発生していた。
+    """
+    from lab_executor.job import manager as mgr_mod
+    src = open(mgr_mod.__file__, encoding="utf-8").read()
+    # _run_experiment_plan_job 内の hook を確認
+    start = src.index("async def _run_experiment_plan_job")
+    # 次の async def までで切る
+    end = src.index("\n    async def ", start + 10)
+    block = src[start:end]
+    assert "record_step_started" in block, (
+        "v2.13.1: DSL path に record_step_started が必要")
+    assert "record_step_completed" in block, (
+        "v2.13.1: DSL path に record_step_completed が必要")
+    assert "step_started" in block, (
+        "v2.13.1: DSL path に step_started event が必要")
+    assert ("step_completed" in block
+            or "step_failed" in block), (
+        "v2.13.1: DSL path に step_completed/_failed event が必要")
+
+
 def test_compiler_module_has_predicted_history_logic():
     """compiler.py に combined_history を渡す code path があること
     を source check"""

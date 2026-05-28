@@ -1,5 +1,130 @@
 # 変更履歴
 
+## v2.13.1 — DSL plan path persistence hooks (Issue A 修正)
+
+合言葉: **「DSL plan も recipe path と同じ persistence hook を呼ぶ」**
+
+Codex 実機 E2E (v2.13.0 リリース後の sweep job) で発覚した致命的
+persistence バグ:
+
+```
+start_experiment_job 完了 / job_outcome=success / 実機は正しく
+動作している (PMX35-3A sweep + 7563 read + safe_shutdown)
+   ↓
+get_experiment_results -> rows=0
+get_job_summary -> total_steps=0, key_results=[]
+get_experiment_timeline -> experiment_job_started 1 件のみ、
+                         step / measurement event 一切なし
+CSV export -> header 行のみ (data 0 行)
+```
+
+### 原因
+
+`job/manager.py:_run_experiment_plan_job` (DSL plan path) が、
+**recipe path (`_run_job_inner`) と同じ persistence hook を呼んで
+いなかった**。具体的に欠けていた呼出:
+
+- `self._store.record_step_started(job_id, idx, step_type)` —
+  job_steps テーブルへの INSERT
+- `self._safe_record_event(job_id, "step_started", ...)` —
+  timeline event
+- `self._store.record_step_completed(...)` — job_steps の終端記録
+- `self._safe_record_event(job_id, "step_completed" / "step_failed", ...)`
+
+recipe path には v0.7.0 から存在していたが、v0.8.0 で DSL plan path
+を追加するときに hook を写し忘れていた。**3 release 分 (v0.8.0 ~
+v2.13.0) この bug が潜在していた**。
+
+### 修正
+
+`_run_experiment_plan_job` の step loop に上記 4 呼出を追加 (recipe
+path とまったく同じ形式 + 同じ try/except 包囲):
+
+```python
+# update_step の直後 (step 開始時)
+step_type = getattr(step, "type", "?")
+step_row_id = 0
+try:
+    step_row_id = self._store.record_step_started(
+        job_id, idx, step_type)
+except Exception:
+    pass
+self._safe_record_event(job_id, "step_started", step_index=idx, ...)
+
+# step dispatch 実行
+
+# step_results.append の直後 (step 終了時)
+try:
+    self._store.record_step_completed(
+        step_row_id,
+        status="ok" if result.get("success") else "failed",
+        result=result if result.get("success") else None,
+        error=result if not result.get("success") else None,
+    )
+except Exception:
+    pass
+self._safe_record_event(
+    job_id,
+    "step_completed" if result.get("success") else "step_failed",
+    step_index=idx, ...,
+)
+```
+
+### 影響範囲
+
+**影響あり (修正される)**:
+
+- `get_experiment_results` が DSL plan の measurement / step 結果を
+  返すようになる
+- `get_job_summary.total_steps` が正しい数を返す
+- `get_experiment_timeline` に `step_started` / `step_completed` /
+  `step_failed` event が含まれる
+- `export_experiment_results` CSV に data row が出る
+- 既存の **完了済 jobs** は記録がないので過去データは復旧不可
+  (新規 job 以降のみ正しく記録される)
+
+**影響なし**:
+
+- recipe path (`_run_job_inner`) は元から記録されていたので変化なし
+- 実機への I/O 経路は完全不変
+- DSL compiler / validator も不変
+- MCP tool / DSL schema / safety API 不変
+
+### Tests (227 件 pass)
+
+- `tests/test_v2_13_predicted_history.py` に新規 source check 1 件
+  追加 (`test_v2_13_1_experiment_plan_persistence_hooks_present`):
+  `_run_experiment_plan_job` block 内に `record_step_started` /
+  `record_step_completed` / `step_started` / `step_completed|
+  step_failed` の文字列が存在することを source 解析で確認
+- 既存 v2.13.0 tests (predicted history) も全 pass
+
+### Codex 再実機検証
+
+v2.13.1 を visa-mcp serve に読み込ませた状態で sweep job を再実行
+すると、`get_experiment_results` rows>0 / `get_experiment_timeline`
+に step_started/_completed event / `total_steps>0` / CSV にデータ
+が入るはず。
+
+### 残課題 (別 release で対応)
+
+- **Issue B**: 7563 の T-type response `NTTC+0032.4E+0` を visa-mcp
+  parser が構造化できない (matched=false) → visa-mcp v2.2 候補で
+  response_formats 正規表現を T-type 対応に拡張
+- measurement_cache への書き込み (query 結果) も DSL path で別途
+  確認要 — step_completed event の result に measurement 値が乗って
+  いる前提で、`tools/info.get_last_measurement` 経路が動くかは
+  Codex の次回実機で確認
+
+### 互換性
+
+- MCP tool 名 / 引数 / response 不変
+- DSL schema / safety API 不変
+- 既存 recipe job の挙動は完全不変
+- 新規 DSL plan job の persistence が正しく動く方向の修正のみ
+
+---
+
 ## v2.13.0 — DSL validator predicted history (precondition fix)
 
 合言葉: **「plan 内の先行 step を validator にも見せる」**

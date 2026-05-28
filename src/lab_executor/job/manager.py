@@ -977,6 +977,25 @@ class JobManager:
                     job_id, idx,
                     last_step_summary=self._step_summary(step),
                 )
+                # v2.13.1: DSL experiment plan path でも recipe path と
+                # 同様に job_steps + step_started/_completed event を
+                # 記録する。v2.13.0 まではこれを呼んでおらず、
+                # get_experiment_results / get_experiment_timeline が
+                # 空になっていた (実機 E2E で発覚)。
+                step_type = getattr(step, "type", "?")
+                step_row_id = 0
+                try:
+                    step_row_id = self._store.record_step_started(
+                        job_id, idx, step_type,
+                    )
+                except Exception:
+                    pass
+                self._safe_record_event(
+                    job_id, "step_started",
+                    step_index=idx,
+                    payload={"step_type": step_type,
+                             "summary": self._step_summary(step)},
+                )
 
                 # step 種別ごとに dispatch
                 if isinstance(step, WaitStep):
@@ -1031,6 +1050,25 @@ class JobManager:
                         "step_type": getattr(step, "type", "?"),
                     }
                 step_results.append({"step": idx, **result})
+                # v2.13.1: step_completed / step_failed を record
+                try:
+                    self._store.record_step_completed(
+                        step_row_id,
+                        status="ok" if result.get("success") else "failed",
+                        result=result if result.get("success") else None,
+                        error=result if not result.get("success") else None,
+                    )
+                except Exception:
+                    pass
+                self._safe_record_event(
+                    job_id,
+                    "step_completed" if result.get("success")
+                    else "step_failed",
+                    step_index=idx,
+                    payload={"step_type": step_type,
+                             "verified": result.get("verified"),
+                             "error": result.get("error")},
+                )
 
                 if not result.get("success", False):
                     if result.get("interrupted_by_timeout"):
