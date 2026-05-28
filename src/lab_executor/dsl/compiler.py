@@ -131,6 +131,18 @@ class _Context:
         # parallel walk 中だけ set を入れ、終わったら None に戻す。
         # _resolve_instrument は None でなければここにも追加する。
         self._branch_resources: set[str] | None = None
+        # v2.13.0: plan 内の先行 CommandStep を resource 単位で記録した
+        # 「予測 history」。validator の precondition チェックで
+        # session.command_history (= 実機の実行履歴) と OR して使う。
+        # plan walk が順次進むにつれて、各 CommandStep の command_name
+        # を該当 resource_name の list に append する。
+        # 注: parallel branch 内の step は branch_resources と同様に
+        # 並列内では互いに見えない (順序保証なしのため安全側) — v2.13
+        # では sequential / sweep 経路のみで積む。
+        self._predicted_history: dict[str, list[str]] = {}
+        # parallel walk 中なら、branch 内の予測 history を branch
+        # 終了時に破棄するため、開始時に snapshot を取る
+        self._parallel_depth: int = 0
         # rendered SCPI (dry_run 用)
         self.rendered_steps: list[dict] = []
         # 上限カウント
@@ -356,10 +368,16 @@ def _validate_command(
         )
         return
 
-    # safety validation
+    # v2.13.0: safety validation には session.command_history (実機の
+    # 実行履歴) + plan 内の予測 history を結合して渡す。これで plan の
+    # 先行 step (例: set_voltage_protection / set_current_protection)
+    # を precondition 満たす扱いにできる。parallel branch 内では他
+    # branch を見ない (現実装では parallel_depth>0 中は積まない)。
+    predicted = ctx._predicted_history.get(session.resource_name, [])
+    combined_history = list(session.command_history) + predicted
     violations = sf.validate(
         session.definition, command_name, args,
-        session_history=session.command_history,
+        session_history=combined_history,
     )
     mode = sf.get_safety_mode()
     if violations:
@@ -416,6 +434,14 @@ def _validate_command(
 
     # 推定 duration (1 命令 ~ 50ms と仮定、verify あれば +50ms)
     ctx.estimated_duration_s += 0.05 + (0.05 if cmd_def.verify is not None else 0.0)
+
+    # v2.13.0: plan walk 順序で予測 history を更新。次以降の step の
+    # precondition チェックがこの command を「呼ばれた」とみなせる。
+    # parallel branch 内 (parallel_depth>0) では順序保証がないため
+    # 積まない (安全側)。
+    if ctx._parallel_depth == 0:
+        ctx._predicted_history.setdefault(
+            session.resource_name, []).append(command_name)
 
     # v0.8.1: rendered_steps を agent 可読構造に強化
     # step_path (階層内位置) / instrument_ref (元 DSL の参照) / resolved_resource /
@@ -698,6 +724,14 @@ def _convert_step(
             branch_ir: list[IRStep] = []
             # v0.8.1: branch 内で出現した resource を直接記録 (set 差分では共有検出不可)
             ctx._branch_resources = set()
+            # v2.13.0: branch 内では予測 history を積まない (並列内は
+            # 順序保証なし)。snapshot を取って branch 終了時に復元
+            # することで「branch 内で積まれた history が他 branch に
+            # 漏れる」事故を防ぐ
+            ctx._parallel_depth += 1
+            history_snapshot = {
+                k: list(v) for k, v in ctx._predicted_history.items()
+            }
             for j, b_step in enumerate(branch):
                 # v0.8.1: branch 内に nested parallel が含まれていたら reject
                 if isinstance(b_step, DSLParallelStep):
@@ -722,6 +756,9 @@ def _convert_step(
                 name=f"parallel_branch_{i}",
                 steps=branch_ir,
             ))
+            # v2.13.0: branch 終了で snapshot を戻す + parallel_depth--
+            ctx._predicted_history = history_snapshot
+            ctx._parallel_depth -= 1
         ctx._branch_resources = None
         ctx.path = saved_path
 

@@ -1,5 +1,93 @@
 # 変更履歴
 
+## v2.13.0 — DSL validator predicted history (precondition fix)
+
+合言葉: **「plan 内の先行 step を validator にも見せる」**
+
+Codex 実機 E2E (PMX35-3A + 7563、抵抗発熱配線) で発覚した bug への
+対応:
+
+```
+plan: set_voltage_protection → set_current_protection → set_output ON
+```
+
+という安全なプランを `validate_experiment_plan` / `dry_run_plan` に
+かけると、strict mode で **`set_output ON` が `safety_violation`** に
+なる現象。
+
+原因: validator は `session.command_history` (= 実機の実行履歴) だけ
+を見ており、dry_run 時点ではまだ何も実行していないため history が
+空 → precondition の `has_been_called: set_voltage_protection` が
+「未呼出」と判定されていた。
+
+### 修正
+
+`dsl/compiler.py` の `_Context` に **`_predicted_history:
+dict[resource_name, list[command_name]]`** を追加。plan walk が
+順次進むにつれて、各 `CommandStep` の `command_name` を該当
+resource の list に append。次以降の step の safety check では:
+
+```python
+combined_history = list(session.command_history) + predicted
+violations = sf.validate(..., session_history=combined_history)
+```
+
+を渡す。これで plan 内の **先行 step が「呼ばれたこと」になる**。
+
+### parallel branch の扱い
+
+parallel 内では順序保証がないため、安全側に倒して:
+
+- branch 開始時に `_predicted_history` の snapshot を取り、
+  `_parallel_depth += 1`
+- branch 内 step は `_parallel_depth > 0` なので予測 history に
+  **積まない**
+- branch 終了時に snapshot を復元、`_parallel_depth -= 1`
+
+これにより、branch 内で積まれた history が他 branch / 後段に
+漏れない。
+
+### 影響範囲
+
+- **影響あり**: `validate_experiment_plan` / `dry_run_plan` の
+  precondition チェック → 正しいプランが strict mode で通るように
+  なる
+- **影響なし**: `start_experiment_job` (runtime) は今まで通り
+  runner 側で `session.command_history` を更新するため、挙動同一
+- **影響なし**: parameter 検証 / range 検証 / verify 設定など他の
+  validator path
+
+### Tests (226 件 pass)
+
+`tests/test_v2_13_predicted_history.py`: 8 件
+
+- `safety.validate` baseline (history あれば pass / なければ
+  violation 2 件)
+- predicted history を session_history と結合した状態で pass する
+  ことの直接確認
+- 部分的に欠けている場合は依然として violation
+- `compiler.py` source に `combined_history` / `_parallel_depth` /
+  `_predicted_history` が含まれていることの source check
+- version / tool surface 不変回帰
+
+### Codex E2E 再開可能
+
+これで PMX35-3A の正しい sweep プラン (set_voltage_protection /
+set_current_protection / set_output ON / sweep / safe_shutdown)
+が strict mode の dry_run_plan を **そのまま通過**するはず。
+
+### 互換性
+
+- MCP tool 名 / 引数 / response 不変
+- safety.py の API シグネチャ不変
+- 既存 plan は影響なし (history を見る論理は同じ、より満たしやすく
+  なる方向だけ)
+- runtime 経路は完全不変
+- MCP tool / DSL / extension pack 形式 / `.install_meta.json` /
+  `default_extensions_dir()` 不変
+
+---
+
 ## v2.12.0 — Controlled Cleanup Apply
 
 合言葉: **「ついに削除系操作。ただし完全削除ではなく trash 移動」**
