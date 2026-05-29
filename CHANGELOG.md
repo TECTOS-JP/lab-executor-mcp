@@ -1,5 +1,25 @@
 # 変更履歴
 
+## v2.14.3 — Codex v2.14.2 レビュー対応 (JobStore.close 重複定義削除)
+
+### Codex v2.14.2 レビュー指摘 P3
+
+> `JobStore.close()` が line 318 と line 1048 の 2 箇所に重複定義
+> されている (`__code__.co_firstlineno == 1048` で後方の定義が有効)。
+
+### 修正
+
+- `src/lab_executor/job/store.py`:
+  - 末尾の重複 `close()` 定義 (line 1048) を削除
+  - authoritative impl は line 318 (`__enter__` / `__exit__` 付き)
+- 新 test 3 件 (`test_v2_14_3_review.py`):
+  - source string レベルで `def close(self)` が 1 つだけ
+  - close 後 lazy reconnect が動く (regression)
+  - version sentinel
+
+visa-mcp v2.3.2 と組で release。
+
+
 ## v2.14.2 — Codex v2.14.1 レビュー対応 (JobStore.close() + test fixture)
 
 合言葉: **「Windows pytest を詰まらせない」**

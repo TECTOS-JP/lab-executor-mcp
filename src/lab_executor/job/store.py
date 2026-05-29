@@ -1045,11 +1045,6 @@ class JobStore:
             for r in rows
         ]
 
-    def close(self) -> None:
-        conn = getattr(self._local, "conn", None)
-        if conn is not None:
-            try:
-                conn.close()
-            except Exception:
-                pass
-            self._local.conn = None
+    # v2.14.3: duplicate `close()` definition removed.
+    # The authoritative `close()` + `__enter__` / `__exit__` are at
+    # line ~318 of this file.
