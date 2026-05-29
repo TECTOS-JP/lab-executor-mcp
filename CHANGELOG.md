@@ -1,5 +1,54 @@
 # 変更履歴
 
+## v2.14.1 — Codex v2.14.0 レビュー対応 (寛容 float + parsed metadata 除外)
+
+合言葉: **「`*` も `.` として読み、metadata は rows に出さない」**
+
+### Codex v2.14.0 レビュー指摘 2 件 (lab-executor 側)
+
+**P1-b**: `numeric_extract` が `JPPC+0032*2A+0` を `32.0` と
+解釈 (実値は 32.2)。`*` が小数点相当、`A` が指数 marker `E`
+相当という ASCII bit 反転 (XOR 0x04) corruption が起きている。
+
+**P2**: `_extract_result_rows` が `parsed` dict の top-level を
+そのまま rows 化していたため、`matched` / `fields` / `raw` /
+`fallback_used` / `matched_pattern_index` が measurement 列に
+混入していた。
+
+### 修正
+
+- `response_parser._parse_value_permissive()` 新設:
+  - `float(raw_val)` がダメなら `*→.` `A→E` `a→e` を試す
+  - これで `+0032*2A+0` → `32.2` を正しく復元
+- `_extract_result_rows` (lab_executor 側 / visa-mcp 側両方):
+  - parsed metadata keys (`matched` / `fields` / `raw` /
+    `fallback_used` / `matched_pattern_index` / `error`) を rows
+    に出さない
+  - 新形式 (response_parser 経由) は `fields` 内の numeric と
+    `value_numeric` を `{cmd_name}.{field}` 名で rows 化
+  - 旧形式 (response_parsed 平 dict) も metadata key を skip しつつ
+    従来通り rows 化
+- 7 件 test 追加 (`test_v2_14_1_review.py`):
+  - JPPC corruption 値復元 (29.0/29.1/30.3/32.2/33.0 + 末尾 \t)
+  - 厳密 pattern regression
+  - permissive float ユニット
+  - parsed metadata key 除外
+  - parsed.fields.numeric の rows 化
+  - 旧形式 response_parsed の rows 化
+  - version sentinel
+
+### 既知の制約
+
+`_parse_value_permissive` は `*` を `.` とみなすため、本物の `*` を
+含む応答形式 (現状無いと想定) では誤変換する可能性がある。これは
+複数 pattern を YAML で並べて回避できる。
+
+### 互換性
+
+完全後方互換。新規 fallback 動作のみ追加。Stable / Experimental
+tool API は不変。visa-mcp v2.2.1 と組で release。
+
+
 ## v2.14.0 — response parser 強化 + 自動 parse (visa-mcp v2.2 と協調)
 
 合言葉: **「parser が失敗しても raw も数値も失わない」**

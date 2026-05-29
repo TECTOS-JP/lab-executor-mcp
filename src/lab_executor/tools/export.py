@@ -165,19 +165,69 @@ def _extract_result_rows(
         # parsed measurement (v0.8.x response_parsed dict)
         # v2.13.2: step_executor は `parsed` キー (response_parser 経由) も
         # 使う可能性があるので両方対応
+        # v2.14.1: response_parser の出力には metadata keys
+        # (matched / fallback_used / matched_pattern_index / raw / fields)
+        # が含まれる。これらは measurement 列に出すべきでない。
+        # `fields` 内の numeric / `value_numeric` だけを rows 化する。
         parsed = (
             r.get("response_parsed")
             or r.get("parsed")
         ) if isinstance(r, dict) else None
+        _PARSED_METADATA_KEYS = {
+            "matched", "matched_pattern_index", "raw",
+            "fallback_used", "fields", "error",
+        }
+        emitted_from_parsed = False
         if isinstance(parsed, dict) and parsed:
-            for k, v in parsed.items():
-                rows.append({
-                    **common,
-                    "measurement": k,
-                    "value": v,
-                    "unit": "",
-                })
-        else:
+            cmd_name = r.get("command") or s.get("step_type")
+            # 旧形式: response_parsed = {"value": 1.23, "unit": "V"} のように
+            # 平 dict (response_parser 経由でない自前 parsed)。これは従来
+            # 通り key 単位で rows 化するが、metadata key は skip する。
+            top_numeric_keys = [
+                k for k, v in parsed.items()
+                if k not in _PARSED_METADATA_KEYS
+                and isinstance(v, (int, float))
+            ]
+            # 新形式 (v2.14.0 response_parser): `fields` dict + 別途
+            # `value_numeric` / `matched` / `raw` / `matched_pattern_index`
+            new_fields = parsed.get("fields") if isinstance(
+                parsed.get("fields"), dict) else None
+            value_numeric = parsed.get("value_numeric")
+            if new_fields or value_numeric is not None:
+                # 構造化 fields の numeric だけを emit
+                for k, v in (new_fields or {}).items():
+                    if not isinstance(v, (int, float)):
+                        continue
+                    rows.append({
+                        **common,
+                        "measurement": f"{cmd_name}.{k}" if cmd_name else k,
+                        "value": v,
+                        "unit": "",
+                    })
+                    emitted_from_parsed = True
+                if value_numeric is not None and isinstance(
+                    value_numeric, (int, float)
+                ):
+                    rows.append({
+                        **common,
+                        "measurement": (
+                            f"{cmd_name}.value_numeric"
+                            if cmd_name else "value_numeric"),
+                        "value": value_numeric,
+                        "unit": "",
+                    })
+                    emitted_from_parsed = True
+            elif top_numeric_keys:
+                # 旧形式 (response_parsed = {"value": 1.23, "unit": "V"})
+                for k in top_numeric_keys:
+                    rows.append({
+                        **common,
+                        "measurement": k,
+                        "value": parsed[k],
+                        "unit": "",
+                    })
+                    emitted_from_parsed = True
+        if not emitted_from_parsed:
             # 数値 raw response or value
             # v2.13.2 fix: step_executor が保存するキー名は `raw_response`。
             # 旧名 `response_raw` / `response` は後方互換のため残す。

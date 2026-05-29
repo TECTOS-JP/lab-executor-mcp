@@ -38,6 +38,29 @@ _NUMERIC_RE = re.compile(
 )
 
 
+def _parse_value_permissive(raw_val: str, fallback_value: Any) -> Any:
+    """v2.14.1: value 文字列を寛容に float 変換する。
+
+    まず通常の `float()` を試し、失敗したら下記の文字置換を適用:
+    - `*` → `.` (小数点相当)
+    - `A`/`a` → `E`/`e` (指数 marker 相当)
+    Yokogawa 7563 で `NTTC+0033.0E+0` ↔ `JPPC+0033*0A+0` のように
+    特定文字が ASCII bit 反転で破損するケースに対応。
+    両方とも float 化できなければ `fallback_value` をそのまま返す。
+    """
+    try:
+        return float(raw_val)
+    except (TypeError, ValueError):
+        pass
+    try:
+        cleaned = (
+            str(raw_val).replace("*", ".").replace("A", "E").replace("a", "e")
+        )
+        return float(cleaned)
+    except (TypeError, ValueError):
+        return fallback_value
+
+
 def _try_numeric_extract(raw: str) -> float | None:
     """raw 文字列から最初に出現する数値を抽出して float に変換。
     取れない場合は None。"""
@@ -86,11 +109,8 @@ def parse_response(
         for name, raw_val in captured.items():
             mapping = response_format.fields.get(name, {})
             value: Any = mapping.get(raw_val, raw_val) if mapping else raw_val
-            if name == "value":
-                try:
-                    value = float(raw_val) if raw_val is not None else value
-                except (TypeError, ValueError):
-                    pass
+            if name == "value" and raw_val is not None:
+                value = _parse_value_permissive(raw_val, value)
             fields[name] = value
         out: dict[str, Any] = {
             "matched": True,
