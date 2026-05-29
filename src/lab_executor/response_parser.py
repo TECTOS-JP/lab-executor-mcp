@@ -1,12 +1,26 @@
 """
-機器応答の構造化パーサ (v0.3.0)
+機器応答の構造化パーサ (v0.3.0 → v2.14.0)
 
 YAML の response_formats セクションに定義された正規表現パターンと
 フィールドマッピングを用いて、生応答を辞書に構造化する。
 
+v2.14.0 で以下を拡張:
+- 複数代替 patterns (例: NTTC / NTKC / OTTC / FTTC / ...) に対応
+- 未マッチ時の `fallback: "numeric_extract"` (raw から
+  `[+-]?\\d+(\\.\\d+)?(E[+-]?\\d+)?` を抽出して
+  `value_numeric` を populate)
+- 後方互換: 旧 `pattern` (単一) も引き続き利用可
+- マッチした pattern index を `matched_pattern_index` で返す
+
 例: Yokogawa 7563 の "NTKC+00027.2E+0" を
-    {"status": "Normal", "func": "T", "type": "K", "unit": "celsius", "value": 27.2}
+    {"matched": True, "fields": {"status": "Normal", ...},
+     "raw": "NTKC+00027.2E+0", "matched_pattern_index": 1}
     のようにパースする。
+未知形式 "JPPC+0029*1A+0" を
+    {"matched": False, "fields": {},
+     "raw": "JPPC+0029*1A+0",
+     "value_numeric": 29.0,         # fallback で抽出
+     "fallback_used": "numeric_extract"}
 """
 from __future__ import annotations
 import logging
@@ -17,6 +31,24 @@ from .models.instrument_def import InstrumentDefinition, ResponseFormat
 
 logger = logging.getLogger(__name__)
 
+# v2.14.0: numeric_extract fallback で使う数値抽出 regex
+# `+0033.0E+0` / `1.23e-5` / `9999` 等を捕捉
+_NUMERIC_RE = re.compile(
+    r"[+-]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?"
+)
+
+
+def _try_numeric_extract(raw: str) -> float | None:
+    """raw 文字列から最初に出現する数値を抽出して float に変換。
+    取れない場合は None。"""
+    m = _NUMERIC_RE.search(raw)
+    if not m:
+        return None
+    try:
+        return float(m.group(0))
+    except (TypeError, ValueError):
+        return None
+
 
 def parse_response(
     raw: str,
@@ -25,39 +57,68 @@ def parse_response(
     """
     raw 応答を ResponseFormat に基づきパースする。
 
-    返り値: {"matched": bool, "fields": {...}, "raw": "..."} 形式の辞書
-    マッチしない場合は matched=False, fields は空辞書
+    返り値の最低保証:
+    - 常に `raw` を含む (parser 例外でも失われない)
+    - `matched: bool` を含む
+    - マッチ時: `fields`, `matched_pattern_index`
+    - 未マッチ + fallback=numeric_extract 時: `value_numeric`,
+      `fallback_used`
     """
-    raw = raw.strip()
-    try:
-        pattern = re.compile(response_format.pattern)
-    except re.error as e:
-        logger.warning("response_format の正規表現が不正: %s", e)
-        return {"matched": False, "fields": {}, "raw": raw, "error": str(e)}
+    raw = raw.strip() if isinstance(raw, str) else str(raw)
+    patterns = response_format.effective_patterns()
+    if not patterns:
+        # 何も定義されていなければ fallback だけ試す
+        return _fallback_only(raw, response_format)
 
-    m = pattern.match(raw)
-    if m is None:
-        return {"matched": False, "fields": {}, "raw": raw}
+    compiled: list[re.Pattern] = []
+    for p in patterns:
+        try:
+            compiled.append(re.compile(p))
+        except re.error as e:
+            logger.warning("response_format の正規表現が不正: %r -> %s", p, e)
 
-    captured = m.groupdict()
-    fields: dict[str, Any] = {}
+    for idx, pat in enumerate(compiled):
+        m = pat.match(raw)
+        if m is None:
+            continue
+        captured = m.groupdict()
+        fields: dict[str, Any] = {}
+        for name, raw_val in captured.items():
+            mapping = response_format.fields.get(name, {})
+            value: Any = mapping.get(raw_val, raw_val) if mapping else raw_val
+            if name == "value":
+                try:
+                    value = float(raw_val) if raw_val is not None else value
+                except (TypeError, ValueError):
+                    pass
+            fields[name] = value
+        out: dict[str, Any] = {
+            "matched": True,
+            "fields": fields,
+            "raw": raw,
+            "matched_pattern_index": idx,
+        }
+        return out
 
-    for name, raw_val in captured.items():
-        # フィールド変換マッピングを適用
-        mapping = response_format.fields.get(name, {})
-        # マッピングがあれば値を変換、なければ生のまま
-        value = mapping.get(raw_val, raw_val) if mapping else raw_val
+    # どの pattern にもマッチしなかった
+    return _fallback_only(raw, response_format)
 
-        # value という名前のグループは数値として解釈を試みる
-        if name == "value":
-            try:
-                value = float(raw_val)
-            except (TypeError, ValueError):
-                pass
 
-        fields[name] = value
-
-    return {"matched": True, "fields": fields, "raw": raw}
+def _fallback_only(
+    raw: str, response_format: ResponseFormat,
+) -> dict[str, Any]:
+    out: dict[str, Any] = {
+        "matched": False,
+        "fields": {},
+        "raw": raw,
+    }
+    fb = (response_format.fallback or "").strip().lower()
+    if fb == "numeric_extract":
+        v = _try_numeric_extract(raw)
+        if v is not None:
+            out["value_numeric"] = v
+            out["fallback_used"] = "numeric_extract"
+    return out
 
 
 def parse_with_definition(

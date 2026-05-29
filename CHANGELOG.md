@@ -1,5 +1,58 @@
 # 変更履歴
 
+## v2.14.0 — response parser 強化 + 自動 parse (visa-mcp v2.2 と協調)
+
+合言葉: **「parser が失敗しても raw も数値も失わない」**
+
+### 背景
+
+Codex 実機 E2E (v2.13.3 / visa-mcp v2.1.5) で同じ 7563 から
+`NTTC+0033.0E+0` と `JPPC+0029*1A+0` 両方が観測された。前者は厳密
+parser で構造化できるが、後者は parser 未マッチで `matched=false` /
+構造化値なし → エージェントが温度判定できない問題。
+レビューが「parser が失敗しても raw は消さない、value だけでも
+取れることが重要」と指摘。
+
+### 修正
+
+- `ResponseFormat` schema 拡張:
+  - `patterns: list[str]` 複数代替 (旧 `pattern: str` も後方互換維持)
+  - `fallback: "numeric_extract" | ""` — どの pattern にもマッチ
+    しないとき `raw` から `[+-]?\d+(\.\d+)?(E[+-]?\d+)?` を抽出
+- `parse_response` 拡張:
+  - patterns を順次トライし、マッチしたら `matched=True` +
+    `matched_pattern_index`
+  - 全 unmatch なら fallback 試行 → `value_numeric` + `fallback_used`
+  - 例外も含めて `raw` は常に保持
+- `step_executor` 自動 parse:
+  - query step 完了時に `cmd_def.returns.format` があれば
+    response_formats を引いて自動 parse、result に `parsed` を同梱
+  - parser 失敗時も `raw_response` は残る
+- test 22 件追加 (`test_v2_14_response_parser.py`):
+  - 厳密 / 緩い patterns / 異常値 fallback / 後方互換 / numeric
+    抽出ユニット / version sentinel
+
+### 実機検証
+
+PMX35-3A USB + 7563 GPIB, 0→2V sweep + read_measurement:
+- raw `JPPC+0029*2A+0\t` を取得
+- parsed.matched=false, value_numeric=29.0, fallback_used=numeric_extract
+- 厳密 / 緩い両方 unmatch でも数値が parsed に乗る
+
+### 互換性
+
+`ResponseFormat.pattern` (単一) は引き続き利用可。`patterns` と
+両方指定時は `patterns` 優先。Stable / Experimental tool API は不変。
+visa-mcp v2.2.0 と組で更新。
+
+### 残課題 (次回以降)
+
+- `JPPC` prefix の意味確定 (7563 マニュアル調査要)
+- 7563 GPIB read_termination / EOI 設定 (corruption 原因の追究)
+
+Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+
+
 ## v2.13.3 — get_experiment_results response に version sentinel 追加
 
 合言葉: **「rows=0 を見た瞬間に server バージョンが分かる」**

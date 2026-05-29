@@ -179,11 +179,34 @@ class SpecificationConfig(BaseModel):
 # ===== 応答フォーマット (v0.2.0) =====
 
 class ResponseFormat(BaseModel):
-    """機器固有の応答フォーマット定義"""
-    pattern: str                            # 正規表現 (named groups 推奨)
+    """機器固有の応答フォーマット定義
+
+    v2.14.0 拡張:
+    - `patterns`: 複数代替正規表現 (最初にマッチしたものを採用)
+    - `fallback`: どの pattern にもマッチしないときの挙動。現在は
+      `"numeric_extract"` のみサポート。raw から
+      `[+-]?\\d+(\\.\\d+)?(E[+-]?\\d+)?` を抽出して
+      `parsed.value_numeric` に入れ、matched=false のまま返す。
+      raw は常に保持される。
+
+    後方互換: 旧 `pattern` (単一) は引き続き利用可能。`patterns` と
+    `pattern` の両方が指定された場合は `patterns` が優先される。
+    `patterns` 未指定なら `pattern` を単一要素 list として扱う。
+    """
+    pattern: str = ""                       # 旧: 単一正規表現
+    patterns: list[str] = Field(default_factory=list)  # v2.14: 複数代替
     description: str = ""
     fields: dict[str, dict[str, str]] = Field(default_factory=dict)
     # fields 例: {"unit": {"C": "celsius", "K": "kelvin"}}
+    fallback: str = ""  # "" | "numeric_extract"
+
+    def effective_patterns(self) -> list[str]:
+        """v2.14: validation/parser から使う実効 patterns list。"""
+        if self.patterns:
+            return list(self.patterns)
+        if self.pattern:
+            return [self.pattern]
+        return []
 
 
 # ===== Recipe / 物理インタフェース / 動作状態 (v0.3.0) =====

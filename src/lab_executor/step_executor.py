@@ -118,13 +118,27 @@ async def execute_command_step(
                 write_termination=conn.write_termination,
             )
             session.record_command(step.command)
-            return {
+            result: dict[str, Any] = {
                 "command": step.command,
                 "args": resolved_args,
                 "scpi_sent": scpi,
                 "raw_response": raw,
                 "success": True,
             }
+            # v2.14.0: returns.format が定義されていれば自動で
+            # response_formats を引いて parse し、`parsed` を同梱する。
+            # raw は常に保持 (parser 失敗時も `raw_response` は残る)。
+            try:
+                if cmd_def.returns and cmd_def.returns.format:
+                    rf = session.definition.response_formats.get(
+                        cmd_def.returns.format)
+                    if rf is not None:
+                        from .response_parser import parse_response as _pr
+                        result["parsed"] = _pr(raw, rf)
+            except Exception as _e:
+                logger.debug("auto-parse failed for %s: %s",
+                             step.command, _e)
+            return result
         else:
             await visa.write(
                 session.resource_name, scpi, timeout_ms=timeout_ms,
