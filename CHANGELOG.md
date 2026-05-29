@@ -1,5 +1,39 @@
 # 変更履歴
 
+## v2.14.2 — Codex v2.14.1 レビュー対応 (JobStore.close() + test fixture)
+
+合言葉: **「Windows pytest を詰まらせない」**
+
+### Codex v2.14.1 レビュー指摘 1 件 (lab-executor 側)
+
+> `JobStore` を作った後に `store.close()` していないため、Windows で
+> SQLite/WAL ファイルが残り pytest teardown が詰まっている可能性が
+> 高い。
+
+### 修正
+
+- `lab_executor.job.store.JobStore.close()` 新設:
+  - thread-local 接続を明示 close
+  - 多重 close は no-op
+  - `__enter__` / `__exit__` (context manager) 対応
+- `conftest.py` に shared fixtures:
+  - `job_store` — `JobStore(tmp_path)` を yield、teardown で
+    `close()` 呼び出し
+  - `seed_job` — completed job row を INSERT する helper
+- 既存テストを fixture ベースに refactor:
+  - `tests/test_v2_14_1_review.py`
+  - `tests/test_v2_13_2_results_integration.py`
+- 新 test 2 件:
+  - `test_jobstore_close_idempotent`
+  - `test_jobstore_context_manager`
+
+### 互換性
+
+`close()` / `__enter__` / `__exit__` の追加のみ。既存コードは
+影響なし (close を呼ばなくても従来通り GC で解放される)。
+visa-mcp v2.3.1 と組で release。
+
+
 ## v2.14.1 — Codex v2.14.0 レビュー対応 (寛容 float + parsed metadata 除外)
 
 合言葉: **「`*` も `.` として読み、metadata は rows に出さない」**

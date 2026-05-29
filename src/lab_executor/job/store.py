@@ -313,6 +313,31 @@ class JobStore:
     def db_path(self) -> Path:
         return self._db_path
 
+    # v2.14.2: 明示 close + context manager (test teardown / Windows
+    # の SQLite WAL/SHM file lock 解放のため)
+    def close(self) -> None:
+        """このスレッドで開いた SQLite connection を閉じる。
+        他スレッドの connection はそのスレッドで GC される。
+        多重 close は no-op。
+        """
+        conn = getattr(self._local, "conn", None)
+        if conn is None:
+            return
+        try:
+            conn.close()
+        except Exception:
+            pass
+        try:
+            del self._local.conn
+        except Exception:
+            pass
+
+    def __enter__(self) -> "JobStore":
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        self.close()
+
     def _connect(self) -> sqlite3.Connection:
         conn = getattr(self._local, "conn", None)
         if conn is None:

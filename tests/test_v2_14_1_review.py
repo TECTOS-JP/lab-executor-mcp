@@ -80,31 +80,24 @@ def test_parse_value_permissive_unit():
 # ==============================================================
 
 
-def _seed_job(store: JobStore, job_id: str) -> None:
-    store._connect().execute(
-        "INSERT INTO jobs (job_id, owner, resource_name, status, "
-        "current_step_index, created_at, updated_at) "
-        "VALUES (?, '', '', 'completed', 0, '2026-01-01T00:00:00Z', "
-        "'2026-01-01T00:00:00Z')",
-        (job_id,),
-    )
-
-
 def _mgr_with_store(store: JobStore):
     m = MagicMock()
     m.store = store
     return m
 
 
-def test_parsed_metadata_keys_not_emitted_as_rows(tmp_path: Path):
+def test_parsed_metadata_keys_not_emitted_as_rows(job_store, seed_job):
     """v2.14.1: response_parser 出力の `matched` / `fields` /
     `raw` / `fallback_used` / `matched_pattern_index` を
-    measurement 列に出さないこと。"""
-    store = JobStore(str(tmp_path / "t.db"))
+    measurement 列に出さないこと。
+
+    v2.14.2: `job_store` fixture を使用し、teardown で close
+    される (Windows WAL file lock 解放)。
+    """
     job_id = "job_v2_14_1_metadata"
-    _seed_job(store, job_id)
-    row_id = store.record_step_started(job_id, 0, "command")
-    store.record_step_completed(
+    seed_job(job_store, job_id)
+    row_id = job_store.record_step_started(job_id, 0, "command")
+    job_store.record_step_completed(
         row_id, status="ok",
         result={
             "command": "read_measurement",
@@ -119,10 +112,8 @@ def test_parsed_metadata_keys_not_emitted_as_rows(tmp_path: Path):
             "success": True,
         },
     )
-    rows = _extract_result_rows(_mgr_with_store(store), job_id)
+    rows = _extract_result_rows(_mgr_with_store(job_store), job_id)
     measurements = {r["measurement"] for r in rows}
-    # `matched` / `fields` / `raw` / `fallback_used` /
-    # `matched_pattern_index` は出てはいけない
     forbidden = {
         "matched", "fields", "raw", "fallback_used",
         "matched_pattern_index", "error",
@@ -130,21 +121,19 @@ def test_parsed_metadata_keys_not_emitted_as_rows(tmp_path: Path):
     leaked = measurements & forbidden
     assert not leaked, (
         f"v2.14.1: parsed metadata key が rows に出てる: {leaked}")
-    # value_numeric は出るべき (cmd_name 接頭辞付き)
     assert any(
         ("value_numeric" in m or m.endswith(".value_numeric"))
         for m in measurements
     ), (f"value_numeric が rows に出ていない: {measurements}")
 
 
-def test_parsed_fields_numeric_emitted_as_rows(tmp_path: Path):
+def test_parsed_fields_numeric_emitted_as_rows(job_store, seed_job):
     """v2.14.1: parsed.fields 内 numeric (例: temperature, value)
     が rows 化される。"""
-    store = JobStore(str(tmp_path / "t2.db"))
     job_id = "job_v2_14_1_fields"
-    _seed_job(store, job_id)
-    row_id = store.record_step_started(job_id, 0, "command")
-    store.record_step_completed(
+    seed_job(job_store, job_id)
+    row_id = job_store.record_step_started(job_id, 0, "command")
+    job_store.record_step_completed(
         row_id, status="ok",
         result={
             "command": "read_measurement",
@@ -158,9 +147,8 @@ def test_parsed_fields_numeric_emitted_as_rows(tmp_path: Path):
             "success": True,
         },
     )
-    rows = _extract_result_rows(_mgr_with_store(store), job_id)
+    rows = _extract_result_rows(_mgr_with_store(job_store), job_id)
     by_meas = {r["measurement"]: r["value"] for r in rows}
-    # 数値 field のみ rows 化される (status は str なので除外)
     numeric_keys = [
         m for m in by_meas
         if m.endswith(".value") or m == "value"
@@ -170,26 +158,44 @@ def test_parsed_fields_numeric_emitted_as_rows(tmp_path: Path):
         f"値 33.0 が見つからない: {by_meas}")
 
 
-def test_legacy_flat_parsed_still_works(tmp_path: Path):
+def test_legacy_flat_parsed_still_works(job_store, seed_job):
     """v0.8 旧形式の response_parsed = {"value": 1.23, "unit": "V"}
     のような top-level flat dict も従来通り rows 化される
     (ただし metadata keys は skip)。"""
-    store = JobStore(str(tmp_path / "t3.db"))
     job_id = "job_legacy"
-    _seed_job(store, job_id)
-    row_id = store.record_step_started(job_id, 0, "command")
-    store.record_step_completed(
+    seed_job(job_store, job_id)
+    row_id = job_store.record_step_started(job_id, 0, "command")
+    job_store.record_step_completed(
         row_id, status="ok",
         result={
             "command": "measure_voltage",
             "raw_response": "+1.23",
-            "response_parsed": {"value": 1.23},  # 旧形式
+            "response_parsed": {"value": 1.23},
             "success": True,
         },
     )
-    rows = _extract_result_rows(_mgr_with_store(store), job_id)
+    rows = _extract_result_rows(_mgr_with_store(job_store), job_id)
     by_meas = {r["measurement"]: r["value"] for r in rows}
     assert by_meas.get("value") == pytest.approx(1.23)
+
+
+def test_jobstore_close_idempotent(job_store):
+    """v2.14.2: close() は多重呼び出ししても例外を出さない。"""
+    job_store.close()
+    job_store.close()  # 2 回目も safe
+
+
+def test_jobstore_context_manager(tmp_path):
+    """v2.14.2: JobStore は context manager として使え、終了時に
+    close される。"""
+    from lab_executor.job.store import JobStore
+    with JobStore(str(tmp_path / "ctx.db")) as s:
+        s._connect().execute(
+            "INSERT INTO jobs (job_id, owner, resource_name, status, "
+            "current_step_index, created_at, updated_at) "
+            "VALUES ('test_ctx','','','completed',0,'a','b')")
+    # close 済み: 新 connection を取り直せること (lazy reconnect)
+    assert (tmp_path / "ctx.db").exists()
 
 
 # ==============================================================

@@ -3,10 +3,9 @@
 
 Codex のレビュー P2 への応答 (source string 検査だけでは
 キー名不一致 bug を捕まえられなかったため)。
+v2.14.2 で `job_store` / `seed_job` fixture に refactor。
 """
 from __future__ import annotations
-import tempfile
-from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -21,25 +20,15 @@ def _build_mgr_with_store(store: JobStore):
     return mgr
 
 
-def test_extract_result_rows_reads_raw_response_from_actual_store(tmp_path: Path):
+def test_extract_result_rows_reads_raw_response_from_actual_store(
+    job_store, seed_job
+):
     """step_executor が `raw_response` キーで保存した query 結果が、
     `_extract_result_rows` で 1 行に変換されること。"""
-    db = tmp_path / "results.db"
-    store = JobStore(str(db))
-
-    # job を作って step を 1 つ INSERT + UPDATE
     job_id = "job_test_v2_13_2"
-    # JobStore.create が必要かもしれないので簡易 INSERT
-    store._connect().execute(
-        "INSERT INTO jobs (job_id, owner, resource_name, status, "
-        "current_step_index, created_at, updated_at) "
-        "VALUES (?, '', '', 'completed', 0, '2026-01-01T00:00:00Z', "
-        "'2026-01-01T00:00:00Z')",
-        (job_id,),
-    )
-
-    row_id = store.record_step_started(job_id, 0, "command")
-    store.record_step_completed(
+    seed_job(job_store, job_id)
+    row_id = job_store.record_step_started(job_id, 0, "command")
+    job_store.record_step_completed(
         row_id,
         status="ok",
         result={
@@ -51,7 +40,7 @@ def test_extract_result_rows_reads_raw_response_from_actual_store(tmp_path: Path
         },
     )
 
-    mgr = _build_mgr_with_store(store)
+    mgr = _build_mgr_with_store(job_store)
     rows = _extract_result_rows(mgr, job_id)
 
     assert len(rows) == 1, (
@@ -63,21 +52,13 @@ def test_extract_result_rows_reads_raw_response_from_actual_store(tmp_path: Path
     assert row["step_index"] == 0
 
 
-def test_extract_result_rows_reads_parsed_dict_alias(tmp_path: Path):
+def test_extract_result_rows_reads_parsed_dict_alias(job_store, seed_job):
     """step_executor が `parsed` キーで dict を保存しても展開されること。
     旧名 `response_parsed` だけでなく `parsed` も読むことの保証。"""
-    db = tmp_path / "results2.db"
-    store = JobStore(str(db))
     job_id = "job_parsed_test"
-    store._connect().execute(
-        "INSERT INTO jobs (job_id, owner, resource_name, status, "
-        "current_step_index, created_at, updated_at) "
-        "VALUES (?, '', '', 'completed', 0, '2026-01-01T00:00:00Z', "
-        "'2026-01-01T00:00:00Z')",
-        (job_id,),
-    )
-    row_id = store.record_step_started(job_id, 0, "command")
-    store.record_step_completed(
+    seed_job(job_store, job_id)
+    row_id = job_store.record_step_started(job_id, 0, "command")
+    job_store.record_step_completed(
         row_id,
         status="ok",
         result={
@@ -88,30 +69,26 @@ def test_extract_result_rows_reads_parsed_dict_alias(tmp_path: Path):
         },
     )
 
-    mgr = _build_mgr_with_store(store)
+    mgr = _build_mgr_with_store(job_store)
     rows = _extract_result_rows(mgr, job_id)
 
-    # parsed dict は各 key で 1 行 (value, unit の 2 行)
-    assert len(rows) >= 2
+    # v2.14.1 で parsed metadata 除外 + numeric だけ row 化したため、
+    # `value` (numeric) は出るが `unit` (str) は出ない。
+    assert len(rows) >= 1
     measurements = {r["measurement"] for r in rows}
-    assert "value" in measurements
-    assert "unit" in measurements
+    # 旧名 keys が混入していないこと
+    assert "matched" not in measurements
+    assert "fields" not in measurements
+    # `value` (numeric) は何らかの形で含まれる
+    assert any("value" in m for m in measurements)
 
 
-def test_extract_result_rows_falls_back_to_legacy_keys(tmp_path: Path):
+def test_extract_result_rows_falls_back_to_legacy_keys(job_store, seed_job):
     """後方互換: 旧名 `response_raw` / `response_parsed` も読めること。"""
-    db = tmp_path / "results_legacy.db"
-    store = JobStore(str(db))
     job_id = "job_legacy"
-    store._connect().execute(
-        "INSERT INTO jobs (job_id, owner, resource_name, status, "
-        "current_step_index, created_at, updated_at) "
-        "VALUES (?, '', '', 'completed', 0, '2026-01-01T00:00:00Z', "
-        "'2026-01-01T00:00:00Z')",
-        (job_id,),
-    )
-    row_id = store.record_step_started(job_id, 0, "command")
-    store.record_step_completed(
+    seed_job(job_store, job_id)
+    row_id = job_store.record_step_started(job_id, 0, "command")
+    job_store.record_step_completed(
         row_id,
         status="ok",
         result={
@@ -120,7 +97,7 @@ def test_extract_result_rows_falls_back_to_legacy_keys(tmp_path: Path):
             "success": True,
         },
     )
-    mgr = _build_mgr_with_store(store)
+    mgr = _build_mgr_with_store(job_store)
     rows = _extract_result_rows(mgr, job_id)
     assert len(rows) == 1
     assert rows[0]["value"] == "legacy_value"
