@@ -1060,14 +1060,31 @@ class JobManager:
                     )
                 except Exception:
                     pass
+                # v2.13.2: timeline / live_view / summary が測定値を読める
+                # ように、step_completed event の payload に query 系の実測値
+                # (raw_response / parsed / scpi_sent / args / command) を含める。
+                # write 系は verified / verify_info を含める。
+                _instr = getattr(step, "instrument", None)
+                _payload = {
+                    "step_type": step_type,
+                    "command": result.get("command"),
+                    "instrument": _instr,
+                    "args": result.get("args"),
+                    "scpi_sent": result.get("scpi_sent"),
+                    "raw_response": result.get("raw_response"),
+                    "parsed": result.get("parsed"),
+                    "verified": result.get("verified"),
+                    "verify": result.get("verify"),
+                    "error": result.get("error"),
+                }
+                # None 値を間引いて payload を軽量化
+                _payload = {k: v for k, v in _payload.items() if v is not None}
                 self._safe_record_event(
                     job_id,
                     "step_completed" if result.get("success")
                     else "step_failed",
                     step_index=idx,
-                    payload={"step_type": step_type,
-                             "verified": result.get("verified"),
-                             "error": result.get("error")},
+                    payload=_payload,
                 )
 
                 if not result.get("success", False):

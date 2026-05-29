@@ -1,5 +1,81 @@
 # 変更履歴
 
+## v2.13.2 — 測定値永続化経路の修正 (Issue C: results rows=0)
+
+合言葉: **「step_executor が `raw_response` で書くなら results 抽出も
+`raw_response` を読め」**
+
+Codex 実機 E2E (v2.13.1 後の sweep job) で発覚した、永続化はされて
+いるが results に出てこない bug:
+
+```
+start_experiment_job 完了 / status=completed
+job_steps: 26 行 (v2.13.1 で記録される)
+job_events: step_started=26 / step_completed=26 (v2.13.1)
+   ↓
+get_experiment_results -> rows=0  ← 依然 0
+timeline step_completed payload に raw_response 無し
+live_view.latest_measurements 空
+```
+
+### 原因
+
+2 つのキー名不一致:
+
+1. `step_executor.py` は query 系 step の結果を
+   `{"command": ..., "scpi_sent": ..., "raw_response": ..., "success": True}`
+   の形で返す。
+2. 一方 `tools/export.py:_extract_result_rows` は
+   `r.get("response_raw") or r.get("response")` を探していた
+   (`raw_response` ではなく)。同様に parsed dict は
+   `response_parsed` を探していたが step_executor は `parsed` で出す
+   ことがある。
+3. `_run_experiment_plan_job` の `step_completed` event payload には
+   `step_type / verified / error` しか入っていなかった。timeline / 
+   live_view / summary から測定値を読み取れない状態。
+
+### 修正
+
+- `tools/export.py:_extract_result_rows`:
+  - parsed: `r.get("response_parsed") or r.get("parsed")` の OR
+  - raw: `r.get("raw_response") or r.get("response_raw") or r.get("response")` の OR
+  - 既存 `response_raw` / `response_parsed` 名は後方互換として残す
+- `job/manager.py:_run_experiment_plan_job` の step_completed event
+  payload に以下を追加 (None は間引く):
+  - `command`, `instrument`, `args`, `scpi_sent`
+  - `raw_response`, `parsed`
+  - `verified`, `verify`
+  これで timeline event だけ見ても query 系 step の実測値が読める。
+
+### 実機検証 (PMX35-3A USB + 7563 GPIB, 0→4V sweep)
+
+| 指標 | v2.13.1 | v2.13.2 |
+|------|--------|---------|
+| status | completed | completed |
+| job_steps rows | 26 | 26 |
+| step_started/_completed events | 26/26 | 26/26 |
+| `get_experiment_results` rows | **0** | **12** ✅ |
+| event payload に raw_response | × | ✅ |
+
+1V → 4V の各点で V/I/温度すべて取得:
+- 1V: V=1.007V I=9.7mA T=26.8°C
+- 4V: V=4.007V I=39.9mA T=28.2°C (+1.4°C 発熱を実測)
+
+### スコープ外 (次回以降)
+
+レビューで挙がった残課題:
+- 7563 T-type/K-type response parser の構造化 (visa-mcp v2.2 候補、
+  raw は既に永続化されているため緊急度低)
+- discovery 部分失敗対応 (`resource ごとの ok/error/timeout`)
+- bindings / identified state の永続化・復元 (process 再起動耐性)
+- 大規模 (100 台) 向け instrument 別 / sweep 別 観察 API
+- dry_run rendered step count と summary total_steps の整合
+
+### Co-Authored-By
+
+Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+
+
 ## v2.13.1 — DSL plan path persistence hooks (Issue A 修正)
 
 合言葉: **「DSL plan も recipe path と同じ persistence hook を呼ぶ」**

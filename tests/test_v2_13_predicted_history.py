@@ -171,6 +171,50 @@ def test_v2_13_1_experiment_plan_persistence_hooks_present():
         "v2.13.1: DSL path に step_completed/_failed event が必要")
 
 
+def test_v2_13_2_extract_result_rows_reads_raw_response_key():
+    """v2.13.2: step_executor は `raw_response` キーで保存するので、
+    `_extract_result_rows` は旧名 `response_raw`/`response` だけでなく
+    `raw_response` も読めること。"""
+    from lab_executor.tools import export as _exp
+    src = open(_exp.__file__, encoding="utf-8").read()
+    # _extract_result_rows 関数内に raw_response 読み出しがあること
+    start = src.index("def _extract_result_rows")
+    end = src.index("\ndef ", start + 10)
+    block = src[start:end]
+    assert "raw_response" in block, (
+        "v2.13.2: _extract_result_rows が `raw_response` キーを読まないと "
+        "get_experiment_results rows=0 になる"
+    )
+    # parsed も両方読めること
+    assert "\"parsed\"" in block or "'parsed'" in block, (
+        "v2.13.2: `parsed` キーも response_parsed と並列で読むべき"
+    )
+
+
+def test_v2_13_2_step_completed_payload_has_measurement_keys():
+    """v2.13.2: _run_experiment_plan_job の step_completed event payload
+    に raw_response / parsed / scpi_sent / args / command / instrument が
+    含まれていること。timeline / live_view から測定値を直接読むため。"""
+    from lab_executor.job import manager as mgr_mod
+    src = open(mgr_mod.__file__, encoding="utf-8").read()
+    start = src.index("async def _run_experiment_plan_job")
+    end = src.index("\n    async def ", start + 10)
+    block = src[start:end]
+    for key in (
+        "raw_response", "scpi_sent", "instrument",
+        "command", "args", "parsed",
+    ):
+        assert f"\"{key}\"" in block, (
+            f"v2.13.2: step_completed payload に {key} が必要")
+
+
+def test_v2_13_2_version():
+    import lab_executor
+    parts = lab_executor.__version__.split(".")
+    assert tuple(int(p) for p in parts[:3]) >= (2, 13, 2), (
+        f"version {lab_executor.__version__} < 2.13.2")
+
+
 def test_compiler_module_has_predicted_history_logic():
     """compiler.py に combined_history を渡す code path があること
     を source check"""
