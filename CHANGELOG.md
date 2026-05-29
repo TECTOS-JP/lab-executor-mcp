@@ -61,6 +61,24 @@ live_view.latest_measurements 空
 - 1V: V=1.007V I=9.7mA T=26.8°C
 - 4V: V=4.007V I=39.9mA T=28.2°C (+1.4°C 発熱を実測)
 
+### 注意: visa-mcp 側の同名 shim も同時更新が必要
+
+`visa-mcp` v2.1.x の `visa_mcp/tools/export.py` は本 module の
+独自コピーを持ち、`visa-mcp serve` 起動時はそちらが MCP server に
+登録される。v2.13.2 を入れても `visa-mcp >= 2.1.2` を使わないと
+get_experiment_results は rows=0 のまま再発するため、両方更新する
+こと。**visa-mcp v2.1.2 を同時 release**。
+
+### 追加 integration test (Codex P2 への応答)
+
+source string 検査だけではキー名不一致 bug を捕まえられなかったため、
+`tests/test_v2_13_2_results_integration.py` を新設:
+- 実 `JobStore` に `raw_response` 付き step を保存し
+  `_extract_result_rows` が rows を返すことを assert
+- `parsed` alias / 後方互換 legacy keys
+両 repo に同等のテストを配置 (visa-mcp 側は
+`tests/test_v2_1_2_results_integration.py`)。
+
 ### スコープ外 (次回以降)
 
 レビューで挙がった残課題:
@@ -70,6 +88,8 @@ live_view.latest_measurements 空
 - bindings / identified state の永続化・復元 (process 再起動耐性)
 - 大規模 (100 台) 向け instrument 別 / sweep 別 観察 API
 - dry_run rendered step count と summary total_steps の整合
+- 既定 CSV export path のパーミッション周り (Windows `~/.visa-mcp`
+  作成失敗) の代替パス提案
 
 ### Co-Authored-By
 
