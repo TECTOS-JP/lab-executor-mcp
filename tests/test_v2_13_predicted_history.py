@@ -215,6 +215,16 @@ def test_v2_13_2_version():
         f"version {lab_executor.__version__} < 2.13.2")
 
 
+def test_v2_13_3_version_sentinel_in_response():
+    """v2.13.3: get_experiment_results response data に _meta.versions
+    が含まれること。Codex 側が rows=0 を見たとき即座に
+    `lab_executor` バージョンを確認できる。"""
+    from lab_executor.tools import export as _exp
+    src = open(_exp.__file__, encoding="utf-8").read()
+    assert "_meta" in src and "versions" in src
+    assert "export_fix" in src
+
+
 def test_compiler_module_has_predicted_history_logic():
     """compiler.py に combined_history を渡す code path があること
     を source check"""

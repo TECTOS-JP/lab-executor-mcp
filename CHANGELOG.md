@@ -1,5 +1,46 @@
 # 変更履歴
 
+## v2.13.3 — get_experiment_results response に version sentinel 追加
+
+合言葉: **「rows=0 を見た瞬間に server バージョンが分かる」**
+
+Codex 実機 E2E (v2.13.2 / v2.1.2 反映後の再テスト) で再び rows=0 が
+報告された。コード上は両 export.py で raw_response を読むため、
+ローカル MCP tool E2E では total=12 / rows=12 を確認済み。
+原因はほぼ確実に **Codex 側が古い build を起動している** ことだが、
+クライアントが「自分の MCP server がどのバージョンを走らせている
+か」をその場で判別できる手段が無かった。
+
+### 修正
+
+- `tools/export.py:get_experiment_results` の response data に
+  `_meta.versions` を追加:
+  ```json
+  {
+    "data": {
+      "rows": [...],
+      "pagination": {...},
+      "_meta": {
+        "versions": {
+          "lab_executor": "2.13.3",
+          "visa_mcp": "2.1.3",
+          "export_fix": "v2.13.3"
+        }
+      }
+    }
+  }
+  ```
+- これで rows=0 を見た瞬間に「自分が立てた server がそもそも
+  fix 適用版か」を確認できる。`export_fix` が `v2.13.3` 未満なら
+  必ず `pip install` を見直してから再テスト。
+- visa-mcp 側にも対応 (v2.1.3、`export_fix: v2.1.3` sentinel)。
+
+### 互換性
+
+`_meta` は data の追加 field のみ。Stable / Experimental tool の
+名前・引数・既存 response 構造は変更なし。
+
+
 ## v2.13.2 — 測定値永続化経路の修正 (Issue C: results rows=0)
 
 合言葉: **「step_executor が `raw_response` で書くなら results 抽出も

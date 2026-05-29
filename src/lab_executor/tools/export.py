@@ -305,6 +305,24 @@ def register_tools(mcp: FastMCP, job_mgr: JobManager) -> None:
         page = all_rows[offset:end]
         has_more = end < total
 
+        # v2.13.3 fix sentinel: response に server version を埋め込み、
+        # client が rows=0 を見たとき「自分の MCP server がどのバージョン
+        # の export 経路を走らせているか」を即座に判定できるようにする。
+        # この _meta.versions.export_fix が "v2.13.3" 以上なら本修正適用済み。
+        try:
+            import lab_executor as _le
+            _versions = {
+                "lab_executor": getattr(_le, "__version__", "?"),
+                "export_fix": "v2.13.3",
+            }
+            try:
+                import visa_mcp as _vm
+                _versions["visa_mcp"] = getattr(_vm, "__version__", "?")
+            except Exception:
+                pass
+        except Exception:
+            _versions = {"export_fix": "v2.13.3"}
+
         data: dict = {
             "job_id": job_id,
             "columns": list(RESULT_COLUMNS),
@@ -315,6 +333,7 @@ def register_tools(mcp: FastMCP, job_mgr: JobManager) -> None:
                 "has_more": has_more,
             },
             "include_monitor_data": include_monitor_data,
+            "_meta": {"versions": _versions},
         }
         if clamp_warning:
             data["clamp_warning"] = clamp_warning
