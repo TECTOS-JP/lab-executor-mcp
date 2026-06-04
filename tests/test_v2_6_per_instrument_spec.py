@@ -353,3 +353,74 @@ commands:
         assert any(v["instrument"] == instr for v in views)
     finally:
         store.close()
+
+
+@pytest.mark.asyncio
+async def test_recipe_execution_persists_instrument_in_step_result(
+    tmp_path, monkeypatch
+):
+    """v2.16.1: recipe path (start_recipe_job) も step result に
+    instrument を載せること (Codex v2.16.0 レビュー P1)。recipe の
+    CommandStep.instrument は None なので rec.resource_name が
+    fallback として使われる。"""
+    import yaml
+    import asyncio
+    from unittest.mock import AsyncMock
+    from lab_executor.job import JobManager, JobStore
+    from lab_executor.job.state_machine import is_terminal, JobStatus
+    from lab_executor.models.instrument_def import InstrumentDefinition
+    from visa_mcp.session_manager import InstrumentSession
+    from lab_executor.tools.observation import _extract_instrument_views
+
+    monkeypatch.setenv("VISA_MCP_SAFETY_MODE", "permissive")
+    yaml_psu = """
+metadata: { manufacturer: T, model: PSU, category: power_supply }
+commands:
+  measure_voltage:
+    scpi: "MEAS:VOLT?"
+    type: query
+    polling_safe: true
+recipes:
+  read_v:
+    parameters: []
+    steps:
+      - { command: measure_voltage }
+"""
+    d = InstrumentDefinition(**yaml.safe_load(yaml_psu))
+    session = InstrumentSession(
+        resource_name="psu0", idn_response="<x>",
+        idn_parsed={}, definition=d,
+    )
+
+    class _SM:
+        def get_session(self, name):
+            return session if name == "psu0" else None
+
+    visa = MagicMock()
+    visa.write = AsyncMock(return_value=None)
+    visa.query = AsyncMock(return_value="+5.0E+00")
+    store = JobStore(db_path=tmp_path / "j.sqlite")
+    try:
+        mgr = JobManager(visa, _SM(), store=store)
+        rec = await mgr.start_recipe_job("psu0", "read_v", {})
+        for _ in range(100):
+            if is_terminal(mgr.get(rec.job_id).status):
+                break
+            await asyncio.sleep(0.02)
+        assert mgr.get(rec.job_id).status == JobStatus.COMPLETED
+
+        steps = store.list_steps(rec.job_id)
+        cmd_steps = [
+            s for s in steps
+            if (s.get("result") or {}).get("command") == "measure_voltage"
+        ]
+        assert cmd_steps, f"measure_voltage step が無い: {steps}"
+        # recipe path も instrument が persisted result に載る (= psu0)
+        assert cmd_steps[0]["result"].get("instrument") == "psu0", (
+            "v2.16.1: recipe path の persisted result に instrument が "
+            f"無い: {cmd_steps[0]['result']}")
+
+        views = _extract_instrument_views(store, rec.job_id)
+        assert any(v["instrument"] == "psu0" for v in views)
+    finally:
+        store.close()

@@ -2796,6 +2796,19 @@ class JobManager:
                     }
 
                 step_results.append({"step": idx, **result})
+                # v2.16.1: recipe path も step result に instrument を載せて
+                # 永続化する (Codex v2.16.0 レビュー P1)。recipe の
+                # CommandStep.instrument は通常 None (Job 主 resource を使う)
+                # ため、fallback として rec.resource_name を使う。これで
+                # get_job_instrument_view が recipe job でも instrument を
+                # 集計できる。
+                _instr = getattr(step, "instrument", None) or rec.resource_name
+                if (
+                    _instr
+                    and isinstance(result, dict)
+                    and result.get("instrument") is None
+                ):
+                    result["instrument"] = _instr
                 # v0.7.0: step_completed / step_failed 記録
                 try:
                     self._store.record_step_completed(
@@ -2811,6 +2824,7 @@ class JobManager:
                     "step_completed" if result.get("success") else "step_failed",
                     step_index=idx,
                     payload={"step_type": step_type,
+                             "instrument": _instr,
                              "verified": result.get("verified"),
                              "error": result.get("error")},
                 )

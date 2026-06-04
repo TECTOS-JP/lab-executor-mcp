@@ -1,5 +1,33 @@
 # 変更履歴
 
+## v2.16.1 — recipe path も step result に instrument を永続化 (Codex v2.16.0 レビュー P1)
+
+合言葉: **「DSL だけでなく recipe job でも instrument を残す」**
+
+### Codex v2.16.0 レビュー P1
+
+v2.16.0 では DSL path (`_run_experiment_plan_job`) のみ instrument を
+step result に注入していたが、**recipe path (`_run_job_inner`)** が
+未対応だった。recipe job では `get_job_instrument_view` が空になる。
+
+### 修正
+
+- `job/manager.py:_run_job_inner`: step result 永続化前に instrument を
+  注入。recipe の `CommandStep.instrument` は通常 None (Job 主 resource
+  を使う) ため、fallback として `rec.resource_name` を使う。
+  step_completed event payload にも instrument を追加。
+- 回帰テスト追加 (`test_v2_6_per_instrument_spec.py`):
+  `start_recipe_job` で実 recipe job を流し、persisted step result に
+  instrument (= resource_name) が載ること +
+  `_extract_instrument_views` が recipe job でも instrument を返すことを
+  検証 (Codex v2.16.0 レビュー P2: 実行系永続化パスを通すテスト)。
+
+### 互換性
+
+instrument 注入は追加 field のみ。既存読み取りに影響しない。
+version を `2.16.1` に更新。
+
+
 ## v2.16.0 - per-instrument observation API (v2.6)
 
 合言葉: **「100 台規模でも、機器ごとの流れをすぐ読める」**
