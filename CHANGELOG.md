@@ -1,5 +1,51 @@
 # 変更履歴
 
+## v2.16.0 - per-instrument observation API (v2.6)
+
+合言葉: **「100 台規模でも、機器ごとの流れをすぐ読める」**
+
+### 追加
+
+- `get_job_instrument_view(job_id, instrument=None)` MCP tool を追加
+  - `job_steps` を `instrument` ごとに再集計
+  - `step_count` / `ok_count` / `failed_count`
+  - 最終 step の `last_command` / `last_raw_response` / `last_value_numeric`
+  - query 系 step の時系列 `measurements`
+- `lab_executor.tools.observation._extract_instrument_views(...)` を追加
+  - unit test 対象の純関数
+  - 新規 SQLite table や migration は不要
+
+### 実機 E2E で発覚した修正 (Claude Code 検証)
+
+spec/unit test では instrument を捏造していたため通っていたが、
+実機 sweep で `get_job_instrument_view` が **空 (VIEWS:0)** を返した。
+原因: `step_executor` が返す step result に `instrument` キーが無く、
+`job_steps.result_json` に instrument が残らないため、
+`_extract_instrument_views` が実データで instrument を取れなかった。
+
+- `job/manager.py:_run_experiment_plan_job`: step result を永続化する
+  前に `step.instrument` を `result["instrument"]` に注入するよう修正
+  (step_completed event payload 用に取得済みの `_instr` を再利用)。
+- 回帰テスト追加 (`test_v2_6_per_instrument_spec.py`):
+  mock backend で DSL job を実行し、persisted step result に
+  instrument が載ること + `_extract_instrument_views` が実 store で
+  instrument を返すことを検証。
+
+実機検証 (PMX35-3A + 7563, 0→3V sweep):
+```
+VIEWS: 2
+  USB PMX35-3A: steps=12 ok=12 (measure_voltage 時系列)
+  GPIB 7563:    steps=3  ok=3  read_measurement 温度 28.1→29.2
+```
+
+### 互換性
+
+- 既存 observation tool / API は変更なし。
+- stability matrix には追加登録しない experimental tool として扱う。
+- step result への instrument 注入は追加 field のみ (既存読み取りに
+  影響しない)。
+- version を `2.16.0` に更新。
+
 ## v2.14.3 — Codex v2.14.2 レビュー対応 (JobStore.close 重複定義削除)
 
 ### Codex v2.14.2 レビュー指摘 P3

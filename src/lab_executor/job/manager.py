@@ -1050,6 +1050,20 @@ class JobManager:
                         "step_type": getattr(step, "type", "?"),
                     }
                 step_results.append({"step": idx, **result})
+                # v2.16.0: step result に instrument を載せて永続化する。
+                # step_executor が返す result には instrument が無く、
+                # job_steps.result_json に instrument が残らないため、
+                # per-instrument 観察 API (get_job_instrument_view) が
+                # 実データで instrument を取れない問題があった
+                # (spec test は instrument を捏造していたため未検出)。
+                # ここで step.instrument を result に注入してから保存する。
+                _instr = getattr(step, "instrument", None)
+                if (
+                    _instr is not None
+                    and isinstance(result, dict)
+                    and result.get("instrument") is None
+                ):
+                    result["instrument"] = _instr
                 # v2.13.1: step_completed / step_failed を record
                 try:
                     self._store.record_step_completed(
@@ -1064,7 +1078,7 @@ class JobManager:
                 # ように、step_completed event の payload に query 系の実測値
                 # (raw_response / parsed / scpi_sent / args / command) を含める。
                 # write 系は verified / verify_info を含める。
-                _instr = getattr(step, "instrument", None)
+                # (_instr は上で result への注入時に取得済み)
                 _payload = {
                     "step_type": step_type,
                     "command": result.get("command"),

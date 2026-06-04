@@ -98,6 +98,9 @@ EXPERIMENTAL_TOOLS: Final[dict[str, list[str]]] = {
         "inspect_experiment_bundle",
     ],
 }
+# 注: visa-mcp 側で追加された experimental tool (clear_persisted_binding 等)
+# はここではトラッキングしない。lab-executor の stability matrix は
+# v1.0 frozen surface (43 stable + 7 experimental) を維持する。
 
 
 # ============================================================

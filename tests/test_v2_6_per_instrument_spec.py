@@ -266,3 +266,90 @@ def test_v2_16_0_version():
     parts = lab_executor.__version__.split(".")
     assert tuple(int(p) for p in parts[:3]) >= (2, 16, 0), (
         f"v2.6 機能は version 2.16.0 で出す: {lab_executor.__version__}")
+
+
+# ==============================================================
+# v2.16.0 回帰: DSL 実行が step result に instrument を永続化する
+# (実機 E2E で発覚: step_executor の result には instrument が無く、
+#  job_steps.result_json に instrument が残らないため
+#  _extract_instrument_views が実データで空を返していた)
+# ==============================================================
+
+
+@pytest.mark.asyncio
+async def test_dsl_execution_persists_instrument_in_step_result(tmp_path):
+    """start_experiment_job (DSL path) が job_steps の result に
+    instrument を載せることを mock backend で検証。これにより
+    get_job_instrument_view が実データで instrument を取れる。"""
+    import yaml
+    from unittest.mock import AsyncMock
+    from lab_executor.job import JobManager, JobStore
+    from lab_executor.job.state_machine import is_terminal
+    from lab_executor.models.instrument_def import InstrumentDefinition
+    from lab_executor.system_config import SystemConfig, InstrumentBinding
+    from visa_mcp.session_manager import InstrumentSession
+
+    yaml_psu = """
+metadata: { manufacturer: T, model: PSU, category: power_supply }
+commands:
+  measure_voltage:
+    scpi: "MEAS:VOLT?"
+    type: query
+    polling_safe: true
+"""
+    res_name = "GPIB0::1::INSTR"  # 有効な VISA resource 形式
+    d = InstrumentDefinition(**yaml.safe_load(yaml_psu))
+    session = InstrumentSession(
+        resource_name=res_name, idn_response="<x>",
+        idn_parsed={}, definition=d,
+    )
+
+    class _SM:
+        def get_session(self, name):
+            return session if name == res_name else None
+
+    sys_cfg = SystemConfig(
+        instruments={"psu": InstrumentBinding(resource=res_name)})
+    visa = MagicMock()
+    visa.write = AsyncMock(return_value=None)
+    visa.query = AsyncMock(return_value="+1.234E+00")
+    store = JobStore(db_path=tmp_path / "j.sqlite")
+    try:
+        mgr = JobManager(visa, _SM(), store=store, system_config=sys_cfg)
+        plan = {
+            "dsl_version": "0.8",
+            "name": "instr_persist",
+            "bindings": {"psu": res_name},
+            "steps": [
+                {"type": "query", "instrument": "$psu",
+                 "command": "measure_voltage"},
+            ],
+        }
+        rec = await mgr.start_experiment_job(plan)
+        # 完了待ち
+        import asyncio
+        for _ in range(100):
+            await asyncio.sleep(0.02)
+            cur = store.get(rec.job_id)
+            if cur and is_terminal(cur.status):
+                break
+        steps = store.list_steps(rec.job_id)
+        # query step の result に instrument が載っていること
+        query_steps = [
+            s for s in steps
+            if (s.get("result") or {}).get("command") == "measure_voltage"
+        ]
+        assert query_steps, f"measure_voltage step が無い: {steps}"
+        instr = query_steps[0]["result"].get("instrument")
+        assert instr is not None, (
+            "v2.16.0: persisted step result に instrument が無い "
+            f"(get_job_instrument_view が実データで空になる): "
+            f"{query_steps[0]['result']}")
+
+        # _extract_instrument_views が実 store で instrument を返す
+        from lab_executor.tools.observation import _extract_instrument_views
+        views = _extract_instrument_views(store, rec.job_id)
+        assert len(views) >= 1
+        assert any(v["instrument"] == instr for v in views)
+    finally:
+        store.close()

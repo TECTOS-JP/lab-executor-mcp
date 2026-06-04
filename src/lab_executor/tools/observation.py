@@ -25,6 +25,114 @@ from lab_executor.observation import (
 from lab_executor.response_envelope import make_envelope, make_error
 
 
+def _value_numeric_from_result(result: dict | None) -> float | int | None:
+    if not isinstance(result, dict):
+        return None
+    parsed = result.get("parsed")
+    if not isinstance(parsed, dict):
+        return None
+
+    def _as_number(value):
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, (int, float)):
+            return value
+        if isinstance(value, str):
+            try:
+                return float(value)
+            except ValueError:
+                return None
+        return None
+
+    value = _as_number(parsed.get("value_numeric"))
+    if value is not None:
+        return value
+    fields = parsed.get("fields")
+    if isinstance(fields, dict):
+        return _as_number(fields.get("value"))
+    return None
+
+
+def _step_payload(step: dict) -> dict | None:
+    result = step.get("result")
+    if isinstance(result, dict):
+        return result
+    error = step.get("error")
+    if isinstance(error, dict):
+        return error
+    return None
+
+
+def _extract_instrument_views(
+    store, job_id: str, instrument: str | None = None,
+) -> list[dict]:
+    """Build per-instrument observation views from job_steps.
+
+    Pure helper for the v2.6 MCP tool. It intentionally reads only
+    store.list_steps(job_id) and does not mutate any runtime state.
+    """
+    steps = store.list_steps(job_id)
+    grouped: dict[str, list[tuple[dict, dict]]] = {}
+
+    for step in steps:
+        payload = _step_payload(step)
+        if not payload:
+            continue
+        instr = payload.get("instrument")
+        if not instr:
+            continue
+        if instrument is not None and instr != instrument:
+            continue
+        grouped.setdefault(str(instr), []).append((step, payload))
+
+    views: list[dict] = []
+    for instr, items in grouped.items():
+        items.sort(key=lambda item: (
+            item[0].get("step_index") if item[0].get("step_index") is not None else -1,
+            item[0].get("id") or 0,
+        ))
+        last_step, last_payload = items[-1]
+
+        ok_count = sum(1 for step, _ in items if step.get("status") == "ok")
+        failed_count = sum(1 for step, _ in items if step.get("status") == "failed")
+        measurements: list[dict] = []
+        for step, payload in items:
+            command = payload.get("command")
+            has_raw = "raw_response" in payload
+            if not command or not has_raw:
+                continue
+            measurements.append({
+                "step_index": step.get("step_index"),
+                "command": command,
+                "raw_response": payload.get("raw_response"),
+                "value_numeric": _value_numeric_from_result(payload),
+                "status": step.get("status"),
+                "ended_at": step.get("ended_at"),
+            })
+
+        views.append({
+            "instrument": instr,
+            "step_count": len(items),
+            "ok_count": ok_count,
+            "failed_count": failed_count,
+            "last_status": last_step.get("status"),
+            "last_command": last_payload.get("command"),
+            "last_raw_response": last_payload.get("raw_response"),
+            "last_value_numeric": _value_numeric_from_result(last_payload),
+            "last_step_index": last_step.get("step_index"),
+            "last_ended_at": last_step.get("ended_at"),
+            "measurements": measurements,
+        })
+
+    views.sort(key=lambda view: (
+        view["measurements"][0]["step_index"]
+        if view["measurements"] else view["last_step_index"]
+    ) if (
+        view["measurements"] or view["last_step_index"] is not None
+    ) else -1)
+    return views
+
+
 def _parse_iso8601(s: str, field_name: str) -> datetime | None:
     """ISO8601 を堅牢にパース。失敗時は None。
 
@@ -393,6 +501,54 @@ def register_tools(mcp: FastMCP, job_mgr: JobManager) -> None:
             "active_barriers": active_barriers,
             "recent_errors": recent_errors,
             "recent_warnings": recent_warnings,
+        }, job_id=job_id)
+
+    @mcp.tool()
+    async def get_job_instrument_view(
+        job_id: str,
+        instrument: str | None = None,
+    ) -> dict:
+        """Per-instrument observation view (experimental, v2.6).
+
+        Re-aggregates job_steps by result.instrument without changing the
+        existing live view, summary, or experiment results APIs.
+        """
+        try:
+            rec = job_mgr.get(job_id)
+        except Exception:
+            return make_envelope(
+                "error",
+                errors=[make_error("not_found", f"job not found: {job_id}",
+                                   recoverable=False)],
+            )
+        if rec is None:
+            return make_envelope(
+                "error",
+                errors=[make_error("not_found", f"job not found: {job_id}",
+                                   recoverable=False)],
+            )
+
+        try:
+            views = _extract_instrument_views(
+                job_mgr.store, job_id, instrument=instrument,
+            )
+        except Exception as e:
+            return make_envelope(
+                "error",
+                errors=[make_error(
+                    "internal",
+                    f"failed to build instrument view: {e}",
+                    recoverable=True,
+                )],
+                job_id=job_id,
+            )
+
+        return make_envelope("ok", data={
+            "job_id": job_id,
+            "job_status": rec.status.value,
+            "instruments": views,
+            "instrument_count": len(views),
+            "schema_version": "2.6",
         }, job_id=job_id)
 
     @mcp.tool()
