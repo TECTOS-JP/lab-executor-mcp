@@ -330,6 +330,28 @@ def _extract_result_rows(
     return rows
 
 
+def _filter_rows(
+    rows: list[dict],
+    *,
+    instrument: str | None = None,
+    sweep_index: int | None = None,
+    measurement: str | None = None,
+) -> list[dict]:
+    """結果 row を instrument / sweep_index / measurement で AND フィルタ。
+
+    空文字 / None のフィルタはそのフィールドで絞らない。
+    sweep_index=0 は有効な絞り込みとして扱う。
+    """
+    out = rows
+    if instrument:
+        out = [r for r in out if r.get("instrument") == instrument]
+    if sweep_index is not None:
+        out = [r for r in out if r.get("sweep_index") == sweep_index]
+    if measurement:
+        out = [r for r in out if r.get("measurement") == measurement]
+    return out
+
+
 def register_tools(mcp: FastMCP, job_mgr: JobManager) -> None:
 
     @mcp.tool()
@@ -338,6 +360,9 @@ def register_tools(mcp: FastMCP, job_mgr: JobManager) -> None:
         limit: int = 1000,
         offset: int = 0,
         include_monitor_data: bool = False,
+        instrument: str = "",
+        sweep_index: int | None = None,
+        measurement: str = "",
     ) -> dict:
         """**(experimental, v0.9.1)** Job の測定結果を少量確認用 JSON で取得
 
@@ -374,6 +399,12 @@ def register_tools(mcp: FastMCP, job_mgr: JobManager) -> None:
         try:
             all_rows = _extract_result_rows(
                 job_mgr, job_id, include_monitor=include_monitor_data,
+            )
+            all_rows = _filter_rows(
+                all_rows,
+                instrument=instrument or None,
+                sweep_index=sweep_index,
+                measurement=measurement or None,
             )
         except Exception as e:
             return make_envelope(
@@ -414,6 +445,11 @@ def register_tools(mcp: FastMCP, job_mgr: JobManager) -> None:
                 "has_more": has_more,
             },
             "include_monitor_data": include_monitor_data,
+            "filters": {
+                "instrument": instrument or None,
+                "sweep_index": sweep_index,
+                "measurement": measurement or None,
+            },
             "_meta": {"versions": _versions},
         }
         if clamp_warning:
@@ -427,6 +463,9 @@ def register_tools(mcp: FastMCP, job_mgr: JobManager) -> None:
         include_monitor_data: bool = False,
         output_path: str = "",
         overwrite: bool = False,
+        instrument: str = "",
+        sweep_index: int | None = None,
+        measurement: str = "",
     ) -> dict:
         """**(experimental, v0.9.1)** Job の測定結果を CSV / JSONL ファイル出力
 
@@ -492,6 +531,12 @@ def register_tools(mcp: FastMCP, job_mgr: JobManager) -> None:
             rows = _extract_result_rows(
                 job_mgr, job_id, include_monitor=include_monitor_data,
             )
+            rows = _filter_rows(
+                rows,
+                instrument=instrument or None,
+                sweep_index=sweep_index,
+                measurement=measurement or None,
+            )
         except Exception as e:
             return make_envelope(
                 "error",
@@ -535,6 +580,11 @@ def register_tools(mcp: FastMCP, job_mgr: JobManager) -> None:
                 "sha256": sha,
                 "include_monitor_data": include_monitor_data,
                 "columns": list(RESULT_COLUMNS),
+                "filters": {
+                    "instrument": instrument or None,
+                    "sweep_index": sweep_index,
+                    "measurement": measurement or None,
+                },
             },
             job_id=job_id,
         )

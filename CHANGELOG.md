@@ -1,5 +1,30 @@
 # 変更履歴
 
+## v2.19.0 — export result filters (v2.9)
+
+合言葉: **「巨大な結果表から、見たい行だけを取り出す」**
+
+### 追加
+
+- `get_experiment_results` / `export_experiment_results` に optional
+  filter 引数を追加。
+  - `instrument`
+  - `sweep_index`
+  - `measurement`
+- `lab_executor.tools.export._filter_rows(...)` を追加。
+  - 複数 filter は AND 結合。
+  - 空文字 / `None` は no-op。
+  - `sweep_index=0` は有効値として扱う。
+
+### 互換性
+
+- 新 MCP tool は追加しない。
+- filter 未指定時の rows / 件数は従来通り。
+- `export_experiment_bundle` は再現性 bundle として全 row を保持し、
+  filter 対象外のまま。
+- stability matrix は不変。
+- version を `2.19.0` に更新。
+
 ## v2.18.0 — export dir env override + sweep columns (v2.8)
 
 合言葉: **「保存先を選べて、sweep の列もそのまま出る」**
