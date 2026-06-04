@@ -1,5 +1,35 @@
 # 変更履歴
 
+## v2.17.0 — per-sweep-point observation API (v2.7)
+
+合言葉: **「sweep の各点で何が起きたかを、そのまま読める」**
+
+### 追加
+
+- `get_job_sweep_view(job_id)` MCP tool を追加
+  - `job_steps` に永続化された `sweep_index` ごとに再集計
+  - `sweep_value` / `step_count` / instrument 一覧
+  - query 系 step の `measurements` を `step_index` 順に返す
+- `lab_executor.tools.observation._extract_sweep_views(...)` を追加
+  - unit test 対象の純関数
+  - 新規 SQLite table や migration は不要
+
+### DSL / 永続化
+
+- `CommandStep` に `sweep_index` / `sweep_param` / `sweep_value`
+  optional field を追加。
+- DSL compiler の sweep 展開時に、body 内の `CommandStep` へ sweep
+  文脈を付与。
+- `_run_experiment_plan_job` で step result 永続化前に sweep 文脈を注入。
+  `sweep_index=0` / `sweep_value=0.0` も有効値として保存する。
+
+### 互換性
+
+- 既存 observation tool / API / DSL schema は変更なし。
+- stability matrix には追加登録しない experimental tool として扱う。
+- step result への sweep 文脈注入は追加 field のみ。
+- version を `2.17.0` に更新。
+
 ## v2.16.1 — recipe path も step result に instrument を永続化 (Codex v2.16.0 レビュー P1)
 
 合言葉: **「DSL だけでなく recipe job でも instrument を残す」**

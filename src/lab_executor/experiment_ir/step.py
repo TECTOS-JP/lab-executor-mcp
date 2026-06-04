@@ -49,6 +49,11 @@ class CommandStep(BaseModel):
     # 単一 Job / 通常 recipe では効果なし (target_index=0 のみ)。
     # None なら遅延なし。
     stagger_ms: int | None = None
+    # v2.17.0 / v2.7: sweep 展開由来の command step にだけ付く観察用文脈。
+    # DSL schema は変更せず、IR と永続化 result の追加 field として扱う。
+    sweep_index: int | None = None
+    sweep_param: str | None = None
+    sweep_value: Any = None
 
     @field_validator("stagger_ms")
     @classmethod

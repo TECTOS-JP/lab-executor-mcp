@@ -133,6 +133,65 @@ def _extract_instrument_views(
     return views
 
 
+def _extract_sweep_views(store, job_id: str) -> list[dict]:
+    """Build per-sweep-point observation views from job_steps.
+
+    Pure helper for the v2.7 MCP tool. It reads only store.list_steps(job_id)
+    and groups command/query steps that carry persisted sweep context.
+    """
+    steps = store.list_steps(job_id)
+    grouped: dict[object, list[tuple[dict, dict]]] = {}
+
+    for step in steps:
+        payload = _step_payload(step)
+        if not payload:
+            continue
+        sweep_index = payload.get("sweep_index")
+        if sweep_index is None:
+            continue
+        grouped.setdefault(sweep_index, []).append((step, payload))
+
+    points: list[dict] = []
+    for sweep_index, items in grouped.items():
+        items.sort(key=lambda item: (
+            item[0].get("step_index") if item[0].get("step_index") is not None else -1,
+            item[0].get("id") or 0,
+        ))
+        first_payload = items[0][1]
+        instruments: list[str] = []
+        measurements: list[dict] = []
+
+        for step, payload in items:
+            instr = payload.get("instrument")
+            if instr is not None:
+                instr = str(instr)
+                if instr not in instruments:
+                    instruments.append(instr)
+
+            command = payload.get("command")
+            if not command or "raw_response" not in payload:
+                continue
+            measurements.append({
+                "instrument": instr,
+                "command": command,
+                "raw_response": payload.get("raw_response"),
+                "value_numeric": _value_numeric_from_result(payload),
+                "step_index": step.get("step_index"),
+                "status": step.get("status"),
+            })
+
+        points.append({
+            "sweep_index": sweep_index,
+            "sweep_value": first_payload.get("sweep_value"),
+            "step_count": len(items),
+            "instruments": instruments,
+            "measurements": measurements,
+        })
+
+    points.sort(key=lambda point: point["sweep_index"])
+    return points
+
+
 def _parse_iso8601(s: str, field_name: str) -> datetime | None:
     """ISO8601 を堅牢にパース。失敗時は None。
 
@@ -549,6 +608,62 @@ def register_tools(mcp: FastMCP, job_mgr: JobManager) -> None:
             "instruments": views,
             "instrument_count": len(views),
             "schema_version": "2.6",
+        }, job_id=job_id)
+
+    @mcp.tool()
+    async def get_job_sweep_view(job_id: str) -> dict:
+        """Per-sweep-point observation view (experimental, v2.7).
+
+        Re-aggregates job_steps by persisted sweep_index without changing the
+        existing live view, summary, experiment results, or DSL schema.
+        """
+        try:
+            rec = job_mgr.get(job_id)
+        except Exception:
+            return make_envelope(
+                "error",
+                errors=[make_error("not_found", f"job not found: {job_id}",
+                                   recoverable=False)],
+            )
+        if rec is None:
+            return make_envelope(
+                "error",
+                errors=[make_error("not_found", f"job not found: {job_id}",
+                                   recoverable=False)],
+            )
+
+        try:
+            points = _extract_sweep_views(job_mgr.store, job_id)
+        except Exception as e:
+            return make_envelope(
+                "error",
+                errors=[make_error(
+                    "internal",
+                    f"failed to build sweep view: {e}",
+                    recoverable=True,
+                )],
+                job_id=job_id,
+            )
+
+        sweep_param = None
+        if points:
+            steps = job_mgr.store.list_steps(job_id)
+            for step in steps:
+                payload = _step_payload(step)
+                if not payload:
+                    continue
+                if payload.get("sweep_index") is not None:
+                    sweep_param = payload.get("sweep_param")
+                    break
+
+        return make_envelope("ok", data={
+            "job_id": job_id,
+            "job_status": rec.status.value,
+            "is_sweep_job": bool(points),
+            "sweep_param": sweep_param,
+            "sweep_points": points,
+            "sweep_point_count": len(points),
+            "schema_version": "2.7",
         }, job_id=job_id)
 
     @mcp.tool()

@@ -708,7 +708,13 @@ def _convert_step(
             iter_vars[s.parameter] = v
             for j, body_step in enumerate(s.body):
                 ctx.path = f"{saved_path}.sweep[{i}].body[{j}]"
-                expanded.extend(_convert_step(ctx, body_step, step_index, iter_vars))
+                converted = _convert_step(ctx, body_step, step_index, iter_vars)
+                for ir_step in converted:
+                    if isinstance(ir_step, CommandStep):
+                        ir_step.sweep_index = i
+                        ir_step.sweep_param = s.parameter
+                        ir_step.sweep_value = v
+                expanded.extend(converted)
                 ctx.total_expanded_steps += 1
         ctx.path = saved_path
         return expanded

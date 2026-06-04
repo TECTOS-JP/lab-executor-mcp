@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "lab-executor-mcp"
-version = "2.16.1"
+version = "2.17.0"
 description = "Backend-independent experiment execution runtime for AI agents (split from visa-mcp v1.11)"
 readme = "README.md"
 license = { text = "MIT" }

@@ -1064,6 +1064,14 @@ class JobManager:
                     and result.get("instrument") is None
                 ):
                     result["instrument"] = _instr
+                # v2.17.0: sweep 展開時に IR step へ付与された文脈を
+                # persisted step result に残す。0 / 0.0 も有効値なので
+                # truthy 判定ではなく is not None で扱う。
+                if isinstance(result, dict):
+                    for _key in ("sweep_index", "sweep_param", "sweep_value"):
+                        _value = getattr(step, _key, None)
+                        if _value is not None and _key not in result:
+                            result[_key] = _value
                 # v2.13.1: step_completed / step_failed を record
                 try:
                     self._store.record_step_completed(
