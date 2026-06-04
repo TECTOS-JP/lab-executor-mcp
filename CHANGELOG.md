@@ -1,5 +1,34 @@
 # 変更履歴
 
+## v2.18.0 — export dir env override + sweep columns (v2.8)
+
+合言葉: **「保存先を選べて、sweep の列もそのまま出る」**
+
+### 追加
+
+- export 先ディレクトリを `VISA_MCP_EXPORT_DIR` で上書き可能にした。
+  - 未指定時は従来通り `~/.visa-mcp/exports` を使う。
+  - `_safe_export_path` は毎回 `_resolve_export_dir()` で解決する。
+- `RESULT_COLUMNS` の末尾に `sweep_index` / `sweep_value` を追加。
+  - 既存 8 列の順序・名前は不変。
+  - `get_experiment_results` / CSV / JSONL / bundle results に反映される。
+
+### 修正
+
+- export directory 作成に失敗した場合、例外を投げず
+  `export_dir_not_writable` の structured error を返すようにした。
+- env 未指定時の default は `DEFAULT_EXPORT_DIR` 定数を返し、既存
+  monkeypatch テストとの互換性を維持する。
+- `_extract_result_rows` が step result の `instrument` に加えて
+  `sweep_index` / `sweep_value` を row へ載せるようにした。
+
+### 互換性
+
+- 新 MCP tool は追加しない。
+- 既存 MCP tool 名 / 引数 / DSL schema は変更なし。
+- stability matrix は不変。
+- version を `2.18.0` に更新。
+
 ## v2.17.0 — per-sweep-point observation API (v2.7)
 
 合言葉: **「sweep の各点で何が起きたかを、そのまま読める」**

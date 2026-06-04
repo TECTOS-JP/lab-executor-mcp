@@ -46,6 +46,16 @@ def test_resolve_export_dir_default(monkeypatch):
     assert ".visa-mcp" in p.parts
 
 
+def test_resolve_export_dir_respects_default_constant_monkeypatch(
+    monkeypatch, tmp_path
+):
+    """既存テストは DEFAULT_EXPORT_DIR を monkeypatch する。env 未設定時は
+    その定数を尊重すること (v2.8 回帰防止)。"""
+    monkeypatch.delenv("VISA_MCP_EXPORT_DIR", raising=False)
+    monkeypatch.setattr(exp, "DEFAULT_EXPORT_DIR", tmp_path / "exports")
+    assert exp._resolve_export_dir() == tmp_path / "exports"
+
+
 def test_export_dir_used_by_safe_export_path(monkeypatch, tmp_path):
     """VISA_MCP_EXPORT_DIR を設定すると、default 出力先がその配下になる。"""
     custom = tmp_path / "ex"

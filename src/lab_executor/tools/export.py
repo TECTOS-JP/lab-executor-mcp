@@ -46,7 +46,17 @@ RESULT_COLUMNS = (
     "unit",
     "step_index",
     "step_path",
+    "sweep_index",
+    "sweep_value",
 )
+
+
+def _resolve_export_dir() -> Path:
+    """export 先ディレクトリを優先順で決定する。"""
+    raw = os.environ.get("VISA_MCP_EXPORT_DIR", "").strip()
+    if raw:
+        return Path(raw).expanduser()
+    return DEFAULT_EXPORT_DIR
 
 
 def _safe_export_path(
@@ -60,8 +70,23 @@ def _safe_export_path(
         path: 安全な絶対パス (失敗時 None)
         error_dict: 失敗理由 (成功時 None)
     """
-    base = DEFAULT_EXPORT_DIR.resolve()
-    base.mkdir(parents=True, exist_ok=True)
+    base = _resolve_export_dir().resolve()
+    try:
+        base.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        return (None, {
+            "error_class": "export_dir_not_writable",
+            "message": (
+                f"export ディレクトリを作成できません: {base} ({e}). "
+                "VISA_MCP_EXPORT_DIR で書き込み可能な場所を指定してください。"
+            ),
+            "recoverable": True,
+            "details": {"export_dir": str(base)},
+            "recommended_next_actions": [
+                {"action": "set_export_dir_env",
+                 "reason": "VISA_MCP_EXPORT_DIR=<書き込み可能 path> を設定"},
+            ],
+        })
 
     if output_path is None or not output_path.strip():
         # v0.9.1: default パスでも existence チェックを通す
@@ -161,6 +186,8 @@ def _extract_result_rows(
             "step_path": (r.get("step_path") or
                           (f"steps[{s.get('step_index')}]"
                            if s.get("step_index") is not None else None)),
+            "sweep_index": r.get("sweep_index"),
+            "sweep_value": r.get("sweep_value"),
         }
         # parsed measurement (v0.8.x response_parsed dict)
         # v2.13.2: step_executor は `parsed` キー (response_parser 経由) も
@@ -271,6 +298,8 @@ def _extract_result_rows(
                     "unit": "",
                     "step_index": None,
                     "step_path": None,
+                    "sweep_index": None,
+                    "sweep_value": None,
                 })
 
     # monitor_data (オプション、monitor_id == job_id 前提の慣用に従う)
@@ -294,6 +323,8 @@ def _extract_result_rows(
                 "unit": m.get("unit", ""),
                 "step_index": None,
                 "step_path": None,
+                "sweep_index": None,
+                "sweep_value": None,
             })
 
     return rows
