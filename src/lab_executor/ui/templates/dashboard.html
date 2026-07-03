@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}ダッシュボード - lab-executor monitor{% endblock %}
+{% block content %}
+<h1>ジョブ一覧</h1>
+{% if host_external %}
+<div class="warn-banner">
+  警告: 外部ホストにバインドしています。M1 は認証がありません。信頼できるネットワークでのみ使用してください。
+</div>
+{% endif %}
+<div id="jobs-panel"
+     hx-get="/partials/jobs-table"
+     hx-trigger="every 2s"
+     hx-swap="innerHTML">
+  {% include "_jobs_table.html" %}
+</div>
+{% endblock %}

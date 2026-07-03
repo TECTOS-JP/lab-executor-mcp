@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "lab-executor-mcp"
-version = "2.19.0"
+version = "2.20.0"
 description = "Backend-independent experiment execution runtime for AI agents (split from visa-mcp v1.11)"
 readme = "README.md"
 license = { text = "MIT" }
@@ -33,7 +33,14 @@ dependencies = [
 
 [project.optional-dependencies]
 pdf = ["pdfplumber"]
-dev = ["pytest", "pytest-asyncio", "pyyaml"]
+# Web UI M1 (読み取り専用モニタ)。必須依存には入れない。
+ui = ["fastapi>=0.110", "uvicorn>=0.29", "jinja2>=3.1"]
+# httpx は starlette TestClient に必要。dev に ui 依存を含めて CI で
+# UI テストが走るようにする。
+dev = [
+    "pytest", "pytest-asyncio", "pyyaml",
+    "fastapi>=0.110", "uvicorn>=0.29", "jinja2>=3.1", "httpx",
+]
 
 [project.scripts]
 lab-executor = "lab_executor.cli:main"

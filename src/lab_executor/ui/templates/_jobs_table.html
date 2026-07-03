@@ -1,0 +1,43 @@
+<div class="health {{ health.status_class }}">
+  <span class="health-label">{{ health.status_label }}</span>
+  {% if health.last_write_at %}
+    <span class="health-detail">
+      最終書き込み: {{ health.last_write_at }}
+      {% if health.seconds_since_last_write is not none %}
+        ({{ health.seconds_since_last_write }} 秒前)
+      {% endif %}
+    </span>
+  {% else %}
+    <span class="health-detail">まだ書き込みがありません</span>
+  {% endif %}
+  <span class="health-detail">active jobs: {{ health.active_jobs }}</span>
+</div>
+
+<table class="jobs">
+  <thead>
+    <tr>
+      <th>job_id</th>
+      <th>recipe</th>
+      <th>status</th>
+      <th>phase</th>
+      <th>step</th>
+      <th>resource</th>
+      <th>updated_at</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for j in jobs %}
+    <tr>
+      <td><a href="/jobs/{{ j.job_id }}">{{ j.job_id }}</a></td>
+      <td>{{ j.recipe }}</td>
+      <td><span class="status status-{{ j.status_color }}">{{ j.status }}</span></td>
+      <td><span class="phase phase-{{ j.phase_color }}">{{ j.phase }}</span></td>
+      <td>{{ j.current_step_index }}</td>
+      <td>{{ j.resource_name }}</td>
+      <td class="ts">{{ j.updated_at }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="7" class="empty">ジョブがありません</td></tr>
+    {% endfor %}
+  </tbody>
+</table>

@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}{{ detail.job_id }} - lab-executor monitor{% endblock %}
+{% block content %}
+<p><a href="/">&larr; 一覧へ戻る</a></p>
+<h1>ジョブ {{ detail.job_id }}</h1>
+
+<div class="job-meta">
+  <span class="status status-{{ detail.status_color }}">{{ detail.status }}</span>
+  <span class="phase phase-{{ detail.phase_color }}">phase: {{ detail.phase }}</span>
+  {% if detail.outcome %}
+    <span class="outcome outcome-{{ detail.outcome }}">outcome: {{ detail.outcome }}</span>
+  {% endif %}
+  <span class="recipe">recipe: {{ detail.job.recipe }}</span>
+  <span class="resource">resource: {{ detail.job.resource_name }}</span>
+</div>
+
+<section class="steps-section">
+  <h2>ステップ実行履歴</h2>
+  <table class="steps">
+    <thead>
+      <tr><th>#</th><th>type</th><th>status</th><th>started</th><th>ended</th></tr>
+    </thead>
+    <tbody>
+      {% for s in detail.steps %}
+      <tr>
+        <td>{{ s.step_index }}</td>
+        <td>{{ s.step_type }}</td>
+        <td><span class="status status-{{ s.status_color }}">{{ s.status }}</span></td>
+        <td class="ts">{{ s.started_at }}</td>
+        <td class="ts">{{ s.ended_at or "" }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="5" class="empty">ステップがありません</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="timeline-section">
+  <h2>イベントタイムライン</h2>
+  {% if detail.is_terminal %}
+    <div id="timeline-panel">
+      {% include "_timeline.html" %}
+    </div>
+  {% else %}
+    <div id="timeline-panel"
+         hx-get="/partials/jobs/{{ detail.job_id }}/timeline"
+         hx-trigger="every 2s"
+         hx-swap="innerHTML">
+      {% include "_timeline.html" %}
+    </div>
+  {% endif %}
+</section>
+
+{% if detail.summary %}
+<section class="summary-section" id="run-summary">
+  <h2>ラン サマリー</h2>
+  {% set sm = detail.summary %}
+  <ul class="summary-list">
+    <li>job_outcome: <strong>{{ sm.job_outcome }}</strong></li>
+    <li>steps: {{ sm.summary.completed_steps }} / {{ sm.summary.total_steps }} 完了
+        (failed {{ sm.summary.failed_steps }})</li>
+    <li>targets: {{ sm.summary.successful_targets }} / {{ sm.summary.total_targets }} 成功
+        (failed {{ sm.summary.failed_targets }})</li>
+    {% if sm.summary.duration_s is not none %}
+      <li>duration: {{ sm.summary.duration_s }} 秒</li>
+    {% endif %}
+    <li>verify: passed {{ sm.verify_summary.passed }} / failed {{ sm.verify_summary.failed }}
+        (total {{ sm.verify_summary.total }})</li>
+  </ul>
+  {% if sm.failures %}
+  <h3>失敗</h3>
+  <ul class="failures">
+    {% for f in sm.failures %}
+    <li>target={{ f.target_id }} error_class={{ f.error_class }}
+        {% if f.recoverable %}(recoverable){% endif %}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</section>
+{% endif %}
+{% endblock %}

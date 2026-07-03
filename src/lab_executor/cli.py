@@ -172,6 +172,28 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Compose server and list tools only (no transport start)",
     )
 
+    # ---- ui (Web UI M1: 読み取り専用モニタ) ---------------------
+    sp_ui = sub.add_parser(
+        "ui",
+        help=(
+            "Start read-only experiment monitor Web UI on localhost "
+            "(M1). Requires the [ui] extra: pip install "
+            "lab-executor-mcp[ui]."
+        ),
+    )
+    sp_ui.add_argument(
+        "--host", default="127.0.0.1",
+        help="bind host (default: 127.0.0.1; external hosts show a warning)",
+    )
+    sp_ui.add_argument(
+        "--port", type=int, default=8080,
+        help="bind port (default: 8080)",
+    )
+    sp_ui.add_argument(
+        "--db", default=None,
+        help="state DB path (default: default_store_path())",
+    )
+
     # ---- validate -----------------------------------------------
     sp_val = sub.add_parser(
         "validate",
@@ -560,6 +582,57 @@ def _cmd_serve(args: argparse.Namespace) -> int:
 
     print(f"unsupported backend: {args.backend}", file=sys.stderr)
     return 2
+
+
+# ============================================================
+# ui (Web UI M1: 読み取り専用モニタ)
+# ============================================================
+
+
+def _cmd_ui(args: argparse.Namespace) -> int:
+    # fastapi / uvicorn は optional-dependencies [ui]。遅延 import し、
+    # 未インストール時は案内して exit 1。
+    try:
+        import uvicorn
+        from lab_executor.ui.app import create_app
+    except ImportError:
+        print(
+            "lab-executor ui は [ui] extra が必要です: "
+            "pip install lab-executor-mcp[ui]",
+            file=sys.stderr,
+        )
+        return 1
+
+    from pathlib import Path as _P
+
+    db_path = _P(args.db) if args.db else None
+    app = create_app(db_path)
+
+    # 外部ホストバインド時は認証なしを警告 (M1 は localhost 割り切り)。
+    host = args.host
+    external = host not in ("127.0.0.1", "localhost", "::1")
+    app.state.host_external = external
+    if external:
+        print(
+            f"WARNING: binding to {host} exposes the monitor without "
+            "authentication (M1 has no auth). Use a trusted network only.",
+            file=sys.stderr,
+        )
+
+    print(
+        f"lab-executor monitor (read-only) on http://{host}:{args.port} "
+        f"(db={app_db_display(db_path)})",
+        file=sys.stderr,
+    )
+    uvicorn.run(app, host=host, port=args.port, log_level="info")
+    return 0
+
+
+def app_db_display(db_path) -> str:
+    if db_path is not None:
+        return str(db_path)
+    from lab_executor.job.store import default_store_path
+    return str(default_store_path())
 
 
 # ============================================================
@@ -1425,6 +1498,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "serve":
         return _cmd_serve(args)
+    if args.command == "ui":
+        return _cmd_ui(args)
     if args.command == "validate":
         return _cmd_validate(args)
     if args.command == "extension":

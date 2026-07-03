@@ -1,0 +1,14 @@
+<ul class="timeline">
+  {% for it in detail.timeline %}
+  <li class="tl-item sev-{{ it.severity_color }} kind-{{ it.kind }}">
+    <span class="tl-ts">{{ it.timestamp }}</span>
+    <span class="tl-kind">{{ it.kind }}</span>
+    <span class="tl-title">{{ it.title }}</span>
+    {% if it.summary and it.summary != it.event_type %}
+      <span class="tl-summary">{{ it.summary }}</span>
+    {% endif %}
+  </li>
+  {% else %}
+  <li class="tl-item empty">イベントがありません</li>
+  {% endfor %}
+</ul>

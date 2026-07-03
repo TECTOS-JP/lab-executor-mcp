@@ -1,5 +1,35 @@
 # 変更履歴
 
+## v2.20.0 — Web UI M1: 読み取り専用モニタ (UI M1)
+
+合言葉: **「AI と人間が同じ窓を覗く」**
+
+### 追加
+
+- `lab-executor ui` サブコマンド (`--host` / `--port` / `--db`)。
+  localhost に読み取り専用の実験モニタ Web UI を起動する。
+  - ダッシュボード: 全ジョブ一覧 (8 状態の色分け、現在フェーズ、
+    htmx 2 秒ポーリング更新)、serve 死活の目安表示
+  - ジョブ詳細: ステップ実行履歴、正規化イベントタイムライン、
+    終端ジョブの run summary
+  - JSON API: `/api/jobs` / `/api/jobs/{id}` / `/api/health`
+- `src/lab_executor/ui/` パッケージ (readonly_store / views / app /
+  templates / static)。timeline / phase / outcome / summary は
+  `lab_executor.observation` の既存純関数を再利用し、MCP (AI) と
+  UI (人間) が同じ観測ビューを見る。
+- optional-dependencies `[ui]` (fastapi / uvicorn / jinja2)。
+  htmx 1.9.12 を static/vendor にベンダリング (オフライン動作)。
+- 設計文書: `docs/web_ui_m1_plan.md` / 利用者向け: `docs/web_ui.md`
+
+### 互換性
+
+- MCP tool surface 不変 (Stable 43 + Experimental 7 = 50)。
+  server.py / tools/ / serve 経路に変更なし。
+- 必須依存に追加なし (`[ui]` extra のみ)。
+- state DB への書き込みなし (`mode=ro` + `PRAGMA query_only=ON`。
+  UI からの書き込み経路は存在しない)。
+- version を `2.20.0` に更新。
+
 ## v2.19.0 — export result filters (v2.9)
 
 合言葉: **「巨大な結果表から、見たい行だけを取り出す」**
