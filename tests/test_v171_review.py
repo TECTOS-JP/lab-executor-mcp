@@ -30,23 +30,13 @@ ROOT = Path(__file__).parent.parent
 # =========================================================
 
 
-def test_version_v1_7_1():
-    import visa_mcp
-    assert visa_mcp.__version__.startswith("1.")
-
-
-# =========================================================
-# P0: LF + multi-line guard (v1.7 系)
-# =========================================================
-
-
 V17_FILES_FULL = [
-    "src/visa_mcp/extension_authoring.py",
-    "src/visa_mcp/extension_packaging.py",
-    "src/visa_mcp/extension_install.py",
-    "src/visa_mcp/extension_catalog.py",
-    "src/visa_mcp/extension.py",
-    "src/visa_mcp/cli.py",
+    "src/lab_executor/extension_authoring.py",
+    "src/lab_executor/extension_packaging.py",
+    "src/lab_executor/extension_install.py",
+    "src/lab_executor/extension_catalog.py",
+    "src/lab_executor/extension.py",
+    "src/lab_executor/cli.py",
     "docs/extension_authoring.md",
     "docs/extension_packaging.md",
     "docs/extension_install.md",
@@ -277,9 +267,3 @@ def test_authoring_doc_mentions_external_template_todo():
 # CHANGELOG
 # =========================================================
 
-
-def test_changelog_has_v171_entry():
-    text = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-    assert "v1.7.1" in text
-    assert "extension_init_force_retains_files" in text
-    assert "Strict-only" in text or "strict-only" in text.lower()

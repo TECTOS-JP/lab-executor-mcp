@@ -28,15 +28,15 @@ SWEEP_PATTERNS = [
     "schemas/**/*.json",
     "registry/**/*.yaml",
     "scripts/**/*.py",
-    "src/visa_mcp/templates/**/*.yaml",
+    "src/lab_executor/templates/**/*.yaml",
 ]
 
 # 5 行以下を許容する例外 (`__init__.py` 等で意図的に短いもの)
 MIN_LINES_EXCEPTIONS = {
     # path: minimum lines expected (None = no minimum)
-    "src/visa_mcp/dev/__init__.py": 0,
-    "src/visa_mcp/templates/__init__.py": 0,
-    "src/visa_mcp/templates/instruments/__init__.py": 0,
+    "src/lab_executor/dev/__init__.py": 0,
+    "src/lab_executor/templates/__init__.py": 0,
+    "src/lab_executor/templates/instruments/__init__.py": 0,
 }
 
 DEFAULT_MIN_LINES = 5

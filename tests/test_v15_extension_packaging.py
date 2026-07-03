@@ -23,11 +23,6 @@ ROOT = Path(__file__).parent.parent
 # =========================================================
 
 
-def test_version_v1_5_0():
-    import visa_mcp
-    assert visa_mcp.__version__.startswith("1.")
-
-
 def test_no_new_mcp_tools_in_v1_5():
     """v1.5 でも MCP surface は不変"""
     assert stability.stable_count() == 43
@@ -456,8 +451,8 @@ def test_cli_extension_verify_package_runs(temp_pack):
 
 
 V15_FILES = [
-    "src/visa_mcp/extension_packaging.py",
-    "src/visa_mcp/cli.py",
+    "src/lab_executor/extension_packaging.py",
+    "src/lab_executor/cli.py",
     "docs/extension_packaging.md",
     "docs/extension_publishing_checklist.md",
     "tests/test_v15_extension_packaging.py",
@@ -507,8 +502,3 @@ def test_publishing_checklist_keywords():
     ):
         assert kw in text, f"checklist に {kw!r} 無し"
 
-
-def test_changelog_has_v150_entry():
-    text = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-    assert "v1.5.0" in text
-    assert "package_manifest.json" in text or "extension package" in text

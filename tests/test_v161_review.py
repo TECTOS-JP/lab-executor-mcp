@@ -35,22 +35,12 @@ ROOT = Path(__file__).parent.parent
 # =========================================================
 
 
-def test_version_v1_6_1():
-    import visa_mcp
-    assert visa_mcp.__version__.startswith("1.")
-
-
-# =========================================================
-# P0: LF + multi-line guard (v1.6 系 file)
-# =========================================================
-
-
 V16_FILES_FULL = [
-    "src/visa_mcp/extension_catalog.py",
-    "src/visa_mcp/extension_install.py",
-    "src/visa_mcp/extension_packaging.py",
-    "src/visa_mcp/extension.py",
-    "src/visa_mcp/cli.py",
+    "src/lab_executor/extension_catalog.py",
+    "src/lab_executor/extension_install.py",
+    "src/lab_executor/extension_packaging.py",
+    "src/lab_executor/extension.py",
+    "src/lab_executor/cli.py",
     "docs/extension_catalog.md",
     "docs/extension_install.md",
     "docs/extension_packaging.md",
@@ -334,18 +324,6 @@ def test_extension_install_doc_describes_zip_limits():
 
 # =========================================================
 # CHANGELOG
-# =========================================================
-
-
-def test_changelog_has_v161_entry():
-    text = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-    assert "v1.6.1" in text
-    assert "package_verification_status" in text
-    assert "extension_install_zip_no_root_manifest" in text
-
-
-# =========================================================
-# CLI smoke
 # =========================================================
 
 

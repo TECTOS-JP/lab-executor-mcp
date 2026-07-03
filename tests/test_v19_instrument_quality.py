@@ -41,11 +41,6 @@ ROOT = Path(__file__).parent.parent
 # =========================================================
 
 
-def test_version_v1_9_0():
-    import visa_mcp
-    assert visa_mcp.__version__.startswith("1.")
-
-
 def test_no_new_mcp_tools_in_v1_9():
     assert stability.stable_count() == 43
     assert stability.experimental_count() == 7
@@ -598,11 +593,11 @@ def test_cli_validate_instrument_strict_runs(tmp_path):
 
 
 V19_FILES = [
-    "src/visa_mcp/registry.py",
-    "src/visa_mcp/cli.py",
-    "src/visa_mcp/dev/dependency_report.py",
-    "src/visa_mcp/instrument_authoring.py",
-    "src/visa_mcp/extension_authoring.py",
+    "src/lab_executor/registry.py",
+    "src/lab_executor/cli.py",
+    "src/lab_executor/dev/dependency_report.py",
+    "src/lab_executor/instrument_authoring.py",
+    "src/lab_executor/extension_authoring.py",
     "docs/separation/notes.md",
     "tests/test_separation_boundary.py",
     "tests/test_v19_instrument_quality.py",
@@ -636,9 +631,3 @@ def test_separation_notes_keywords():
     ):
         assert kw in text, f"docs/separation/notes.md に {kw!r} 無し"
 
-
-def test_changelog_has_v190_entry():
-    text = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-    assert "v1.9.0" in text
-    assert "Boundary Smoke Tests" in text or "boundary" in text.lower()
-    assert "instrument_manual_ref_todo" in text

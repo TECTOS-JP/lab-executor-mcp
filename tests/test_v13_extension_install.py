@@ -24,17 +24,6 @@ ROOT = Path(__file__).parent.parent
 # =========================================================
 
 
-def test_version_v1_3_0():
-    import visa_mcp
-    # v1.3 系列以降の v1.x を許容
-    assert visa_mcp.__version__.startswith("1.")
-
-
-# =========================================================
-# Stability unchanged
-# =========================================================
-
-
 def test_no_new_mcp_tools_in_v1_3():
     assert stability.stable_count() == 43
     assert stability.experimental_count() == 7
@@ -346,7 +335,7 @@ def test_cli_extension_list_empty_returns_zero(tmp_path):
 
 
 V13_FILES = [
-    "src/visa_mcp/extension_install.py",
+    "src/lab_executor/extension_install.py",
     "docs/extension_install.md",
     "docs/extension_registry_overlay.md",
     "tests/test_v13_extension_install.py",

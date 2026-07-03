@@ -40,8 +40,11 @@ Split from `visa-mcp` at v2.0.
 - Benchmark runner (MockBackend, PyVISA 不要)
 - Definition pack ecosystem (`extension init/install/check/package/...`)
 - Instrument authoring (`instrument scaffold/promote-check/review-report`)
-- Export / bundle (deterministic reproducibility)
+- Export / bundle (deterministic reproducibility) — `export_experiment_bundle`
 - MCP tool surface: Stable 43 + Experimental 7 = 50 (v1.0 から不変)
+
+MCP API の安定性ポリシー (Stable / Experimental tool の区分、deprecation 方針)
+は [`docs/v1_stability_policy.md`](docs/v1_stability_policy.md) を参照。
 
 ## Install
 

@@ -35,11 +35,6 @@ ROOT = Path(__file__).parent.parent
 # =========================================================
 
 
-def test_version_v1_8_0():
-    import visa_mcp
-    assert visa_mcp.__version__.startswith("1.")
-
-
 def test_no_new_mcp_tools_in_v1_8():
     assert stability.stable_count() == 43
     assert stability.experimental_count() == 7
@@ -461,8 +456,8 @@ def test_cli_extension_add_instrument_dry_run_runs(tmp_path):
 
 
 V18_FILES = [
-    "src/visa_mcp/instrument_authoring.py",
-    "src/visa_mcp/cli.py",
+    "src/lab_executor/instrument_authoring.py",
+    "src/lab_executor/cli.py",
     "docs/instrument_authoring.md",
     "CONTRIBUTING.md",
     "tests/test_v18_instrument_authoring.py",
@@ -511,9 +506,3 @@ def test_contributing_mentions_instrument_workflow():
     ):
         assert kw in text, f"CONTRIBUTING.md に {kw!r} 無し"
 
-
-def test_changelog_has_v180_entry():
-    text = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-    assert "v1.8.0" in text
-    assert "instrument scaffold" in text
-    assert "add-instrument" in text

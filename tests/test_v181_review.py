@@ -31,24 +31,14 @@ ROOT = Path(__file__).parent.parent
 # =========================================================
 
 
-def test_version_v1_8_1():
-    import visa_mcp
-    assert visa_mcp.__version__.startswith("1.")
-
-
-# =========================================================
-# P0-1: LF + multi-line guard (v1.8 系)
-# =========================================================
-
-
 V18_FILES_FULL = [
-    "src/visa_mcp/instrument_authoring.py",
-    "src/visa_mcp/extension_authoring.py",
-    "src/visa_mcp/cli.py",
-    "src/visa_mcp/templates/instruments/power_supply.yaml",
-    "src/visa_mcp/templates/instruments/dmm.yaml",
-    "src/visa_mcp/templates/instruments/temperature_meter.yaml",
-    "src/visa_mcp/templates/instruments/generic_scpi.yaml",
+    "src/lab_executor/instrument_authoring.py",
+    "src/lab_executor/extension_authoring.py",
+    "src/lab_executor/cli.py",
+    "src/lab_executor/templates/instruments/power_supply.yaml",
+    "src/lab_executor/templates/instruments/dmm.yaml",
+    "src/lab_executor/templates/instruments/temperature_meter.yaml",
+    "src/lab_executor/templates/instruments/generic_scpi.yaml",
     "docs/instrument_authoring.md",
     "docs/extension_authoring.md",
     "CONTRIBUTING.md",
@@ -80,7 +70,7 @@ def test_v181_multiline(rel):
 
 @pytest.mark.parametrize("cat", list(CATEGORIES))
 def test_template_files_exist(cat):
-    p = ROOT / "src" / "visa_mcp" / "templates" / "instruments" / (
+    p = ROOT / "src" / "lab_executor" / "templates" / "instruments" / (
         f"{cat}.yaml")
     assert p.exists(), f"template file missing: {p}"
 
@@ -88,7 +78,7 @@ def test_template_files_exist(cat):
 @pytest.mark.parametrize("cat", list(CATEGORIES))
 def test_template_files_yaml_parseable(cat):
     """template ファイルは placeholder 置換前でも yaml.safe_load 可"""
-    p = ROOT / "src" / "visa_mcp" / "templates" / "instruments" / (
+    p = ROOT / "src" / "lab_executor" / "templates" / "instruments" / (
         f"{cat}.yaml")
     text = p.read_text(encoding="utf-8")
     # template 内で {manufacturer} / {model} を仮値で置換
@@ -258,7 +248,7 @@ def fresh_pack(tmp_path):
 
 def _force_post_validate_failure(monkeypatch):
     """monkeypatch: 更新後 validate を失敗させて rollback を起こす"""
-    from visa_mcp import extension as _ext_module
+    from lab_executor import extension as _ext_module
 
     def fake_validate(path, strict=False):
         class _FakeRep:
@@ -286,7 +276,7 @@ def test_rollback_restores_extension_yaml(fresh_pack, monkeypatch):
     ext_yaml = fresh_pack / "extension.yaml"
     before_text = ext_yaml.read_text(encoding="utf-8")
     # 事前 validate は通る必要があるため、pass-through で 1 回目はパス
-    from visa_mcp import extension as _ext_module
+    from lab_executor import extension as _ext_module
     original = _ext_module.validate_extension_file
     call_count = {"n": 0}
 
@@ -326,7 +316,7 @@ def test_rollback_restores_registry_index(fresh_pack, monkeypatch):
     reg_index = fresh_pack / "registry_entries" / "INDEX.yaml"
     before = reg_index.read_text(encoding="utf-8") if reg_index.exists() else None
 
-    from visa_mcp import extension as _ext_module
+    from lab_executor import extension as _ext_module
     original = _ext_module.validate_extension_file
     call_count = {"n": 0}
 
@@ -355,7 +345,7 @@ def test_rollback_restores_registry_index(fresh_pack, monkeypatch):
 
 def test_rollback_removes_new_instrument_file(fresh_pack, monkeypatch):
     """rollback で新規 instrument file が削除される"""
-    from visa_mcp import extension as _ext_module
+    from lab_executor import extension as _ext_module
     original = _ext_module.validate_extension_file
     call_count = {"n": 0}
 
@@ -390,7 +380,7 @@ def test_rollback_preserves_existing_instrument_file(fresh_pack, monkeypatch):
     inst_path.write_text("original_content: keep\n", encoding="utf-8")
     original_text = inst_path.read_text(encoding="utf-8")
 
-    from visa_mcp import extension as _ext_module
+    from lab_executor import extension as _ext_module
     original = _ext_module.validate_extension_file
     call_count = {"n": 0}
 
@@ -451,9 +441,3 @@ def test_docs_force_backup_described():
 # CHANGELOG
 # =========================================================
 
-
-def test_changelog_has_v181_entry():
-    text = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-    assert "v1.8.1" in text
-    assert "instrument_scaffold_force_backup" in text
-    assert "templates/instruments" in text

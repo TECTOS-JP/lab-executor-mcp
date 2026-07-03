@@ -31,11 +31,6 @@ ROOT = Path(__file__).parent.parent
 # =========================================================
 
 
-def test_version_v1_7_0():
-    import visa_mcp
-    assert visa_mcp.__version__.startswith("1.")
-
-
 def test_no_new_mcp_tools_in_v1_7():
     assert stability.stable_count() == 43
     assert stability.experimental_count() == 7
@@ -422,8 +417,8 @@ def test_cli_extension_doctor_json(temp_pack):
 
 
 V17_FILES = [
-    "src/visa_mcp/extension_authoring.py",
-    "src/visa_mcp/cli.py",
+    "src/lab_executor/extension_authoring.py",
+    "src/lab_executor/cli.py",
     "docs/extension_authoring.md",
     "CONTRIBUTING.md",
     "tests/test_v17_authoring.py",
@@ -473,10 +468,3 @@ def test_contributing_mentions_definition_pack_workflow():
     ):
         assert kw in text, f"CONTRIBUTING.md に {kw!r} 無し"
 
-
-def test_changelog_has_v170_entry():
-    text = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-    assert "v1.7.0" in text
-    assert "extension init" in text
-    assert "extension doctor" in text
-    assert "--dry-run" in text

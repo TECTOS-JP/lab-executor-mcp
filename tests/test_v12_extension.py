@@ -20,17 +20,6 @@ ROOT = Path(__file__).parent.parent
 # =========================================================
 
 
-def test_version_v1_2_0():
-    """v1.2+ の v1.x 系列を許容"""
-    import visa_mcp
-    assert visa_mcp.__version__.startswith("1.")
-
-
-# =========================================================
-# docs
-# =========================================================
-
-
 REQUIRED_DOCS = [
     ("docs/extension_policy.md", [
         "definition_pack", "executable plugin", "Stability",
@@ -288,7 +277,7 @@ V12_FILES = [
     "docs/definition_packs.md",
     "docs/registry_contribution.md",
     "docs/replay_backend_concept.md",
-    "src/visa_mcp/extension.py",
+    "src/lab_executor/extension.py",
     "examples/extensions/mock_basic_pack/extension.yaml",
     "examples/extensions/mock_basic_pack/README.md",
     "tests/test_v12_extension.py",

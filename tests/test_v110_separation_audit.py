@@ -15,9 +15,27 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).parent.parent
+
+# 要人間判断 (test debt triage フェーズ1):
+# 以下 2 test は v1.10 当時「visa-mcp からの分割準備」を監査するもので、
+# docs/separation/{module_ownership,split_manifest}.yaml が分割 *前* の
+# visa_mcp.* module / src/visa_mcp/*.py path を列挙している前提だった。
+# v2.0 で分割は完了し、本 repo には visa_mcp ツリーが存在しないため、
+# これらの planning artifact は現状と整合しない (ghost module 76 件 /
+# 実在 path 7/47)。planning doc を lab_executor.* へ全面書き換えするか、
+# それとも歴史的監査として削除するかは人間の判断が必要なため、
+# 安全側に倒して skip 化する。詳細は docs/test_debt_triage.md 参照。
+_SPLIT_PLANNING_OBSOLETE = pytest.mark.skip(
+    reason=(
+        "要人間判断: v1.10 分割準備監査。docs/separation/*.yaml は分割前の "
+        "visa_mcp.* を列挙しており v2.0 完了後の本 repo と不整合。"
+        "planning doc 書き換え or 削除の判断待ち (test_debt_triage.md)。"
+    )
+)
 
 
 def test_version_is_1_10_or_later():
@@ -29,6 +47,7 @@ def test_version_is_1_10_or_later():
         f"v1.10 audit テストは v1.10+ で動く想定 (got {__version__})")
 
 
+@_SPLIT_PLANNING_OBSOLETE
 def test_module_ownership_manifest_complete():
     """module_ownership.yaml が src/visa_mcp 配下の全 module を分類"""
     from lab_executor.dev.ownership_check import collect_report
@@ -61,6 +80,7 @@ def test_known_v1_11_to_resolve_tracked():
         KNOWN_V111_TO_RESOLVE)
 
 
+@_SPLIT_PLANNING_OBSOLETE
 def test_split_manifest_paths_exist():
     """split_manifest.yaml に列挙された path が概ね実在"""
     manifest_path = ROOT / "docs" / "separation" / "split_manifest.yaml"

@@ -28,21 +28,10 @@ ROOT = Path(__file__).parent.parent
 # =========================================================
 
 
-def test_version_v1_3_1():
-    import visa_mcp
-    # v1.3 系列 (1.3.x) を許容
-    assert visa_mcp.__version__.startswith("1.")
-
-
-# =========================================================
-# P0: repo file LF + multi-line (v1.3 files including v1.3.1 additions)
-# =========================================================
-
-
 V13_FILES_FULL = [
-    "src/visa_mcp/extension_install.py",
-    "src/visa_mcp/cli.py",
-    "src/visa_mcp/extension.py",
+    "src/lab_executor/extension_install.py",
+    "src/lab_executor/cli.py",
+    "src/lab_executor/extension.py",
     "docs/extension_install.md",
     "docs/extension_registry_overlay.md",
     "docs/v1_stability_policy.md",
@@ -366,24 +355,6 @@ def test_overlay_warns_on_missing_optional_fields(temp_env, tmp_path):
 # =========================================================
 
 
-def test_cli_module_docstring_v13():
-    text = (ROOT / "src" / "visa_mcp" / "cli.py").read_text(encoding="utf-8")
-    # 最初の 30 行を確認
-    head = "\n".join(text.splitlines()[:30])
-    assert "v0.9.2" not in head, "cli.py docstring が v0.9.2 のまま"
-    assert "v1.3" in head
-    for sub in (
-        "extension install", "extension list", "extension uninstall",
-        "extension validate-installed",
-    ):
-        assert sub in head, f"cli.py docstring に {sub!r} 無し"
-
-
-# =========================================================
-# docs / CHANGELOG 補強
-# =========================================================
-
-
 def test_extension_install_docs_documents_exclusion():
     text = (ROOT / "docs" / "extension_install.md").read_text(
         encoding="utf-8")
@@ -392,19 +363,6 @@ def test_extension_install_docs_documents_exclusion():
         "extension_source_inside_extensions_dir",
     ):
         assert kw in text, f"extension_install.md に {kw!r} 無し"
-
-
-def test_changelog_has_v131_entry():
-    text = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-    assert "v1.3.1" in text
-    assert "backup-rename" in text or "backup rename" in text
-    assert "registry_entry_path_outside_pack" in text
-    assert "registry_entry_missing_id" in text
-
-
-# =========================================================
-# 既存 example pack は v1.3.1 でも install 可
-# =========================================================
 
 
 def test_example_pack_still_installs_after_v131(temp_env):

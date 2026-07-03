@@ -20,10 +20,10 @@ ROOT = Path(__file__).parent.parent
 
 
 REPO_TEXT_TARGETS = [
-    "src/visa_mcp/audit.py",
-    "src/visa_mcp/tools/audit.py",
-    "src/visa_mcp/job/manager.py",
-    "src/visa_mcp/server.py",
+    "src/lab_executor/audit.py",
+    "src/lab_executor/tools/audit.py",
+    "src/lab_executor/job/manager.py",
+    "src/lab_executor/server.py",
     "tests/test_v093_audit_locks.py",
     "docs/operational_integrity.md",
     "docs/error_taxonomy.md",

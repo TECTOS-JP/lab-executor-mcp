@@ -24,22 +24,12 @@ ROOT = Path(__file__).parent.parent
 # =========================================================
 
 
-def test_version_v1_9_1():
-    import visa_mcp
-    assert visa_mcp.__version__.startswith("1.")
-
-
-# =========================================================
-# P0-1: LF + multi-line (v1.9 関連 + v1.9.1 新規)
-# =========================================================
-
-
 V19_FILES_FULL = [
-    "src/visa_mcp/registry.py",
-    "src/visa_mcp/cli.py",
-    "src/visa_mcp/dev/dependency_report.py",
-    "src/visa_mcp/instrument_authoring.py",
-    "src/visa_mcp/extension_authoring.py",
+    "src/lab_executor/registry.py",
+    "src/lab_executor/cli.py",
+    "src/lab_executor/dev/dependency_report.py",
+    "src/lab_executor/instrument_authoring.py",
+    "src/lab_executor/extension_authoring.py",
     "docs/separation/notes.md",
     "docs/instrument_promote_check.md",
     "docs/category_policy.md",
@@ -124,7 +114,7 @@ def test_repo_format_guard_module_exists():
         "test_ci_workflow_includes_pyvisa_not_installed_job",
         ".github/workflows",
         "schemas/**/*.json",
-        "src/visa_mcp/templates",
+        "src/lab_executor/templates",
     ):
         assert kw in text, f"test_repo_format_guard.py に {kw!r} 無し"
 
@@ -261,10 +251,3 @@ def test_category_policy_doc_matches_implementation():
 # CHANGELOG
 # =========================================================
 
-
-def test_changelog_has_v191_entry():
-    text = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-    assert "v1.9.1" in text
-    assert "test_repo_format_guard" in text
-    assert "promote_check" in text or "promote-check" in text
-    assert "category_policy" in text

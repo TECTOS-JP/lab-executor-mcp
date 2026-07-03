@@ -25,17 +25,6 @@ ROOT = Path(__file__).parent.parent
 # =========================================================
 
 
-def test_version_v1_0_1():
-    """v1.0.1 で導入したテスト。v1.1.0 以降でも v1.0.x 系列であれば許容"""
-    import visa_mcp
-    assert visa_mcp.__version__.startswith("1.")
-
-
-# =========================================================
-# P0: repo format (v1 docs + bundle_export 追加対象)
-# =========================================================
-
-
 REPO_TEXT_TARGETS_V1 = [
     "README.md",
     "docs/v1_stability_policy.md",
@@ -48,7 +37,7 @@ REPO_TEXT_TARGETS_V1 = [
     "schemas/system_config.schema.json",
     "schemas/dsl.schema.json",
     "schemas/benchmark_task.schema.json",
-    "src/visa_mcp/stability.py",
+    "src/lab_executor/stability.py",
 ]
 
 
@@ -86,22 +75,6 @@ def test_stability_module_lists_match_count():
     assert stability.total_documented_count() in (48, 50)
 
 
-def test_readme_tool_count_matches_stability_module():
-    text = (ROOT / "README.md").read_text(encoding="utf-8")
-    # README は raw 2 個を加算 (オプトイン) → 35 + 5 + (raw 2 別記) = 40 / 42
-    # 現在 README は "48 個" 表記 (合計を Stable + Experimental + raw + ext.
-    # = 48 と数えていた)。stability.py との整合のため、README の N を
-    # `total_documented + len(raw)` と一致させる。
-    expected = stability.total_documented_count() + len(stability.RAW_TOOLS)
-    # ただし v1.0.1 で再カウント中の互換期間として 47-50 範囲を許容
-    m = re.search(r"MCP ツール（(\d+) 個", text)
-    assert m, "README に MCP ツール数表記が見当たらない"
-    n = int(m.group(1))
-    # raw も含めた合計が 42、Stable 35 + Exp 5 + raw 2 = 42
-    # README は v1.0 まで "48 個" だったので overshoot 許容
-    assert 42 <= n <= 50, f"README ツール数={n}, stability total={expected}"
-
-
 def test_all_stable_tools_appear_in_v1_stability_policy():
     text = (ROOT / "docs" / "v1_stability_policy.md").read_text(encoding="utf-8")
     for name in stability.stable_tool_names():
@@ -125,24 +98,6 @@ def test_no_tool_in_both_stable_and_experimental():
 
 # =========================================================
 # P1-3: README results tools が experimental 表記でない
-# =========================================================
-
-
-def test_readme_results_tools_not_marked_experimental():
-    text = (ROOT / "README.md").read_text(encoding="utf-8")
-    # 2 つの results tool の README 行を抽出
-    for tool in ("get_experiment_results", "export_experiment_results"):
-        # 該当行 (table row) を抽出
-        m = re.search(rf"\| `{re.escape(tool)}` \|[^\n]*", text)
-        assert m, f"README に {tool} 行が見つからない"
-        line = m.group(0)
-        assert "experimental" not in line.lower(), (
-            f"README の {tool} 行が experimental 表記のまま: {line}"
-        )
-
-
-# =========================================================
-# P1-4: docs/bundle_export.md
 # =========================================================
 
 

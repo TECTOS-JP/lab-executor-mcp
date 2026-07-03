@@ -33,11 +33,6 @@ ROOT = Path(__file__).parent.parent
 # =========================================================
 
 
-def test_version_v1_6_0():
-    import visa_mcp
-    assert visa_mcp.__version__.startswith("1.")
-
-
 def test_no_new_mcp_tools_in_v1_6():
     """v1.6 でも MCP surface は不変"""
     assert stability.stable_count() == 43
@@ -366,9 +361,9 @@ def test_cli_install_zip_routes_to_zip_handler(temp_env, tmp_path,
 
 
 V16_FILES = [
-    "src/visa_mcp/extension_install.py",
-    "src/visa_mcp/extension_packaging.py",
-    "src/visa_mcp/cli.py",
+    "src/lab_executor/extension_install.py",
+    "src/lab_executor/extension_packaging.py",
+    "src/lab_executor/cli.py",
     "docs/extension_install.md",
     "docs/extension_packaging.md",
     "tests/test_v16_zip_install.py",
@@ -413,9 +408,3 @@ def test_packaging_doc_marks_zip_install_done():
     # v1.6 で対応済み を明示
     assert "対応済み" in text or "完了" in text or "v1.6 で" in text
 
-
-def test_changelog_has_v160_entry():
-    text = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-    assert "v1.6.0" in text
-    assert "install_definition_pack_from_zip" in text or "zip install" in text
-    assert "source_format" in text

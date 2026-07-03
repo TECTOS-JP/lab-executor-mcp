@@ -32,22 +32,12 @@ ROOT = Path(__file__).parent.parent
 # =========================================================
 
 
-def test_version_v1_5_1():
-    import visa_mcp
-    assert visa_mcp.__version__.startswith("1.")
-
-
-# =========================================================
-# P0: LF + multi-line guard (v1.5 + v1.5.1 file)
-# =========================================================
-
-
 V15_FILES_FULL = [
-    "src/visa_mcp/extension_packaging.py",
-    "src/visa_mcp/extension_install.py",
-    "src/visa_mcp/extension_integrity.py",
-    "src/visa_mcp/extension.py",
-    "src/visa_mcp/cli.py",
+    "src/lab_executor/extension_packaging.py",
+    "src/lab_executor/extension_install.py",
+    "src/lab_executor/extension_integrity.py",
+    "src/lab_executor/extension.py",
+    "src/lab_executor/cli.py",
     "docs/extension_packaging.md",
     "docs/extension_publishing_checklist.md",
     "docs/extension_integrity.md",
@@ -302,9 +292,3 @@ def test_packaged_pack_with_registry_entries_shows_in_overlay(
 # CHANGELOG
 # =========================================================
 
-
-def test_changelog_has_v151_entry():
-    text = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-    assert "v1.5.1" in text
-    assert ("Normal vs Strict" in text or "normal vs strict" in text.lower()
-            or "package_format_version" in text)

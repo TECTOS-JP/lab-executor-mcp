@@ -30,26 +30,15 @@ ROOT = Path(__file__).parent.parent
 # =========================================================
 
 
-def test_version_v1_1_1():
-    """v1.1.1 で導入。v1.1+ の v1.x 系列であれば許容"""
-    import visa_mcp
-    assert visa_mcp.__version__.startswith("1.")
-
-
-# =========================================================
-# P0: repo files LF + multi-line (v1.1.1 docs 追加)
-# =========================================================
-
-
 REPO_TEXT_TARGETS_V111 = [
     "docs/naming_and_repository_strategy.md",
     "docs/backend_abstraction.md",
     "docs/bundle_export.md",
     "docs/v1_stability_policy.md",
-    "src/visa_mcp/backends/base.py",
-    "src/visa_mcp/backends/__init__.py",
-    "src/visa_mcp/stability.py",
-    "src/visa_mcp/tools/export.py",
+    "src/lab_executor/backends/base.py",
+    "src/lab_executor/backends/__init__.py",
+    "src/lab_executor/stability.py",
+    "src/lab_executor/tools/export.py",
     "tests/test_v11.py",
     "tests/test_v111_review.py",
 ]

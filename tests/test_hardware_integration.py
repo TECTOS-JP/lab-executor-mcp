@@ -18,7 +18,19 @@ from pathlib import Path
 
 pytest.importorskip("pyvisa")
 
-pytestmark = pytest.mark.hardware
+# 実機必須テスト: Kikusui PMX 電源および Yokogawa 計測器の実機が接続されていないと
+# 失敗する。CI やローカルの通常実行では environment 変数 LAB_EXECUTOR_HW_TESTS=1 が
+# 設定されている場合のみ実行する。
+pytestmark = [
+    pytest.mark.hardware,
+    pytest.mark.skipif(
+        os.environ.get("LAB_EXECUTOR_HW_TESTS") != "1",
+        reason=(
+            "実機必須テスト (Kikusui PMX 電源 / Yokogawa 計測器)。"
+            "実行するには環境変数 LAB_EXECUTOR_HW_TESTS=1 を設定すること。"
+        ),
+    ),
+]
 
 INSTRUMENTS_DIR = Path(__file__).parent.parent / "examples" / "instruments"
 PMX_RESOURCE = "USB0::0x0B3E::0x1029::ZM000463::INSTR"

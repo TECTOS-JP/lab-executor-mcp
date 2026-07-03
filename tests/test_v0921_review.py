@@ -23,8 +23,8 @@ ROOT = Path(__file__).parent.parent
 
 
 REPO_TEXT_TARGETS = [
-    "src/visa_mcp/registry.py",
-    "src/visa_mcp/cli.py",
+    "src/lab_executor/registry.py",
+    "src/lab_executor/cli.py",
     "tests/test_v092_ecosystem.py",
     "registry/INDEX.yaml",
     "registry/README.md",

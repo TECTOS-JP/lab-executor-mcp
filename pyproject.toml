@@ -51,3 +51,6 @@ packages = ["src/lab_executor"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "hardware: 実機 (Kikusui PMX 電源 / Yokogawa 計測器) が必要なテスト。LAB_EXECUTOR_HW_TESTS=1 で有効化",
+]

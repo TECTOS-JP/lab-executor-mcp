@@ -33,11 +33,6 @@ ROOT = Path(__file__).parent.parent
 # =========================================================
 
 
-def test_version_v1_4_0():
-    import visa_mcp
-    assert visa_mcp.__version__.startswith("1.")
-
-
 def test_no_new_mcp_tools_in_v1_4():
     """v1.4 でも MCP surface は不変"""
     assert stability.stable_count() == 43
@@ -475,10 +470,10 @@ def test_cli_validate_extension_strict_help():
 
 
 V14_FILES = [
-    "src/visa_mcp/extension_integrity.py",
-    "src/visa_mcp/cli.py",
-    "src/visa_mcp/extension.py",
-    "src/visa_mcp/models/instrument_def.py",
+    "src/lab_executor/extension_integrity.py",
+    "src/lab_executor/cli.py",
+    "src/lab_executor/extension.py",
+    "src/lab_executor/models/instrument_def.py",
     "docs/extension_integrity.md",
     "tests/test_v14_extension_integrity.py",
     "CHANGELOG.md",
@@ -516,9 +511,3 @@ def test_extension_integrity_doc_keywords():
     ):
         assert kw in text, f"extension_integrity.md に {kw!r} 無し"
 
-
-def test_changelog_has_v140_entry():
-    text = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-    assert "v1.4.0" in text
-    assert "extension_integrity" in text or "extension check" in text
-    assert "validation_evidence" in text

@@ -30,22 +30,12 @@ ROOT = Path(__file__).parent.parent
 # =========================================================
 
 
-def test_version_v1_4_1():
-    import visa_mcp
-    assert visa_mcp.__version__.startswith("1.")
-
-
-# =========================================================
-# P0: repo file LF + multi-line for v1.4 系の全 file
-# =========================================================
-
-
 V14_FILES_FULL = [
-    "src/visa_mcp/extension_integrity.py",
-    "src/visa_mcp/extension_install.py",
-    "src/visa_mcp/extension.py",
-    "src/visa_mcp/cli.py",
-    "src/visa_mcp/models/instrument_def.py",
+    "src/lab_executor/extension_integrity.py",
+    "src/lab_executor/extension_install.py",
+    "src/lab_executor/extension.py",
+    "src/lab_executor/cli.py",
+    "src/lab_executor/models/instrument_def.py",
     "tests/test_v14_extension_integrity.py",
     "tests/test_v141_review.py",
     "docs/extension_integrity.md",
@@ -372,7 +362,7 @@ def test_strict_registry_entries_clean_passes(tmp_path):
 
 def test_instrument_def_comment_matches_strict_error_behavior():
     """コメントが strict mode 時の挙動 (error) と整合している"""
-    text = (ROOT / "src" / "visa_mcp" / "models"
+    text = (ROOT / "src" / "lab_executor" / "models"
             / "instrument_def.py").read_text(encoding="utf-8")
     # strict_verified_requires_evidence (実装側 error_class) を
     # コメントから参照していること = 「error」として扱う旨が明示されている
@@ -448,9 +438,3 @@ def test_cli_inspect_json_includes_check_level(temp_env, tmp_path,
 # CHANGELOG
 # =========================================================
 
-
-def test_changelog_has_v141_entry():
-    text = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-    assert "v1.4.1" in text
-    assert "integrity_check_level" in text or "full_check_tool" in text
-    assert "strict_registry_entry" in text

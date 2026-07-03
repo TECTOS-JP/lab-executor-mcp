@@ -32,17 +32,6 @@ ROOT = Path(__file__).parent.parent
 # =========================================================
 
 
-def test_version_is_v1_1_0():
-    import visa_mcp
-    # v1.1.x 以降の v1.x 系列を許容 (v1.2+ で再 bump)
-    assert visa_mcp.__version__.startswith("1.")
-
-
-# =========================================================
-# docs
-# =========================================================
-
-
 def test_naming_strategy_doc_exists():
     p = ROOT / "docs" / "naming_and_repository_strategy.md"
     assert p.exists()
@@ -363,8 +352,8 @@ async def test_validate_bundle_unsupported_version_warning(
 REPO_TEXT_TARGETS_V11 = [
     "docs/naming_and_repository_strategy.md",
     "docs/backend_abstraction.md",
-    "src/visa_mcp/backends/base.py",
-    "src/visa_mcp/backends/__init__.py",
+    "src/lab_executor/backends/base.py",
+    "src/lab_executor/backends/__init__.py",
     "tests/test_v11.py",
 ]
 

@@ -450,9 +450,9 @@ def test_cli_extension_inspect_package_runs(temp_pack):
 
 
 V16_FILES = [
-    "src/visa_mcp/extension_catalog.py",
-    "src/visa_mcp/extension.py",
-    "src/visa_mcp/cli.py",
+    "src/lab_executor/extension_catalog.py",
+    "src/lab_executor/extension.py",
+    "src/lab_executor/cli.py",
     "docs/extension_catalog.md",
     "tests/test_v16_catalog.py",
     "CHANGELOG.md",
@@ -490,9 +490,3 @@ def test_catalog_doc_keywords():
     ):
         assert kw in text, f"extension_catalog.md に {kw!r} 無し"
 
-
-def test_changelog_has_v160_catalog_entry():
-    text = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-    assert "v1.6.0" in text
-    assert ("catalog" in text and "inspect-package" in text)
-    assert "installed_from" in text

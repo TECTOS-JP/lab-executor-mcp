@@ -16,12 +16,27 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).parent.parent
 
-
-def test_version_is_1_11_0():
-    from visa_mcp import __version__
-    assert __version__.startswith("1.11.")
+# 要人間判断 (test debt triage フェーズ1):
+# 以下の test は v1.11 当時の「split rehearsal (visa_mcp → lab_executor
+# 移行リハーサル)」を検証するもの。v2.0 で分割は完了し、本 repo には
+# src/visa_mcp ツリーが無いため split_rehearsal.generate_candidate は
+# copied_count=0 になり、docs/raw_visa.md や
+# src/visa_mcp/backends/pyvisa_backend.py は本 repo には存在しない
+# (visa-mcp 側の資産)。移行リハーサル tool 自体が役目を終えているため、
+# これらは削除候補だが安全側に倒して skip 化する。判断待ち。
+# 詳細は docs/test_debt_triage.md 参照。
+_SPLIT_REHEARSAL_OBSOLETE = pytest.mark.skip(
+    reason=(
+        "要人間判断: v1.11 split rehearsal 監査。v2.0 分割完了後の本 repo "
+        "には src/visa_mcp ツリーや docs/raw_visa.md / pyvisa_backend.py が "
+        "存在せず、移行リハーサル tool は役目を終えている。"
+        "削除 or 保持の判断待ち (test_debt_triage.md)。"
+    )
+)
 
 
 def test_instrument_backend_protocol_runtime_checkable():
@@ -139,6 +154,7 @@ def test_runtime_modules_no_toplevel_visa_manager_import():
         f"top-level forbidden imports detected: {violations}")
 
 
+@_SPLIT_REHEARSAL_OBSOLETE
 def test_split_rehearsal_generates_candidate(tmp_path):
     """split_rehearsal が candidate tree を生成"""
     from lab_executor.dev.split_rehearsal import generate_candidate
@@ -189,6 +205,7 @@ def test_split_rehearsal_candidate_has_no_visa_mcp_imports(tmp_path):
         f"candidate に rewrite 漏れ: {failures[:5]}...")
 
 
+@_SPLIT_REHEARSAL_OBSOLETE
 def test_split_rehearsal_cli_runs(tmp_path):
     out = tmp_path / "cli_candidate"
     res = subprocess.run(
@@ -205,6 +222,7 @@ def test_split_rehearsal_cli_runs(tmp_path):
     assert out.exists()
 
 
+@_SPLIT_REHEARSAL_OBSOLETE
 def test_raw_visa_doc_exists():
     p = ROOT / "docs" / "raw_visa.md"
     assert p.exists()
@@ -238,6 +256,7 @@ def test_backends_init_exposes_adapters():
     assert hasattr(backends, "MockBackend")
 
 
+@_SPLIT_REHEARSAL_OBSOLETE
 def test_split_rehearsal_verify_candidate(tmp_path):
     """v1.11.1 (P1-4): verify_candidate が AST parse + leftover 検査
     を実行し、生成直後の candidate に対し OK を返す"""
@@ -268,6 +287,7 @@ def test_split_rehearsal_cli_verify_flag(tmp_path):
     assert data["verify"]["ok"] is True
 
 
+@_SPLIT_REHEARSAL_OBSOLETE
 def test_v111_new_files_covered_by_format_guard():
     """v1.11.1 (P0-2): v1.11 で追加した新規 file が
     repo-wide format guard (SWEEP_PATTERNS) でカバーされる"""
@@ -290,6 +310,7 @@ def test_v111_new_files_covered_by_format_guard():
         f"format guard SWEEP_PATTERNS が以下を見ていない: {missing}")
 
 
+@_SPLIT_REHEARSAL_OBSOLETE
 def test_v111_new_files_are_multiline():
     """v1.11.1 (P0): v1.11 で追加した主要 file が multi-line
     (>= 30 行) + LF only で保存されている"""

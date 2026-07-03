@@ -51,6 +51,19 @@ jobs:
         # subset へ拡張予定)
         run: pytest -q tests/test_v200_split.py
 
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e ".[dev]"
+      - name: repo-wide format guard
+        # CR / 単一行潰れ / workflow parse を repo 全体で sweep する
+        # 単一 source of truth (test_repo_format_guard.py)
+        run: pytest -q tests/test_repo_format_guard.py
+
   pyvisa-not-installed:
     runs-on: ubuntu-latest
     steps:
@@ -64,8 +77,10 @@ jobs:
         run: python -c "import lab_executor; print('OK')"
       - name: pyvisa MUST NOT be in sys.modules
         run: python -c "import lab_executor, sys; assert 'pyvisa' not in sys.modules, 'pyvisa leaked'"
+      - name: dependency_report (separation boundary top-level import check)
+        run: python -m lab_executor.dev.dependency_report
       - name: pytest (PyVISA 非依存テストのみ)
-        run: pytest -q -m "not hardware" tests/test_v200_split.py
+        run: pytest -q -m "not hardware" tests/test_v200_split.py tests/test_separation_boundary.py
 
   build:
     runs-on: ubuntu-latest

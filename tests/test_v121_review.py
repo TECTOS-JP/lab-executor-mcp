@@ -24,19 +24,8 @@ ROOT = Path(__file__).parent.parent
 # =========================================================
 
 
-def test_version_v1_2_1():
-    """v1.2+ の v1.x 系列を許容"""
-    import visa_mcp
-    assert visa_mcp.__version__.startswith("1.")
-
-
-# =========================================================
-# P0: repo files LF + multi-line (v1.2 全ファイル)
-# =========================================================
-
-
 V12_FILES_FULL = [
-    "src/visa_mcp/extension.py",
+    "src/lab_executor/extension.py",
     "schemas/extension_manifest.schema.json",
     "docs/extension_policy.md",
     "docs/definition_packs.md",
