@@ -8,8 +8,9 @@
 </div>
 {% endif %}
 <div id="jobs-panel"
-     hx-get="/partials/jobs-table"
-     hx-trigger="every 2s"
+     hx-ext="sse"
+     sse-connect="/sse/dashboard"
+     sse-swap="jobs-table"
      hx-swap="innerHTML">
   {% include "_jobs_table.html" %}
 </div>

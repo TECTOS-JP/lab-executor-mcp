@@ -1,4 +1,4 @@
-# lab-executor Web UI (M1: 読み取り専用モニタ)
+# lab-executor Web UI (M1: 読み取り専用モニタ / M2: SSE + グラフ)
 
 `lab-executor ui` は localhost に **読み取り専用** の実験モニタ Web UI を起動する。
 実験ランタイム (serve / MCP ツール面) には一切書き込まず、state DB を read-only で
@@ -22,8 +22,9 @@ pip install "lab-executor-mcp[ui]"
 lab-executor ui は [ui] extra が必要です: pip install lab-executor-mcp[ui]
 ```
 
-追加される依存: `fastapi` / `uvicorn` / `jinja2`。htmx はリポジトリに同梱
-(`src/lab_executor/ui/static/vendor/htmx.min.js`) しており、ラボがオフラインでも動く。
+追加される依存: `fastapi` / `uvicorn` / `jinja2`。htmx / htmx SSE 拡張 /
+uPlot はリポジトリに同梱 (`src/lab_executor/ui/static/vendor/`) しており、
+ラボがオフラインでも動く。
 
 ## 起動
 
@@ -84,11 +85,52 @@ lab-executor ui --db /path/state.sqlite   # 明示的に state DB を指定
 - **DB 未作成 / 古いスキーマ**: 案内ページ (HTML は 503 + error.html、API は JSON 503)
   を返し、500 にはしない。
 
-## M2 以降の予定
+## M2 (v2.21.0): SSE ライブ更新 + スイープグラフ
 
-- **M2**: SSE ライブ更新 / 測定値グラフ
+M2 では M1 の read-only 境界を保ったまま、更新方式とグラフを追加した。
+設計文書は `docs/web_ui_m2_plan.md`。
+
+### SSE ライブ更新
+
+ダッシュボード / ジョブ詳細の更新を htmx 2 秒ポーリングから
+**SSE (Server-Sent Events)** に置き換えた。
+
+| ルート | 内容 |
+|---|---|
+| `GET /sse/dashboard` | 約 1.5 秒間隔で jobs + health を読み、前回送信との**ハッシュ比較で変化時のみ** `_jobs_table.html` フラグメントを送る。15 秒毎に `: ping` keep-alive |
+| `GET /sse/jobs/{id}` | 同様に timeline フラグメントを送る。ジョブが**終端状態になったら最終フラグメントと長い `retry` を送ってストリームを閉じる** (終端後の無限再接続を避ける) |
+
+- SQLite 読み取りは `asyncio.to_thread` でイベントループを塞がず、
+  切断は `request.is_disconnected()` で検出する。
+- htmx の SSE 拡張 (`static/vendor/htmx-sse.js`) を同梱。
+- 従来の partial ルート (`/partials/jobs-table` /
+  `/partials/jobs/{id}/timeline`) はフォールバック・テスト用に残置。
+
+### スイープグラフ (uPlot)
+
+sweep ジョブ (DSL の `sweep` step) の測定値をジョブ詳細に折れ線グラフで表示する。
+
+- 抽出は observation の `_extract_sweep_views` (MCP `get_job_sweep_view` と
+  同じ純ヘルパ) を **import して再利用**。UI は再実装しない。
+- `views.sweep_chart_view` が `{x, series, x_label}` (uPlot が食える形) に変換。
+  `value_numeric` が None の点は gap として保持する (uPlot が線を欠く)。
+- `GET /api/jobs/{id}/sweep` が同 JSON を返し、実行中ジョブは SSE timeline
+  受信毎に再取得して `setData` でグラフを更新する。
+- uPlot 1.6.30 を `static/vendor/` にベンダリング (オフライン動作)。
+- sweep 点が 0 個のジョブではグラフセクションを出さない。
+
+### N+1 解消
+
+一覧の「job 毎に最新 event を引く」N+1 を、相関サブクエリ 1 発で取得する
+`ReadOnlyJobStore.list_jobs_with_last_event(limit)` に置き換えた。
+
+追加される static: `uPlot.iife.min.js` / `uPlot.min.css` / `htmx-sse.js`
+(いずれも同梱。新たな Python 依存は無し)。
+
+## M3 以降の予定
+
 - **M3**: レシピ (DSL plan) の閲覧・編集
 - **M4**: ジョブ操作 (cancel など、書き込み経路の導入)
 
-いずれも本 M1 の read-only 境界を保ったまま段階的に拡張する。詳細は
+いずれも本 M1/M2 の read-only 境界を保ったまま段階的に拡張する。詳細は
 `wiki/concepts/lab-executor-web-ui.md` を参照。

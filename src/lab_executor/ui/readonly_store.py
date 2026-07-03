@@ -103,6 +103,39 @@ class ReadOnlyJobStore:
         finally:
             conn.close()
 
+    def list_jobs_with_last_event(
+        self,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """jobs と「各 job の最新 event_type」を **1 クエリ** で取得 (N+1 解消)。
+
+        M1 の ``_build_job_rows`` は job 毎に ``list_events(limit=1)`` を発行して
+        いた (N+1)。ここでは相関サブクエリで最新 event_type を 1 度に引く。
+
+        返り値は ``_row_to_record().to_dict()`` に ``last_event_type`` キーを
+        足した dict のリスト (新しい順)。
+        """
+        q = (
+            "SELECT j.*, ("
+            "  SELECT e.event_type FROM job_events e"
+            "  WHERE e.job_id = j.job_id"
+            "  ORDER BY e.event_id DESC LIMIT 1"
+            ") AS last_event_type "
+            "FROM jobs j "
+            "ORDER BY j.created_at DESC, j.rowid DESC LIMIT ?"
+        )
+        conn = self._connect()
+        try:
+            rows = conn.execute(q, (int(limit),)).fetchall()
+            out: list[dict[str, Any]] = []
+            for r in rows:
+                record = JobStore._row_to_record(r).to_dict()
+                record["last_event_type"] = r["last_event_type"]
+                out.append(record)
+            return out
+        finally:
+            conn.close()
+
     def get_job(self, job_id: str) -> dict[str, Any] | None:
         conn = self._connect()
         try:

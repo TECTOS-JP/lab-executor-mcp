@@ -96,6 +96,74 @@ def job_row_view(
     }
 
 
+def sweep_chart_view(
+    sweep_points: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """sweep 点列 (``_extract_sweep_views`` の返り値) を uPlot が直接食える
+    形の dict に変換する。sweep 点が 0 個なら ``None``。
+
+    入力は ``lab_executor.tools.observation._extract_sweep_views(store, job_id)``
+    の返り値。この private ヘルパは ``store.list_steps()`` しか呼ばないため
+    ReadOnlyJobStore をそのまま渡せる。M1 の ``_row_to_record`` 再利用と同様、
+    同一プロジェクト内の意図的な観測ロジック再利用 (再実装しない)。
+
+    出力::
+
+        {
+          "x": [sweep_value か、全点 None なら sweep_index],   # 昇順
+          "series": [
+            {"label": "psu1: measure_voltage", "values": [...]},
+          ],
+          "x_label": "sweep_value" | "sweep_index",
+        }
+
+    - ``value_numeric`` が None の点は null として保持 (uPlot は gap 表示)。
+    - series は (instrument, command) 毎。x 軸は sweep_index 昇順に整列済み。
+    """
+    if not sweep_points:
+        return None
+
+    # sweep_index 昇順 (念のため。_extract_sweep_views は既に sort 済み)。
+    points = sorted(sweep_points, key=lambda p: p.get("sweep_index", 0))
+
+    # x 軸: 全点で sweep_value があれば sweep_value、1 点でも None なら
+    # sweep_index にフォールバック。
+    sweep_values = [p.get("sweep_value") for p in points]
+    if all(v is not None for v in sweep_values):
+        x = sweep_values
+        x_label = "sweep_value"
+    else:
+        x = [p.get("sweep_index") for p in points]
+        x_label = "sweep_index"
+
+    # series は (instrument, command) の組を出現順に収集する。
+    series_keys: list[tuple[str | None, str]] = []
+    for p in points:
+        for m in p.get("measurements", []):
+            command = m.get("command")
+            if not command:
+                continue
+            key = (m.get("instrument"), command)
+            if key not in series_keys:
+                series_keys.append(key)
+
+    series: list[dict[str, Any]] = []
+    for instrument, command in series_keys:
+        values: list[float | int | None] = []
+        for p in points:
+            # 同一点内で (instrument, command) にマッチする最初の measurement。
+            match = None
+            for m in p.get("measurements", []):
+                if m.get("instrument") == instrument and m.get("command") == command:
+                    match = m
+                    break
+            values.append(match.get("value_numeric") if match else None)
+        label = f"{instrument}: {command}" if instrument else str(command)
+        series.append({"label": label, "values": values})
+
+    return {"x": x, "series": series, "x_label": x_label}
+
+
 def job_detail_view(
     job: dict[str, Any],
     steps: list[dict[str, Any]],

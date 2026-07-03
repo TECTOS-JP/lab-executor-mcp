@@ -1,5 +1,46 @@
 # 変更履歴
 
+## v2.21.0 — Web UI M2: SSE ライブ更新 + スイープグラフ (UI M2)
+
+合言葉: **「窓の向こうが、いま動いて見える」**
+
+### 追加
+
+- ダッシュボード / ジョブ詳細のライブ更新を htmx 2 秒ポーリングから
+  **SSE (Server-Sent Events)** に置き換え。
+  - `GET /sse/dashboard` — 約 1.5 秒間隔で jobs + health を読み、
+    前回送信とハッシュ比較して**変化時のみ** `_jobs_table.html`
+    フラグメントを送る。15 秒毎に keep-alive ping。
+  - `GET /sse/jobs/{id}` — 同様に timeline フラグメントを送り、
+    ジョブが**終端状態になったら最終フラグメント + `retry` を送って
+    ストリームを閉じる** (無限再接続を避ける)。
+  - SQLite 読み取りは `asyncio.to_thread`、切断は
+    `request.is_disconnected()` で検出。`_sse_frame` ヘルパが複数行
+    data を正しくフレーミング。
+  - htmx SSE 拡張 (`htmx-sse.js`) をベンダリング。partial ルート
+    (`/partials/...`) はフォールバック・テスト用に残置。
+- ジョブ詳細に **スイープグラフ** (uPlot)。
+  - `views.sweep_chart_view(sweep_points)` が
+    `observation._extract_sweep_views` の返り値を uPlot が食える
+    `{x, series, x_label}` に変換 (再実装せず import)。
+    `value_numeric` が None の点は gap として保持。
+  - `GET /api/jobs/{id}/sweep` (JSON)。実行中ジョブは SSE timeline
+    受信毎に再取得して `setData` で更新。
+  - uPlot 1.6.30 を static/vendor にベンダリング (オフライン動作)。
+- 一覧の **N+1 クエリを解消**:
+  `ReadOnlyJobStore.list_jobs_with_last_event(limit)` が jobs と
+  各 job の最新 event_type を相関サブクエリ 1 発で取得。
+- 設計文書: `docs/web_ui_m2_plan.md` / 利用者向け `docs/web_ui.md` に M2 追記。
+
+### 互換性
+
+- MCP tool surface 不変 (Stable 43 + Experimental 7 = 50)。
+  server.py / tools/ / serve 経路に変更なし。
+- 必須依存に追加なし (`[ui]` extra のみ)。
+- state DB への書き込みなし (`mode=ro` + `PRAGMA query_only=ON`。
+  SSE / sweep の読み取りも既存 read-only 経路のみ)。
+- version を `2.21.0` に更新。
+
 ## v2.20.0 — Web UI M1: 読み取り専用モニタ (UI M1)
 
 合言葉: **「AI と人間が同じ窓を覗く」**

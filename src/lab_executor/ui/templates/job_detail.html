@@ -44,13 +44,71 @@
     </div>
   {% else %}
     <div id="timeline-panel"
-         hx-get="/partials/jobs/{{ detail.job_id }}/timeline"
-         hx-trigger="every 2s"
-         hx-swap="innerHTML">
+         hx-ext="sse"
+         sse-connect="/sse/jobs/{{ detail.job_id }}"
+         sse-swap="timeline"
+         hx-swap="innerHTML"
+         hx-on::sse-message="if (window.__labRefreshSweep) window.__labRefreshSweep()">
       {% include "_timeline.html" %}
     </div>
   {% endif %}
 </section>
+
+{% if sweep_json %}
+<section class="sweep-section" id="sweep-section">
+  <h2>スイープグラフ</h2>
+  <div id="sweep-chart"></div>
+  <script type="application/json" id="sweep-data">{{ sweep_json | safe }}</script>
+  <script>
+    (function () {
+      var el = document.getElementById("sweep-chart");
+      var dataEl = document.getElementById("sweep-data");
+      if (!el || !dataEl || typeof uPlot === "undefined") return;
+
+      function buildOpts(view) {
+        var series = [{ label: view.x_label }];
+        var strokes = ["#2563eb", "#dc2626", "#16a34a", "#d97706",
+                       "#7c3aed", "#0891b2"];
+        view.series.forEach(function (s, i) {
+          series.push({
+            label: s.label,
+            stroke: strokes[i % strokes.length],
+            spanGaps: false,
+          });
+        });
+        return {
+          width: Math.max(el.clientWidth || 640, 320),
+          height: 320,
+          series: series,
+          scales: { x: { time: false } },
+        };
+      }
+
+      function toData(view) {
+        return [view.x].concat(view.series.map(function (s) {
+          return s.values;
+        }));
+      }
+
+      var view = JSON.parse(dataEl.textContent);
+      var opts = buildOpts(view);
+      var chart = new uPlot(opts, toData(view), el);
+
+      // 実行中ジョブ: SSE timeline 受信毎に sweep を再取得して setData。
+      window.__labRefreshSweep = function () {
+        fetch("/api/jobs/{{ detail.job_id }}/sweep")
+          .then(function (r) { return r.json(); })
+          .then(function (payload) {
+            var v = payload && payload.sweep;
+            if (!v) return;
+            chart.setData(toData(v));
+          })
+          .catch(function () {});
+      };
+    })();
+  </script>
+</section>
+{% endif %}
 
 {% if detail.summary %}
 <section class="summary-section" id="run-summary">
