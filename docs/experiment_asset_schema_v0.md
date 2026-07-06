@@ -4,6 +4,16 @@
 根拠: MaiML（JIS K 0200:2024）の独立可用性概念（一次資料: 顕微鏡 Vol.59 No.1, 2024,
 doi:10.11410/kenbikyo.59.1_20）+ 自動実験エコシステム構想メモ（2026-07-02）の L0〜L5 案。
 
+> **実装状況: v0.1 実装済み (v2.25.0)**。`lab-executor asset export` / `asset check`
+> と `lab_executor.asset` パッケージで本スキーマの L0〜L5 判定を提供する。利用手順は
+> [`asset_usage.md`](asset_usage.md)。実装で確定した細部:
+> - `conditions.calibration` / `environment` は **キー必須**（値が `not_recorded`
+>   でも可、キー欠落は L2 不成立）。
+> - `level_verified` は資産に書き込まず、`asset check` のレポートで返す。
+> - `requires:`（L4 の capability 宣言）は `RecipeDefinition` の **optional**
+>   フィールド。既存 YAML の検証結果は不変。
+> - `dry_run.ok`（L5）は builder が自動記入せず、将来 M3 の dry-run 実行記録を接続する。
+
 ## 目的
 
 「実験資産（experiment asset）」の品質を **機械判定可能な独立可用性レベル L0〜L5** で

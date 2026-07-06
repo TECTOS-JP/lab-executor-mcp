@@ -538,6 +538,48 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     inst_rr.add_argument("--json", action="store_true")
 
+    # ---- asset (v2.25.0: experiment asset export / check) --------
+    sp_asset = sub.add_parser(
+        "asset",
+        help=(
+            "v2.25: Experiment asset export / check "
+            "(independent-usability level L0-L5). CLI only."
+        ),
+    )
+    asset_sub = sp_asset.add_subparsers(dest="asset_command")
+
+    asset_export = asset_sub.add_parser(
+        "export",
+        help="Build an experiment asset zip from a completed job",
+    )
+    asset_export.add_argument("--job", required=True, help="job id")
+    asset_export.add_argument(
+        "--db", required=True, help="state DB path")
+    asset_export.add_argument(
+        "--instruments-dir", required=True,
+        help="directory of instrument definition YAMLs",
+    )
+    asset_export.add_argument("--out", default=None, help="output zip path")
+    asset_export.add_argument("--title", default="")
+    asset_export.add_argument("--license", dest="license_id",
+                              default="UNLICENSED")
+    asset_export.add_argument(
+        "--analysis", default=None,
+        help="analysis README/procedure file (copied into analysis/)",
+    )
+    asset_export.add_argument(
+        "--declare-level", dest="declare_level", type=int, default=None)
+    asset_export.add_argument(
+        "--git-commit", dest="git_commit", default=None)
+    asset_export.add_argument("--json", action="store_true")
+
+    asset_check = asset_sub.add_parser(
+        "check",
+        help="Check an experiment asset zip and report L0-L5",
+    )
+    asset_check.add_argument("zip", help="asset .zip path")
+    asset_check.add_argument("--json", action="store_true")
+
     # ---- diagnose (v2.2.0: tool-surface CLI) ---------------------
     sp_diag = sub.add_parser(
         "diagnose",
@@ -1579,6 +1621,86 @@ def _cmd_instrument(args: argparse.Namespace) -> int:
 
 
 # ============================================================
+# asset (v2.25.0)
+# ============================================================
+
+
+def _cmd_asset(args: argparse.Namespace) -> int:
+    from pathlib import Path as _P
+
+    sub = getattr(args, "asset_command", None)
+
+    if sub == "export":
+        from lab_executor.asset import build_asset
+        try:
+            res = build_asset(
+                job_id=args.job,
+                db_path=_P(args.db),
+                instruments_dir=_P(args.instruments_dir),
+                out_path=_P(args.out) if args.out else None,
+                title=args.title,
+                license_id=args.license_id,
+                analysis_path=_P(args.analysis) if args.analysis else None,
+                declare_level=args.declare_level,
+                git_commit=args.git_commit,
+            )
+        except KeyError:
+            print(f"asset export: job not found: {args.job}",
+                  file=sys.stderr)
+            return 1
+        except Exception as e:
+            print(f"asset export failed: {e}", file=sys.stderr)
+            return 1
+        if args.json:
+            print(json.dumps(res, ensure_ascii=False, indent=2,
+                             default=str))
+        else:
+            print(f"asset export: {res['path']}")
+            print(f"  asset_id:       {res['asset_id']}")
+            print(f"  level_declared: {res['level_declared']}")
+            print(f"  contents:       {res['contents_count']} files")
+            print(f"  sha256:         {res['sha256']}")
+        return 0
+
+    if sub == "check":
+        from lab_executor.asset import check_asset
+        rep = check_asset(_P(args.zip))
+        data = rep.to_dict()
+        if args.json:
+            print(json.dumps(data, ensure_ascii=False, indent=2,
+                             default=str))
+        else:
+            print(f"asset check: {args.zip}")
+            print(f"  asset_id:       {data['asset_id']}")
+            print(f"  schema_ok:      {data['schema_ok']}")
+            print(f"  checksums_ok:   {data['checksums_ok']}")
+            print(f"  level_declared: {data['level_declared']}")
+            print(f"  level_verified: {data['level_verified']}")
+            for lid in ("L0", "L1", "L2", "L3", "L4", "L5"):
+                entry = data["levels"].get(lid) or {}
+                flag = "OK " if entry.get("ok") else "NG "
+                line = f"  [{flag}] {lid}"
+                miss = entry.get("missing") or []
+                if miss:
+                    line += "  missing: " + ", ".join(str(m) for m in miss)
+                print(line)
+            lv = data["level_verified"]
+            label = f"L{lv}" if lv >= 0 else "(below L0)"
+            print(f"  => verified level: {label}")
+            for w in data["warnings"]:
+                print(f"  WARN {w.get('warning_class')}: "
+                      f"{w.get('message')}")
+        # exit: スキーマ or checksum 破損で 1、それ以外は 0
+        return 1 if rep.integrity_broken else 0
+
+    print(
+        "lab-executor asset: subcommand required (export / check)",
+        file=sys.stderr,
+    )
+    return 2
+
+
+# ============================================================
 # diagnose (v2.2.0)
 # ============================================================
 
@@ -1649,6 +1771,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_extension(args)
     if args.command == "instrument":
         return _cmd_instrument(args)
+    if args.command == "asset":
+        return _cmd_asset(args)
     if args.command == "diagnose":
         return _cmd_diagnose(args)
 

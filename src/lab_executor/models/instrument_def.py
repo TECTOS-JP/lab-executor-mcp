@@ -343,11 +343,34 @@ class RecipeStep(BaseModel):
         return "command"
 
 
+class RangeSpec(BaseModel):
+    """v2.25.0: capability 要件の範囲制約 (min/max、片側可)。"""
+    min: float | None = None
+    max: float | None = None
+
+
+class CapabilityRequirements(BaseModel):
+    """v2.25.0 (L4): レシピが代替装置に要求する抽象 capability。
+
+    - ``commands``: 必要な名前付きコマンド (抽象操作) の一覧
+    - ``ranges``: ``"<command>.<arg>"`` をキーに、要求する値域
+
+    実験資産スキーマ v0.1 の L4 判定
+    (`match_capabilities`) の入力。既存 YAML には現れない optional
+    フィールドなので、後方互換は完全に保たれる。
+    """
+    commands: list[str] = Field(default_factory=list)
+    ranges: dict[str, RangeSpec] = Field(default_factory=dict)
+
+
 class RecipeDefinition(BaseModel):
     """複数コマンドを安全な順序で実行する典型ワークフロー"""
     description: str = ""
     parameters: list[ParameterDefinition] = Field(default_factory=list)
     steps: list[RecipeStep] = Field(default_factory=list)
+    # v2.25.0 (実験資産 L4): 代替装置追試のための capability 要件宣言。
+    # optional。未指定 (None) の既存レシピは検証結果が一切変わらない。
+    requires: CapabilityRequirements | None = None
 
 
 class PhysicalTerminal(BaseModel):

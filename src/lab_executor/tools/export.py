@@ -352,6 +352,160 @@ def _filter_rows(
     return out
 
 
+def build_bundle_files(
+    job_mgr: JobManager,
+    job_id: str,
+    *,
+    include_monitor_data: bool = False,
+    include_audit: bool = False,
+) -> dict[str, bytes]:
+    """v2.25.0: bundle 内容 (manifest.json 込み) を name -> bytes で構築する。
+
+    ``export_experiment_bundle`` の bundle 生成コアを **抽出** した純ロジック。
+    zip 書き込みや path 安全策・MCP envelope は含まない (呼び出し側が担う)。
+    `asset.builder` はこれを再利用して bundle/ 配下を展開する。
+
+    返り値には ``manifest.json`` (bundle_version=1.0 / checksums 込み) を含む。
+    job が存在しない場合は ``KeyError`` 相当を呼び出し側で扱えるよう、ここでは
+    ``job_mgr.get(job_id)`` を先に呼んで rec を得る。
+    """
+    rec = job_mgr.get(job_id)
+    store = job_mgr.store
+    files: dict[str, bytes] = {}
+
+    # plan + compiled_summary
+    plan_row = None
+    try:
+        plan_row = store.get_experiment_plan_for_job(job_id)
+    except Exception:
+        pass
+    if plan_row:
+        files["plan.json"] = json.dumps(
+            plan_row.get("original_plan") or {},
+            ensure_ascii=False, indent=2, default=str,
+        ).encode("utf-8")
+        files["compiled_summary.json"] = json.dumps(
+            plan_row.get("compiled_summary") or {},
+            ensure_ascii=False, indent=2, default=str,
+        ).encode("utf-8")
+
+    # job record
+    files["job_record.json"] = json.dumps(
+        rec.to_dict(), ensure_ascii=False, indent=2, default=str,
+    ).encode("utf-8")
+
+    # job summary (build_run_summary)
+    try:
+        from lab_executor.observation import build_run_summary
+        steps = store.list_steps(job_id)
+        target_runs = store.list_target_runs(job_id)
+        monitor_count = 0
+        try:
+            monitor_count = store.count_monitor_data(job_id)
+        except Exception:
+            pass
+        summary = build_run_summary(
+            rec.to_dict(), steps, target_runs,
+            monitor_count=monitor_count,
+        )
+        files["job_summary.json"] = json.dumps(
+            summary, ensure_ascii=False, indent=2, default=str,
+        ).encode("utf-8")
+    except Exception:
+        pass
+
+    # timeline (job_events all)
+    try:
+        events = store.list_events(job_id, limit=100000)
+    except Exception:
+        events = []
+    timeline_lines = [
+        json.dumps(e, ensure_ascii=False, default=str) for e in events
+    ]
+    files["timeline.jsonl"] = (
+        "\n".join(timeline_lines) + ("\n" if timeline_lines else "")
+    ).encode("utf-8")
+
+    # results (json rows + csv)
+    try:
+        rows = _extract_result_rows(
+            job_mgr, job_id, include_monitor=include_monitor_data,
+        )
+    except Exception:
+        rows = []
+    files["results.jsonl"] = (
+        "\n".join(
+            json.dumps({k: r.get(k) for k in RESULT_COLUMNS},
+                        ensure_ascii=False, default=str)
+            for r in rows
+        ) + ("\n" if rows else "")
+    ).encode("utf-8")
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=list(RESULT_COLUMNS))
+    writer.writeheader()
+    for r in rows:
+        writer.writerow({k: r.get(k, "") for k in RESULT_COLUMNS})
+    files["results.csv"] = buf.getvalue().encode("utf-8")
+
+    # monitor_data (optional)
+    if include_monitor_data:
+        try:
+            mcount = store.count_monitor_data(job_id)
+            md = store.list_monitor_data(
+                job_id, limit=min(max(mcount, 1), 100000),
+            )
+        except Exception:
+            md = []
+        files["monitor_data.jsonl"] = (
+            "\n".join(
+                json.dumps(m, ensure_ascii=False, default=str)
+                for m in md
+            ) + ("\n" if md else "")
+        ).encode("utf-8")
+
+    # audit (optional)
+    if include_audit and getattr(job_mgr, "audit", None) is not None:
+        try:
+            aud_events, _ = job_mgr.audit.query(
+                job_id=job_id, limit=5000, include_details=True,
+            )
+        except Exception:
+            aud_events = []
+        files["audit.jsonl"] = (
+            "\n".join(
+                json.dumps(e, ensure_ascii=False, default=str)
+                for e in aud_events
+            ) + ("\n" if aud_events else "")
+        ).encode("utf-8")
+
+    # manifest (checksums を計算)
+    from visa_mcp import __version__ as VMV
+    checksums = {
+        name: hashlib.sha256(blob).hexdigest()
+        for name, blob in files.items()
+    }
+    manifest = {
+        "bundle_version": "1.0",
+        "visa_mcp_version": VMV,
+        "job_id": job_id,
+        "created_at": datetime.now(timezone.utc).isoformat(
+            timespec="seconds",
+        ),
+        "include_monitor_data": include_monitor_data,
+        "include_audit": include_audit,
+        "contents": sorted(files.keys()),
+        "checksums": checksums,
+        "note": (
+            "再検証 / 共有 / 監査 / 記事化用パッケージ。"
+            "v1.x では別環境での完全再現実行はサポートしない"
+        ),
+    }
+    files["manifest.json"] = json.dumps(
+        manifest, ensure_ascii=False, indent=2,
+    ).encode("utf-8")
+    return files
+
+
 def register_tools(mcp: FastMCP, job_mgr: JobManager) -> None:
 
     @mcp.tool()
@@ -627,7 +781,7 @@ def register_tools(mcp: FastMCP, job_mgr: JobManager) -> None:
         (default dir / path traversal 拒否 / overwrite=False 既定)。
         """
         try:
-            rec = job_mgr.get(job_id)
+            job_mgr.get(job_id)
         except Exception:
             return make_envelope(
                 "error",
@@ -651,141 +805,14 @@ def register_tools(mcp: FastMCP, job_mgr: JobManager) -> None:
             )
         assert path is not None
 
-        store = job_mgr.store
         try:
-            # 各成果物を bytes として用意
-            files: dict[str, bytes] = {}
-
-            # plan + compiled_summary
-            plan_row = None
-            try:
-                plan_row = store.get_experiment_plan_for_job(job_id)
-            except Exception:
-                pass
-            if plan_row:
-                files["plan.json"] = json.dumps(
-                    plan_row.get("original_plan") or {},
-                    ensure_ascii=False, indent=2, default=str,
-                ).encode("utf-8")
-                files["compiled_summary.json"] = json.dumps(
-                    plan_row.get("compiled_summary") or {},
-                    ensure_ascii=False, indent=2, default=str,
-                ).encode("utf-8")
-
-            # job record
-            files["job_record.json"] = json.dumps(
-                rec.to_dict(), ensure_ascii=False, indent=2, default=str,
-            ).encode("utf-8")
-
-            # job summary (build_run_summary)
-            try:
-                from lab_executor.observation import build_run_summary
-                steps = store.list_steps(job_id)
-                target_runs = store.list_target_runs(job_id)
-                monitor_count = 0
-                try:
-                    monitor_count = store.count_monitor_data(job_id)
-                except Exception:
-                    pass
-                summary = build_run_summary(
-                    rec.to_dict(), steps, target_runs,
-                    monitor_count=monitor_count,
-                )
-                files["job_summary.json"] = json.dumps(
-                    summary, ensure_ascii=False, indent=2, default=str,
-                ).encode("utf-8")
-            except Exception:
-                pass
-
-            # timeline (job_events all)
-            try:
-                events = store.list_events(job_id, limit=100000)
-            except Exception:
-                events = []
-            timeline_lines = [
-                json.dumps(e, ensure_ascii=False, default=str) for e in events
-            ]
-            files["timeline.jsonl"] = (
-                "\n".join(timeline_lines) + ("\n" if timeline_lines else "")
-            ).encode("utf-8")
-
-            # results (json rows + csv)
-            try:
-                rows = _extract_result_rows(
-                    job_mgr, job_id, include_monitor=include_monitor_data,
-                )
-            except Exception:
-                rows = []
-            files["results.jsonl"] = (
-                "\n".join(
-                    json.dumps({k: r.get(k) for k in RESULT_COLUMNS},
-                                ensure_ascii=False, default=str)
-                    for r in rows
-                ) + ("\n" if rows else "")
-            ).encode("utf-8")
-            buf = io.StringIO()
-            writer = csv.DictWriter(buf, fieldnames=list(RESULT_COLUMNS))
-            writer.writeheader()
-            for r in rows:
-                writer.writerow({k: r.get(k, "") for k in RESULT_COLUMNS})
-            files["results.csv"] = buf.getvalue().encode("utf-8")
-
-            # monitor_data (optional)
-            if include_monitor_data:
-                try:
-                    mcount = store.count_monitor_data(job_id)
-                    md = store.list_monitor_data(
-                        job_id, limit=min(max(mcount, 1), 100000),
-                    )
-                except Exception:
-                    md = []
-                files["monitor_data.jsonl"] = (
-                    "\n".join(
-                        json.dumps(m, ensure_ascii=False, default=str)
-                        for m in md
-                    ) + ("\n" if md else "")
-                ).encode("utf-8")
-
-            # audit (optional)
-            if include_audit and getattr(job_mgr, "audit", None) is not None:
-                try:
-                    aud_events, _ = job_mgr.audit.query(
-                        job_id=job_id, limit=5000, include_details=True,
-                    )
-                except Exception:
-                    aud_events = []
-                files["audit.jsonl"] = (
-                    "\n".join(
-                        json.dumps(e, ensure_ascii=False, default=str)
-                        for e in aud_events
-                    ) + ("\n" if aud_events else "")
-                ).encode("utf-8")
-
-            # manifest (checksums を計算)
-            from visa_mcp import __version__ as VMV
-            checksums = {
-                name: hashlib.sha256(blob).hexdigest()
-                for name, blob in files.items()
-            }
-            manifest = {
-                "bundle_version": "1.0",
-                "visa_mcp_version": VMV,
-                "job_id": job_id,
-                "created_at": datetime.now(timezone.utc).isoformat(
-                    timespec="seconds",
-                ),
-                "include_monitor_data": include_monitor_data,
-                "include_audit": include_audit,
-                "contents": sorted(files.keys()),
-                "checksums": checksums,
-                "note": (
-                    "再検証 / 共有 / 監査 / 記事化用パッケージ。"
-                    "v1.x では別環境での完全再現実行はサポートしない"
-                ),
-            }
-            files["manifest.json"] = json.dumps(
-                manifest, ensure_ascii=False, indent=2,
-            ).encode("utf-8")
+            # v2.25.0: bundle 生成コアを build_bundle_files に抽出。
+            # manifest.json (checksums 込み) まで含めて構築される。
+            files = build_bundle_files(
+                job_mgr, job_id,
+                include_monitor_data=include_monitor_data,
+                include_audit=include_audit,
+            )
 
             # zip 出力
             path.parent.mkdir(parents=True, exist_ok=True)

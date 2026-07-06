@@ -1,5 +1,45 @@
 # 変更履歴
 
+## v2.25.0 — 実験資産 v0.1: asset export / check + L4/L5 基盤
+
+合言葉: **「資産は自立して初めて流通する — 独立可用性を機械が刻む」**
+
+### 追加
+
+- **`lab-executor asset export` / `asset check`** (CLI のみ、MCP ツールは不変)。
+  完了 Job から独立可用性レベル (L0〜L5) を宣言・機械判定できる実験資産 zip を
+  生成・検査する。仕様の正本は `docs/experiment_asset_schema_v0.md`、実装計画は
+  `docs/asset_v01_plan.md`。
+- `lab_executor.asset` パッケージ:
+  - `manifest.AssetManifest` — asset.yaml (asset_version=0.1) の pydantic スキーマ。
+  - `levels` — L0〜L5 判定の **純関数群** (I/O しない)。
+  - `capability.match_capabilities` — L4 用の capability 照合 (要求コマンド / 値域)。
+  - `builder.build_asset` — export bundle を内包する asset zip を生成。
+  - `checker.check_asset` — asset zip を読み、`level_verified` と各レベルの
+    不足理由を出す `CheckReport` を返す。
+- `lab_executor.tools.export.build_bundle_files(job_mgr, job_id, ...)` — bundle
+  生成コアを **抽出** した公開関数。`export_experiment_bundle` MCP ツールと
+  `asset.builder` が共用する (MCP レスポンス・bundle 形式 bundle_version=1.0 は不変)。
+- `RecipeDefinition.requires: CapabilityRequirements | None` (optional) と
+  `CapabilityRequirements` / `RangeSpec` モデルを追加。L4 の capability 要件宣言。
+  既存 YAML の検証結果は 1 件も変わらない (後方互換)。
+
+### 変更
+
+- `export_experiment_bundle` の bundle 生成ロジックを `build_bundle_files` 呼び出しへ
+  リファクタ。MCP レスポンス・bundle 形式・path 安全策は 1 行も変わらない
+  (既存 export/bundle テストで挙動不変を確認)。
+
+### ドキュメント
+
+- `docs/asset_usage.md` (新規) — export → check の手順とレベル表の読み方、
+  L4/L5 へ上げる方法。
+- `docs/experiment_asset_schema_v0.md` に「v0.1 実装済み (v2.25.0)」注記。
+
+### スコープ外 (据え置き)
+
+- MCP ツールとしての asset 操作 / import・replay / MaiML XML 変換 / UI 表示。
+
 ## v2.24.0 — control plane runner を公開 API 化 (visa-mcp 統合用)
 
 合言葉: **「関所は lab-executor が持ち、鍵の受け渡し口を visa-mcp にも開く」**
