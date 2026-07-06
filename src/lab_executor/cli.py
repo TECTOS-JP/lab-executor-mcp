@@ -193,6 +193,14 @@ def _build_parser() -> argparse.ArgumentParser:
         "--db", default=None,
         help="state DB path (default: default_store_path())",
     )
+    sp_ui.add_argument(
+        "--edit-dir", default=None,
+        help=(
+            "enable recipe editing (M3) for YAML files under this directory. "
+            "Writes go only to this dir's YAML + git; state DB stays read-only. "
+            "Refused together with an external --host."
+        ),
+    )
 
     # ---- validate -----------------------------------------------
     sp_val = sub.add_parser(
@@ -606,11 +614,30 @@ def _cmd_ui(args: argparse.Namespace) -> int:
     from pathlib import Path as _P
 
     db_path = _P(args.db) if args.db else None
-    app = create_app(db_path)
+    edit_dir = getattr(args, "edit_dir", None)
 
-    # 外部ホストバインド時は認証なしを警告 (M1 は localhost 割り切り)。
+    # 外部ホストバインド判定。
     host = args.host
     external = host not in ("127.0.0.1", "localhost", "::1")
+
+    # M3: edit-dir 指定 + 外部 host は起動拒否 (認証なしの書き込み経路を
+    # 外部公開しないため。M1 の警告より一段強い措置)。
+    if edit_dir is not None and external:
+        print(
+            f"ERROR: --edit-dir は外部 host ({host}) へのバインドと併用できません "
+            "(認証なしの書き込み経路を外部公開しないため)。"
+            "127.0.0.1 / localhost で起動してください。",
+            file=sys.stderr,
+        )
+        return 1
+
+    from lab_executor.ui.edit_store import EditStoreError
+    try:
+        app = create_app(db_path, edit_dir=_P(edit_dir) if edit_dir else None)
+    except EditStoreError as exc:
+        print(f"ERROR: --edit-dir が不正です: {exc}", file=sys.stderr)
+        return 1
+
     app.state.host_external = external
     if external:
         print(

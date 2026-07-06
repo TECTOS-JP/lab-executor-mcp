@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}レシピ編集 - lab-executor monitor{% endblock %}
+{% block content %}
+<h1>レシピ編集</h1>
+<p class="edit-note">
+  編集対象: <code>{{ edit_dir }}</code>
+  — 変更は保存時に検証され、git にコミットされます。変更は次回実行から有効です。
+</p>
+{% if not files %}
+<p class="empty">edit-dir 配下に *.yaml / *.yml が見つかりません。</p>
+{% else %}
+<table class="jobs">
+  <thead>
+    <tr><th>ファイル</th><th>レシピ</th><th></th></tr>
+  </thead>
+  <tbody>
+    {% for f in files %}
+    <tr>
+      <td><code>{{ f.rel }}</code></td>
+      <td>
+        {% if f.recipes %}
+          {% for r in f.recipes %}<span class="phase">{{ r }}</span> {% endfor %}
+        {% else %}
+          <span class="empty">（なし）</span>
+        {% endif %}
+      </td>
+      <td><a href="/recipes/edit/{{ f.rel }}">編集</a></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}

@@ -127,10 +127,71 @@ sweep ジョブ (DSL の `sweep` step) の測定値をジョブ詳細に折れ�
 追加される static: `uPlot.iife.min.js` / `uPlot.min.css` / `htmx-sse.js`
 (いずれも同梱。新たな Python 依存は無し)。
 
-## M3 以降の予定
+## M3: レシピエディタ (v2.22.0)
 
-- **M3**: レシピ (DSL plan) の閲覧・編集
-- **M4**: ジョブ操作 (cancel など、書き込み経路の導入)
+`lab-executor ui --edit-dir <PATH>` で起動すると、`<PATH>` 配下の機器定義
+YAML 内のレシピをブラウザで編集できる。保存は「検証 → (任意で dry-run) →
+git commit」の流れを強制する。
 
-いずれも本 M1/M2 の read-only 境界を保ったまま段階的に拡張する。詳細は
+    lab-executor ui --edit-dir ./registry/instruments/mydev
+
+### 書き込み境界 (M1/M2 との違い)
+
+- UI が初めて **書き込み能力** を持つが、書き込み先は **`--edit-dir` 配下の
+  YAML ファイルとその git 履歴のみ**。state DB への接続は引き続き read-only
+  (`mode=ro` + `PRAGMA query_only=ON`)。
+- **`--edit-dir` 未指定なら編集機能は完全無効** (M1/M2 と同一の read-only UI)。
+  `/recipes` や `/api/edit/*` ルートは登録すらされない (404)。
+- パストラバーサル防御: rel は `resolve()` 後に edit-dir 配下であることを検証
+  し、`..` / 絶対パス / シンボリックリンク経由の脱出を拒否する。
+- 検証ゲート: 保存時に必ずサーバ側で `validate_instrument_file` により再検証し、
+  **errors があれば保存しない** (警告のみなら保存可)。クライアントの「検証成功
+  で保存ボタン解放」は UX のみ。
+- **外部 host との併用は起動拒否**: `--edit-dir` 指定時に `--host` が
+  127.0.0.1 / localhost / ::1 以外だと exit 1 (認証なしの書き込み経路を外部
+  公開しない。M1 の警告より一段強い措置)。
+
+### 画面・API
+
+| ルート | 内容 |
+|---|---|
+| `GET /recipes` | ファイル / レシピ一覧 |
+| `GET /recipes/edit/{rel}` | エディタ (CodeMirror yaml + 検証/dry-run/保存パネル) |
+| `GET /api/edit/files` | JSON 一覧 (rel + recipe 名) |
+| `GET /api/edit/file/{rel}` | JSON `{content}` |
+| `POST /api/edit/validate` | `{rel, content}` → ValidationReport (保存しない) |
+| `POST /api/edit/dryrun` | `{rel, content, recipe, parameters}` → 展開 Step 列。パース/式評価エラーは 422 |
+| `POST /api/edit/save` | `{rel, content, message}` → 検証 → LF 保存 → git commit。検証エラーは 422 |
+
+POST 系は `Content-Type: application/json` のみ受け付ける。
+
+### dry-run
+
+編集中の YAML 文字列を `InstrumentDefinition` にパースし、指定レシピ +
+パラメータで `recipe_to_plan` を実行して、`$target_v * 1.1` のような式が具体値に
+解決された IR Step 列 (種別 / コマンド / instrument / 解決済み引数 / wait 秒数)
+を返す。validate / dry-run / パースのロジックは既存 API を **import して再利用**
+(再実装しない)。Mock 実行は M3 スコープ外。
+
+### git
+
+`git add <file>` + `git commit`。edit-dir が git repo でなければ初回に
+`git init` する。author / committer は `lab-executor-ui` を `-c user.name/
+-c user.email` で指定。commit message は `ui: edit <rel>` + ユーザー入力。
+commit のみ失敗した場合 (変更なし等) は **ファイルは保存済み・commit のみ失敗**
+を返り値 (`committed=False` + `commit_error`) で区別する。
+
+追加される static: `codemirror.min.js` / `codemirror.min.css` / `cm-yaml.min.js`
+(CodeMirror 5.65.16 をベンダリング。新たな Python 依存は無し)。
+
+### スコープ外 (M3)
+
+- フォーム⇔YAML 双方向同期、新規ファイル作成、Mock 実行での dry-run、
+  実行中ジョブとの競合検知、認証。
+
+## M4 以降の予定
+
+- **M4**: ジョブ操作 (cancel など)
+
+いずれも read-only 境界 (state DB) を保ったまま段階的に拡張する。詳細は
 `wiki/concepts/lab-executor-web-ui.md` を参照。

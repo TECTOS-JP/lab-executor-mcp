@@ -92,3 +92,35 @@ td.empty, .empty { color: var(--muted); text-align: center; }
 .summary-list, .failures { line-height: 1.7; }
 .error-box { background: var(--card); padding: 24px; border-radius: 8px; border: 1px solid var(--border); }
 .error-message { color: #991b1b; }
+
+/* ===== M3: nav + editor ===== */
+.nav { display: flex; gap: 14px; }
+.nav a { color: #cbd5e1; text-decoration: none; font-size: 13px; }
+.nav a:hover { color: #fff; }
+.badge.edit { background: #1d4ed8; color: #dbeafe; padding: 2px 8px; border-radius: 4px; font-size: 12px; }
+.edit-note { color: var(--muted); }
+.edit-note code, .editor-layout code { background: #eef2ff; padding: 1px 5px; border-radius: 4px; }
+
+.editor-layout { display: flex; gap: 16px; align-items: flex-start; }
+.editor-pane { flex: 1 1 60%; min-width: 0; }
+.editor-pane .CodeMirror { height: 560px; border: 1px solid var(--border); border-radius: 6px; }
+.panel { flex: 1 1 40%; display: flex; flex-direction: column; gap: 14px; }
+.panel-block { background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 12px; }
+.panel-block h2 { margin: 0 0 8px; font-size: 14px; }
+.panel-block label { display: block; margin: 6px 0; font-size: 13px; }
+.panel-block input[type=text], .panel-block select, .panel-block textarea {
+  width: 100%; padding: 5px 7px; border: 1px solid var(--border);
+  border-radius: 4px; font-family: inherit; font-size: 13px;
+}
+.panel-block button {
+  margin-top: 6px; padding: 6px 14px; border: none; border-radius: 5px;
+  background: #2563eb; color: #fff; font-weight: 600; cursor: pointer;
+}
+.panel-block button:disabled { background: #cbd5e1; cursor: not-allowed; }
+.result-box { margin-top: 10px; font-size: 13px; }
+.result-box.ok { color: #166534; }
+.result-box.err { color: #991b1b; }
+.result-box ul.errs { color: #991b1b; margin: 6px 0; padding-left: 18px; }
+.result-box ul.warns { color: #92400e; margin: 6px 0; padding-left: 18px; }
+.result-box .hint, .panel-block .hint { color: var(--muted); font-size: 12px; margin: 4px 0; }
+.result-box table.steps { margin-top: 8px; font-size: 12px; }

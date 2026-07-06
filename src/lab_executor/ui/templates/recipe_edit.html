@@ -1,0 +1,230 @@
+{% extends "base.html" %}
+{% block title %}{{ rel }} 編集 - lab-executor monitor{% endblock %}
+{% block content %}
+<h1>編集: <code>{{ rel }}</code></h1>
+<p class="warn-banner">
+  変更は保存時にサーバ側で必ず再検証され、検証を通ったときだけ git にコミットされます。
+  変更は<strong>次回の実行から有効</strong>です（実行中ジョブへの反映・競合検知は行いません）。
+</p>
+
+<div class="editor-layout">
+  <div class="editor-pane">
+    <textarea id="yaml-src">{{ content }}</textarea>
+  </div>
+
+  <div class="panel">
+    <section class="panel-block">
+      <h2>検証</h2>
+      <button id="btn-validate" type="button">検証する</button>
+      <div id="validate-result" class="result-box"></div>
+    </section>
+
+    <section class="panel-block">
+      <h2>dry-run</h2>
+      <label>レシピ:
+        <select id="recipe-select"></select>
+      </label>
+      <div id="param-inputs"></div>
+      <button id="btn-dryrun" type="button">dry-run 実行</button>
+      <div id="dryrun-result" class="result-box"></div>
+    </section>
+
+    <section class="panel-block">
+      <h2>保存</h2>
+      <label>コミットメッセージ:
+        <input id="commit-msg" type="text" placeholder="任意">
+      </label>
+      <button id="btn-save" type="button" disabled>保存 (検証成功後)</button>
+      <div id="save-result" class="result-box"></div>
+    </section>
+  </div>
+</div>
+
+<script src="/static/vendor/codemirror.min.js"></script>
+<script src="/static/vendor/cm-yaml.min.js"></script>
+<script>
+(function () {
+  var REL = {{ rel | tojson }};
+  var srcEl = document.getElementById("yaml-src");
+  var editor = null;
+  if (window.CodeMirror) {
+    editor = CodeMirror.fromTextArea(srcEl, {
+      mode: "yaml", lineNumbers: true, indentUnit: 2, tabSize: 2,
+      lineWrapping: false
+    });
+  }
+  function getContent() {
+    return editor ? editor.getValue() : srcEl.value;
+  }
+
+  var validateBtn = document.getElementById("btn-validate");
+  var dryrunBtn = document.getElementById("btn-dryrun");
+  var saveBtn = document.getElementById("btn-save");
+  var recipeSelect = document.getElementById("recipe-select");
+  var paramInputs = document.getElementById("param-inputs");
+
+  function setResult(el, ok, html) {
+    el.className = "result-box " + (ok ? "ok" : "err");
+    el.innerHTML = html;
+  }
+
+  // content 内の recipes: ブロックのトップレベルキーを抽出 (UX 用途)。
+  function extractRecipes(text) {
+    var lines = text.split(/\r?\n/);
+    var inRecipes = false, baseIndent = null, names = [];
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i];
+      if (/^\s*#/.test(line) || line.trim() === "") continue;
+      if (!inRecipes) {
+        if (/^recipes\s*:/.test(line)) { inRecipes = true; }
+        continue;
+      }
+      var indent = line.match(/^\s*/)[0].length;
+      if (indent === 0) { break; }  // recipes ブロック終了
+      if (baseIndent === null) baseIndent = indent;
+      if (indent === baseIndent) {
+        var m = line.match(/^\s*([A-Za-z0-9_\-]+)\s*:/);
+        if (m) names.push(m[1]);
+      }
+    }
+    return names;
+  }
+
+  function refreshRecipes() {
+    var names = extractRecipes(getContent());
+    var prev = recipeSelect.value;
+    recipeSelect.innerHTML = "";
+    names.forEach(function (n) {
+      var o = document.createElement("option");
+      o.value = n; o.textContent = n;
+      recipeSelect.appendChild(o);
+    });
+    if (names.indexOf(prev) >= 0) recipeSelect.value = prev;
+    renderParams();
+  }
+
+  // dry-run パラメータ欄は自由入力 (型ヒントはサーバ検証に委ねる)。
+  function renderParams() {
+    paramInputs.innerHTML = "";
+    var hint = document.createElement("p");
+    hint.className = "hint";
+    hint.textContent = "パラメータ名=値 を 1 行ずつ入力 (例: target_v=5)";
+    paramInputs.appendChild(hint);
+    var ta = document.createElement("textarea");
+    ta.id = "param-textarea";
+    ta.rows = 4;
+    ta.placeholder = "target_v=5\ncurrent_limit=1";
+    paramInputs.appendChild(ta);
+  }
+
+  function parseParams() {
+    var el = document.getElementById("param-textarea");
+    var out = {};
+    if (!el) return out;
+    el.value.split(/\r?\n/).forEach(function (line) {
+      var idx = line.indexOf("=");
+      if (idx < 0) return;
+      var k = line.slice(0, idx).trim();
+      var v = line.slice(idx + 1).trim();
+      if (!k) return;
+      var num = Number(v);
+      out[k] = (v !== "" && !isNaN(num)) ? num : v;
+    });
+    return out;
+  }
+
+  function postJson(url, body) {
+    return fetch(url, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(body)
+    });
+  }
+
+  validateBtn.addEventListener("click", function () {
+    var el = document.getElementById("validate-result");
+    el.textContent = "検証中...";
+    postJson("/api/edit/validate", {rel: REL, content: getContent()})
+      .then(function (r) { return r.json().then(function (j) { return {ok: r.ok, j: j}; }); })
+      .then(function (res) {
+        var v = res.j.validation || res.j;
+        var errs = (v && v.errors) || [];
+        var warns = (v && v.warnings) || [];
+        var html = "<strong>status: " + (v ? v.status : "?") + "</strong>";
+        if (errs.length) {
+          html += "<ul class='errs'>";
+          errs.forEach(function (e) { html += "<li>" + (e.message || JSON.stringify(e)) + "</li>"; });
+          html += "</ul>";
+        }
+        if (warns.length) {
+          html += "<ul class='warns'>";
+          warns.forEach(function (w) { html += "<li>" + (w.message || JSON.stringify(w)) + "</li>"; });
+          html += "</ul>";
+        }
+        var ok = res.ok && errs.length === 0;
+        setResult(el, ok, html);
+        saveBtn.disabled = !ok;
+      })
+      .catch(function (e) { setResult(el, false, "リクエスト失敗: " + e); });
+  });
+
+  dryrunBtn.addEventListener("click", function () {
+    var el = document.getElementById("dryrun-result");
+    el.textContent = "展開中...";
+    postJson("/api/edit/dryrun", {
+      rel: REL, content: getContent(),
+      recipe: recipeSelect.value, parameters: parseParams()
+    })
+      .then(function (r) { return r.json().then(function (j) { return {ok: r.ok, j: j}; }); })
+      .then(function (res) {
+        if (!res.ok) {
+          setResult(el, false, "422: " + (res.j.detail || JSON.stringify(res.j)));
+          return;
+        }
+        var d = res.j.dryrun;
+        var html = "<p>" + d.step_count + " ステップ</p><table class='steps'><thead><tr>" +
+          "<th>#</th><th>種別</th><th>コマンド</th><th>instrument</th><th>引数</th><th>wait(s)</th></tr></thead><tbody>";
+        d.steps.forEach(function (s, i) {
+          html += "<tr><td>" + i + "</td><td>" + s.type + "</td><td>" +
+            (s.command || "") + "</td><td>" + (s.instrument || "") + "</td><td>" +
+            JSON.stringify(s.args) + "</td><td>" +
+            (s.seconds === null ? "" : s.seconds) + "</td></tr>";
+        });
+        html += "</tbody></table>";
+        setResult(el, true, html);
+      })
+      .catch(function (e) { setResult(el, false, "リクエスト失敗: " + e); });
+  });
+
+  saveBtn.addEventListener("click", function () {
+    var el = document.getElementById("save-result");
+    el.textContent = "保存中...";
+    var msg = document.getElementById("commit-msg").value;
+    postJson("/api/edit/save", {rel: REL, content: getContent(), message: msg})
+      .then(function (r) { return r.json().then(function (j) { return {ok: r.ok, j: j}; }); })
+      .then(function (res) {
+        if (!res.ok) {
+          setResult(el, false, "保存できません: " + (res.j.detail || JSON.stringify(res.j)));
+          return;
+        }
+        var j = res.j;
+        var html = "保存しました。";
+        if (j.committed) {
+          html += " commit: <code>" + (j.commit || "").slice(0, 10) + "</code>";
+        } else {
+          html += " (ファイルは保存済み。commit なし: " + (j.commit_error || "?") + ")";
+        }
+        setResult(el, true, html);
+      })
+      .catch(function (e) { setResult(el, false, "リクエスト失敗: " + e); });
+  });
+
+  // 編集で検証状態が無効化されたら保存を再度ロックする。
+  if (editor) editor.on("change", function () { saveBtn.disabled = true; });
+  else srcEl.addEventListener("input", function () { saveBtn.disabled = true; });
+
+  refreshRecipes();
+  recipeSelect.addEventListener("focus", refreshRecipes);
+})();
+</script>
+{% endblock %}

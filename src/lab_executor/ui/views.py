@@ -164,6 +164,36 @@ def sweep_chart_view(
     return {"x": x, "series": series, "x_label": x_label}
 
 
+def dryrun_view(plan: Any) -> dict[str, Any]:
+    """recipe_to_plan の返り値 (Plan) を dry-run 表示用 dict に整える。
+
+    展開された IR Step 列を「種別 / コマンド名 / instrument / 解決済み引数 /
+    wait 秒数 / description」に平坦化する。Mock 実行は M3 スコープ外なので
+    ここでは式が評価済みの具体値だけを見せる。
+
+    Plan の import はしない (FastAPI 非依存を保つため型は Any で受ける)。
+    """
+    steps_out: list[dict[str, Any]] = []
+    for st in plan.steps:
+        step_type = getattr(st, "type", "command")
+        row: dict[str, Any] = {
+            "type": step_type,
+            "command": getattr(st, "command", "") or "",
+            "instrument": getattr(st, "instrument", None),
+            "args": dict(getattr(st, "args", {}) or {}),
+            "seconds": getattr(st, "seconds", None),
+            "description": getattr(st, "description", "") or "",
+        }
+        steps_out.append(row)
+    return {
+        "name": getattr(plan, "name", ""),
+        "parameters": dict(getattr(plan, "parameters", {}) or {}),
+        "required_resources": list(getattr(plan, "required_resources", []) or []),
+        "step_count": len(steps_out),
+        "steps": steps_out,
+    }
+
+
 def job_detail_view(
     job: dict[str, Any],
     steps: list[dict[str, Any]],

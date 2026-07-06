@@ -163,7 +163,9 @@ def test_api_health(client):
     datetime.fromisoformat(data["last_write_at"])
     # active_jobs は running 1 件のみ
     assert data["active_jobs"] == 1
-    assert data["ui_version"] == "m1"
+    # ui_version は M1→M2→M3 で進む。現行 UI_VERSION と一致すればよい。
+    from lab_executor.ui import UI_VERSION
+    assert data["ui_version"] == UI_VERSION
 
 
 def test_missing_db_friendly(tmp_path):

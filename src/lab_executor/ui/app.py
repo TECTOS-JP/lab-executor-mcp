@@ -15,12 +15,15 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel
 
 from lab_executor import __version__ as PKG_VERSION
 from lab_executor.job.store import default_store_path
 from lab_executor.ui import UI_VERSION
+from lab_executor.ui.edit_store import EditDirStore, EditStoreError
 from lab_executor.ui.readonly_store import ReadOnlyJobStore, UiStoreError
 from lab_executor.ui.views import (
+    dryrun_view,
     is_terminal_status,
     job_detail_view,
     job_row_view,
@@ -88,19 +91,31 @@ def _build_sweep_chart(store: ReadOnlyJobStore, job_id: str) -> dict | None:
     return sweep_chart_view(points)
 
 
-def create_app(db_path: Path | str | None = None) -> FastAPI:
+def create_app(
+    db_path: Path | str | None = None,
+    edit_dir: Path | str | None = None,
+) -> FastAPI:
     """読み取り専用モニタ UI の FastAPI アプリを生成する。
 
     db_path 省略時は ``default_store_path()`` を使う。DB 不在時でもアプリ生成は
     成功し、リクエスト時に UiStoreError → error.html / JSON 503 へ変換する。
+
+    edit_dir を指定すると M3 のレシピ編集ルートを登録する (state DB への接続は
+    引き続き read-only。書き込みは edit_dir 配下の YAML と git のみ)。
+    ``edit_dir=None`` なら編集ルートは一切登録せず M1/M2 と同一の read-only UI。
     """
     resolved = Path(db_path) if db_path is not None else default_store_path()
     store = ReadOnlyJobStore(resolved)
+
+    edit_store: EditDirStore | None = None
+    if edit_dir is not None:
+        edit_store = EditDirStore(edit_dir)
 
     app = FastAPI(title="lab-executor monitor", version=PKG_VERSION)
     templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
     templates.env.globals["ui_version"] = UI_VERSION
     templates.env.globals["pkg_version"] = PKG_VERSION
+    templates.env.globals["edit_enabled"] = edit_store is not None
 
     if _STATIC_DIR.exists():
         app.mount(
@@ -360,4 +375,150 @@ def create_app(db_path: Path | str | None = None) -> FastAPI:
         h["pkg_version"] = PKG_VERSION
         return h
 
+    # ============================================================
+    # M3: レシピ編集ルート (edit_store があるときだけ登録)
+    # ============================================================
+    if edit_store is not None:
+        _register_edit_routes(app, templates, edit_store)
+
     return app
+
+
+# ================================================================
+# M3 edit ルートの登録
+# ================================================================
+
+
+class _ValidateBody(BaseModel):
+    rel: str
+    content: str
+
+
+class _DryrunBody(BaseModel):
+    rel: str
+    content: str
+    recipe: str
+    parameters: dict = {}
+
+
+class _SaveBody(BaseModel):
+    rel: str
+    content: str
+    message: str = ""
+
+
+def _build_dryrun(content: str, recipe_name: str, parameters: dict) -> dict:
+    """編集中の YAML 文字列 + レシピ名 + パラメータ → 展開 Step 列 dict。
+
+    パース / 式評価エラーは ValueError を送出する (ルート側で 422 に変換)。
+    validate / dry-run のロジックは再実装せず、既存 API を import して使う。
+    """
+    import yaml
+
+    from lab_executor.models.instrument_def import InstrumentDefinition
+    from lab_executor.recipe_executor import recipe_to_plan
+    from lab_executor.utils.expression import ExpressionError
+
+    try:
+        raw = yaml.safe_load(content) or {}
+        defn = InstrumentDefinition(**raw)
+    except Exception as exc:  # noqa: BLE001 - パースエラーを 422 理由として返す
+        raise ValueError(f"定義のパースに失敗しました: {exc}")
+
+    recipe = defn.recipes.get(recipe_name)
+    if recipe is None:
+        raise ValueError(f"レシピが見つかりません: {recipe_name}")
+
+    # パラメータ default を型に合わせて補完し、変数辞書を作る。
+    variables: dict = {}
+    for pdef in recipe.parameters:
+        if pdef.name in parameters and parameters[pdef.name] is not None:
+            variables[pdef.name] = parameters[pdef.name]
+        elif pdef.default is not None:
+            variables[pdef.name] = pdef.default
+        # 欠落 (default 無しかつ未入力) は入れない → 式評価時に ExpressionError
+
+    try:
+        plan = recipe_to_plan(recipe, variables)
+    except (ExpressionError, KeyError, ValueError, TypeError) as exc:
+        raise ValueError(f"dry-run 展開に失敗しました: {exc}")
+
+    return dryrun_view(plan)
+
+
+def _register_edit_routes(app, templates, edit_store: EditDirStore) -> None:
+    """レシピ編集ルート群を app に登録する。"""
+
+    @app.exception_handler(EditStoreError)
+    async def _edit_store_error_handler(request: Request, exc: EditStoreError):
+        # パス不正 / 検証失敗 / git 失敗はすべて 422 で理由を JSON 返却。
+        return JSONResponse(
+            status_code=422,
+            content={"error": "edit_store_error", "detail": str(exc)},
+        )
+
+    def _require_json(request: Request) -> None:
+        ctype = request.headers.get("content-type", "")
+        if not ctype.startswith("application/json"):
+            raise EditStoreError(
+                "POST は Content-Type: application/json のみ受け付けます"
+            )
+
+    # ---- HTML ----
+    @app.get("/recipes", response_class=HTMLResponse)
+    async def recipes_list(request: Request):
+        files = edit_store.list_files()
+        return templates.TemplateResponse(
+            request,
+            "recipes.html",
+            {"files": files, "edit_dir": str(edit_store.root)},
+        )
+
+    @app.get("/recipes/edit/{rel:path}", response_class=HTMLResponse)
+    async def recipe_edit(request: Request, rel: str):
+        # read_file が存在チェック + パストラバーサル防御を兼ねる。
+        content = edit_store.read_file(rel)
+        return templates.TemplateResponse(
+            request,
+            "recipe_edit.html",
+            {"rel": rel, "content": content},
+        )
+
+    # ---- JSON API ----
+    @app.get("/api/edit/files")
+    async def api_edit_files():
+        return {"files": edit_store.list_files()}
+
+    @app.get("/api/edit/file/{rel:path}")
+    async def api_edit_file(rel: str):
+        return {"rel": rel, "content": edit_store.read_file(rel)}
+
+    @app.post("/api/edit/validate")
+    async def api_edit_validate(request: Request, body: _ValidateBody):
+        _require_json(request)
+        # rel のパストラバーサル防御 (存在は必須ではないが範囲は検査)。
+        edit_store._resolve(body.rel)
+        return {"validation": edit_store.validate(body.content)}
+
+    @app.post("/api/edit/dryrun")
+    async def api_edit_dryrun(request: Request, body: _DryrunBody):
+        _require_json(request)
+        edit_store._resolve(body.rel)
+        try:
+            result = await asyncio.to_thread(
+                _build_dryrun, body.content, body.recipe, body.parameters
+            )
+        except ValueError as exc:
+            return JSONResponse(
+                status_code=422,
+                content={"error": "dryrun_failed", "detail": str(exc)},
+            )
+        return {"dryrun": result}
+
+    @app.post("/api/edit/save")
+    async def api_edit_save(request: Request, body: _SaveBody):
+        _require_json(request)
+        result = await asyncio.to_thread(
+            edit_store.save_file, body.rel, body.content, body.message
+        )
+        return result

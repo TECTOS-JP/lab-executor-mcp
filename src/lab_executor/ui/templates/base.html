@@ -6,6 +6,7 @@
   <title>{% block title %}lab-executor monitor{% endblock %}</title>
   <link rel="stylesheet" href="/static/style.css">
   <link rel="stylesheet" href="/static/vendor/uPlot.min.css">
+  {% if edit_enabled %}<link rel="stylesheet" href="/static/vendor/codemirror.min.css">{% endif %}
   <script src="/static/vendor/htmx.min.js"></script>
   <script src="/static/vendor/htmx-sse.js"></script>
   <script src="/static/vendor/uPlot.iife.min.js"></script>
@@ -13,7 +14,15 @@
 <body>
   <header class="topbar">
     <a class="brand" href="/">lab-executor monitor</a>
+    <nav class="nav">
+      <a href="/">ジョブ</a>
+      {% if edit_enabled %}<a href="/recipes">レシピ</a>{% endif %}
+    </nav>
+    {% if edit_enabled %}
+    <span class="badge edit">edit-dir</span>
+    {% else %}
     <span class="badge readonly">read-only</span>
+    {% endif %}
     <span class="version">v{{ pkg_version }} / ui {{ ui_version }}</span>
   </header>
   <main class="container">

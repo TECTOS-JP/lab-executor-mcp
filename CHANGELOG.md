@@ -1,5 +1,47 @@
 # 変更履歴
 
+## v2.22.0 — Web UI M3: レシピエディタ (検証 → dry-run → git 保存) (UI M3)
+
+合言葉: **「窓の中に手を入れる、ただし検証の関所を通って」**
+
+### 追加
+
+- `lab-executor ui --edit-dir <PATH>` — `<PATH>` 配下の機器定義 YAML 内の
+  レシピをブラウザで編集する。UI が初めて **書き込み能力** を持つが、書き込み先は
+  **edit-dir 配下の YAML + git 履歴のみ**。state DB は引き続き read-only。
+  - `--edit-dir` 未指定なら編集ルートは登録すらされない (M1/M2 と同一の
+    read-only UI)。指定 + 外部 `--host` は起動拒否 (exit 1)。
+- `src/lab_executor/ui/edit_store.py` — `EditDirStore` (列挙 / 読み書き /
+  検証ゲート / git commit)。
+  - パストラバーサル防御を最初に実装: rel は `resolve()` 後に edit-dir 配下で
+    あることを検証し、`..` / 絶対パス / シンボリックリンク経由の脱出を拒否。
+  - 保存時に必ず `validate_instrument_file` で再検証し、**errors があれば保存
+    しない** (警告のみなら保存可)。CRLF は LF に正規化して書き込む。
+  - `git add` + `git commit` (repo でなければ `git init`)。author/committer は
+    `lab-executor-ui`。commit のみ失敗 (変更なし等) は
+    `committed=False` + `commit_error` で「ファイルは保存済み」を区別。
+- 編集ルート: `GET /recipes` / `GET /recipes/edit/{rel}` /
+  `GET /api/edit/files` / `GET /api/edit/file/{rel}` /
+  `POST /api/edit/{validate,dryrun,save}` (POST は JSON のみ)。
+  `EditStoreError` は exception handler で JSON 422 に変換。
+- dry-run: 編集中 YAML を `InstrumentDefinition` にパースし、指定レシピ +
+  パラメータで `recipe_to_plan` を実行して式 (`$target_v * 1.1` 等) を解決した
+  IR Step 列を返す。パース / 式評価エラーは 422。validate / dry-run / パースの
+  ロジックは既存 API を **import して再利用** (再実装しない)。
+- `views.dryrun_view` — Plan を展開 Step 表示用 dict に整える純関数。
+- エディタ画面 (CodeMirror 5.65.16 yaml mode をベンダリング) + 検証 / dry-run /
+  保存パネル。base.html にナビ「レシピ」タブ (edit 有効時のみ)。
+- 設計文書 `docs/web_ui_m3_plan.md` / 利用者向け `docs/web_ui.md` に M3 追記。
+
+### 互換性
+
+- MCP tool surface 不変 (Stable 43 + Experimental 7 = 50)。
+  server.py / tools/ / serve 経路に変更なし。
+- 必須依存に追加なし (`[ui]` extra のみ。CodeMirror は同梱ベンダリング)。
+- state DB への書き込みなし (`mode=ro` + `PRAGMA query_only=ON`)。
+  書き込みは edit-dir 配下の YAML + git のみ。
+- version を `2.22.0` に更新。UI_VERSION を `m3` に更新。
+
 ## v2.21.0 — Web UI M2: SSE ライブ更新 + スイープグラフ (UI M2)
 
 合言葉: **「窓の向こうが、いま動いて見える」**
