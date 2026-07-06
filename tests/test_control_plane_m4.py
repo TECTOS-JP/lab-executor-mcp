@@ -368,3 +368,90 @@ def test_compose_server_default_stays_in_memory(tmp_path, monkeypatch):
     assert not default_db.exists()
     # store は in-memory (jobs は空リストを返せる)。
     assert job_mgr.list_jobs(limit=5) == []
+
+
+# ============================================================
+# v2.24.0: 公開 API run_mcp_with_control / resolve_control_port
+# ============================================================
+
+
+def test_public_api_exists():
+    """v2.24.0: runner / port resolver が公開 API として import できる。"""
+    from lab_executor import control_plane
+
+    assert hasattr(control_plane, "run_mcp_with_control")
+    assert hasattr(control_plane, "resolve_control_port")
+
+
+def test_resolve_control_port_cli_and_env(monkeypatch):
+    from lab_executor.control_plane import resolve_control_port
+
+    # CLI 値優先
+    monkeypatch.setenv("LAB_EXECUTOR_CONTROL_PORT", "9999")
+    assert resolve_control_port(8300) == 8300
+    # CLI None → env
+    assert resolve_control_port(None) == 9999
+    # env 未設定 → None
+    monkeypatch.delenv("LAB_EXECUTOR_CONTROL_PORT", raising=False)
+    assert resolve_control_port(None) is None
+    # env 空文字 → None
+    monkeypatch.setenv("LAB_EXECUTOR_CONTROL_PORT", "")
+    assert resolve_control_port(None) is None
+    # env 非整数 → None (警告は stderr)
+    monkeypatch.setenv("LAB_EXECUTOR_CONTROL_PORT", "notanint")
+    assert resolve_control_port(None) is None
+
+
+@pytest.mark.asyncio
+async def test_run_mcp_with_control_writes_actual_port(
+    job_mgr, tmp_path
+):
+    """v2.24.0: port=0 で uvicorn を実起動し、実ポートが control.json に
+    書かれることを検証する。MCP は run_async をすぐ返す fake で代替し、
+    uvicorn 起動は短時間 (ソケット bind 直後に停止)。"""
+    import asyncio
+
+    from lab_executor.control_plane import (
+        read_control_file,
+        run_mcp_with_control,
+    )
+
+    ctl_path = tmp_path / "control.json"
+    started = asyncio.Event()
+
+    class _FakeMCP:
+        async def run_async(self, transport="stdio"):
+            # control.json が書かれるまで並走を維持する。
+            started.set()
+            await asyncio.sleep(3600)
+
+    async def _run():
+        await run_mcp_with_control(
+            _FakeMCP(), job_mgr, 0,
+            backend_id="mock", control_path=ctl_path,
+        )
+
+    task = asyncio.create_task(_run())
+    try:
+        # control.json が書かれる (= uvicorn が bind した) まで待つ。
+        data = None
+        for _ in range(200):
+            await asyncio.sleep(0.02)
+            data = read_control_file(ctl_path)
+            if data is not None:
+                break
+        assert data is not None, "control.json が書かれなかった"
+        assert data["backend_id"] == "mock"
+        assert data["url"].startswith("http://127.0.0.1:")
+        # port=0 なので OS 割当の実ポート (> 0) が書かれる。
+        actual_port = int(data["url"].rsplit(":", 1)[1])
+        assert actual_port > 0
+        assert data["token"]
+    finally:
+        task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):
+            pass
+    # finally 経路で control.json が掃除される。
+    assert read_control_file(ctl_path) is None

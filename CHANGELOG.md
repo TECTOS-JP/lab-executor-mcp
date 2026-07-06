@@ -1,5 +1,34 @@
 # 変更履歴
 
+## v2.24.0 — control plane runner を公開 API 化 (visa-mcp 統合用)
+
+合言葉: **「関所は lab-executor が持ち、鍵の受け渡し口を visa-mcp にも開く」**
+
+### 追加
+
+- `lab_executor.control_plane.run_mcp_with_control(mcp, job_mgr, control_port, *, backend_id, control_path=None)`
+  (async) を **公開 API** として追加。`cli.py` の `_serve_with_control` の
+  コア (token 生成 → `create_control_app` → uvicorn Config/Server →
+  `write_control_file` → `asyncio.gather(mcp.run_async("stdio"), ctl.serve())`
+  → finally で `remove_control_file`) をそのまま移設した。挙動は不変。
+  `backend_id` は control.json / health に載せる backend 識別子
+  (lab-executor="mock" / visa-mcp="pyvisa" など)。`control_path` は
+  control.json の書き込み先を上書きできる (default: `default_control_path()`)。
+- `lab_executor.control_plane.resolve_control_port(cli_value)` を公開 API として
+  追加。CLI 値優先、無ければ env `LAB_EXECUTOR_CONTROL_PORT` を読む解決規則を
+  `cli.py` の `_resolve_control_port` から移設した。外部 (visa-mcp serve) が
+  同一の解決規則を再利用できる。
+
+### 変更
+
+- `cli.py` の `_serve_with_control` / `_resolve_control_port` は上記公開 API を
+  呼ぶ薄いラッパになった。CLI の挙動・出力は 1 行も変わらない。
+
+### 目的
+
+- 実機 MCP サーバー (`visa-mcp serve`) でも Web UI M4 のコントロールプレーンを
+  使えるようにするため、runner を lab-executor 側の再利用可能な公開 API にした。
+
 ## v2.23.0 — Web UI M4: コントロールプレーン (ジョブキャンセル + レシピ実行) (UI M4)
 
 合言葉: **「窓から手を伸ばすが、鍵は関所の内側にしか渡さない」**

@@ -682,23 +682,14 @@ def _resolve_control_port(args: argparse.Namespace) -> int | None:
     CLI ``--control-port`` が優先。未指定なら env
     ``LAB_EXECUTOR_CONTROL_PORT``。どちらも無ければ None (無効)。
     env が非整数なら無視して None を返す。
-    """
-    import os
 
-    if getattr(args, "control_port", None) is not None:
-        return int(args.control_port)
-    raw = os.environ.get("LAB_EXECUTOR_CONTROL_PORT")
-    if raw is None or raw.strip() == "":
-        return None
-    try:
-        return int(raw)
-    except ValueError:
-        print(
-            f"WARNING: LAB_EXECUTOR_CONTROL_PORT={raw!r} は整数ではありません "
-            "(コントロールプレーン無効)。",
-            file=sys.stderr,
-        )
-        return None
+    v2.24.0: 解決ロジックは公開 API
+    ``lab_executor.control_plane.resolve_control_port`` に移設した。
+    ここは薄いラッパ (CLI Namespace → cli_value の橋渡し)。
+    """
+    from lab_executor.control_plane import resolve_control_port
+
+    return resolve_control_port(getattr(args, "control_port", None))
 
 
 async def _serve_with_control(
@@ -706,68 +697,15 @@ async def _serve_with_control(
 ) -> None:
     """v2.23 (M4): MCP (stdio) とコントロールプレーン (uvicorn) を並走。
 
-    - bind は 127.0.0.1 固定 (外部 bind オプションは作らない)。
-    - token は起動毎に ``secrets.token_hex(32)`` で生成。
-    - port=0 (OS 任せ) を許可し、実ポートを control.json に書く。
-    - 終了時に control.json を削除 (finally + atexit の二重化)。
+    v2.24.0: コアは公開 API
+    ``lab_executor.control_plane.run_mcp_with_control`` に移設した
+    (visa-mcp 統合用)。ここは薄いラッパで挙動不変。
     """
-    import asyncio
-    import atexit
-    import os
-    import secrets
+    from lab_executor.control_plane import run_mcp_with_control
 
-    import uvicorn
-
-    from lab_executor.control_plane import (
-        create_control_app,
-        default_control_path,
-        remove_control_file,
-        write_control_file,
+    await run_mcp_with_control(
+        server, job_mgr, port, backend_id=backend_id,
     )
-
-    token = secrets.token_hex(32)
-    pid = os.getpid()
-    app = create_control_app(
-        job_mgr, token=token, backend_id=backend_id, pid=pid,
-    )
-    config = uvicorn.Config(
-        app, host="127.0.0.1", port=port, log_level="warning",
-    )
-    ctl = uvicorn.Server(config)
-
-    ctl_path = default_control_path()
-
-    # kill -9 で残った control.json のため atexit でも掃除する (二重化)。
-    atexit.register(remove_control_file, str(ctl_path))
-
-    async def _write_control_when_bound() -> None:
-        # uvicorn がソケットを bind するまで待ち、実ポートを control.json に書く。
-        while not getattr(ctl, "started", False):
-            await asyncio.sleep(0.02)
-        actual_port = port
-        try:
-            servers = getattr(ctl, "servers", None) or []
-            if servers and servers[0].sockets:
-                actual_port = servers[0].sockets[0].getsockname()[1]
-        except Exception:  # noqa: BLE001 - 取得失敗時は指定 port を使う
-            actual_port = port
-        write_control_file(
-            ctl_path,
-            url=f"http://127.0.0.1:{actual_port}",
-            token=token,
-            pid=pid,
-            backend_id=backend_id,
-        )
-
-    try:
-        await asyncio.gather(
-            server.run_async(transport="stdio"),
-            ctl.serve(),
-            _write_control_when_bound(),
-        )
-    finally:
-        ctl.should_exit = True
-        remove_control_file(str(ctl_path))
 
 
 # ============================================================
