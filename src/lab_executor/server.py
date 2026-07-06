@@ -49,16 +49,21 @@ def _make_session_manager_for_backend(backend: "InstrumentBackend"):
 
 
 def _make_job_manager(backend: "InstrumentBackend",
-                       session_facade: Any):
+                       session_facade: Any,
+                       store_path: Any = None):
     """v2.1: JobManager を MockBackend と組み合わせて生成。
 
     JobManager は `visa: VisaManager` を要求する設計だが、v2.1 の
     backend layer はすべて `InstrumentBackend` Protocol 経由で
     `backend` を渡せばよい (TYPE_CHECKING の効果)。
+
+    v2.23.0 (M4): ``store_path`` を指定すると Job state を指定ファイルに
+    永続化する (``lab-executor ui`` と state DB を共有する E2E 用)。
+    ``None`` (default) なら従来どおり in-memory で挙動不変。
     """
     # 遅延 import (PyVISA 不要)
     from lab_executor.job import JobManager, JobStore
-    store = JobStore(":memory:")
+    store = JobStore(store_path) if store_path else JobStore(":memory:")
     # v2.2.0: `backend=` keyword 推奨経路で渡す (`visa=` は
     # DeprecationWarning 経路、v3 で削除候補)。
     job_mgr = JobManager(
@@ -69,23 +74,25 @@ def _make_job_manager(backend: "InstrumentBackend",
     return job_mgr
 
 
-def create_server(
+def compose_server(
     backend: "InstrumentBackend | None" = None,
     *,
     name: str = "lab-executor",
     enable_experimental: bool = True,
-) -> "FastMCP":
-    """v2.1.0: lab-executor MCP server を生成する公開 API。
+    store_path: Any = None,
+) -> "tuple[FastMCP, Any]":
+    """v2.23.0 (Web UI M4): MCP server と JobManager を合成して返す。
 
-    引数:
-      backend: `InstrumentBackend` 実装 (default: `MockBackend`)。
-        実機 backend が必要なら `visa-mcp` の `PyVisaBackend` を
-        外部から inject すること。
-      name: MCP server 名
-      enable_experimental: Experimental tool (7 件) を expose する
-        かどうか (default: True、v1.0 から維持)
+    ``create_server()` の本体を移したもの。挙動は従来と完全に同一で、
+    追加で内部の ``JobManager`` を **公開** する (M4 のコントロールプレーンが
+    MCP ツールと同一の JobManager を共有するため)。
 
-    返り値: `FastMCP` instance (server.run() などで起動可能)
+    store_path (v2.23.0): Job state の永続化先ファイルパス
+    (``str | Path``)。``lab-executor ui`` と state DB を共有する E2E 用。
+    ``None`` (default) なら従来どおり in-memory (``JobStore(":memory:")``)
+    で挙動不変。
+
+    返り値: ``(mcp, job_mgr)``
 
     Raises:
       ImportError: fastmcp が install されていない場合
@@ -98,7 +105,8 @@ def create_server(
 
     mcp = FastMCP(name=name)
     session_facade = _make_session_manager_for_backend(backend)
-    job_mgr = _make_job_manager(backend, session_facade)
+    job_mgr = _make_job_manager(backend, session_facade,
+                                 store_path=store_path)
 
     # tools/* を順に register。各 register_tools は v1.0 凍結の MCP
     # tool 名 / 引数 / response を expose する。
@@ -131,7 +139,35 @@ def create_server(
     t_recipes.register_tools(mcp, session_facade)
     t_waits.register_tools(mcp, job_mgr)
 
-    return mcp
+    return mcp, job_mgr
+
+
+def create_server(
+    backend: "InstrumentBackend | None" = None,
+    *,
+    name: str = "lab-executor",
+    enable_experimental: bool = True,
+) -> "FastMCP":
+    """v2.1.0: lab-executor MCP server を生成する公開 API。
+
+    引数:
+      backend: `InstrumentBackend` 実装 (default: `MockBackend`)。
+        実機 backend が必要なら `visa-mcp` の `PyVisaBackend` を
+        外部から inject すること。
+      name: MCP server 名
+      enable_experimental: Experimental tool (7 件) を expose する
+        かどうか (default: True、v1.0 から維持)
+
+    返り値: `FastMCP` instance (server.run() などで起動可能)
+
+    Raises:
+      ImportError: fastmcp が install されていない場合
+
+    v2.23.0: 実体は ``compose_server(...)[0]``。公開シグネチャ・挙動は不変。
+    """
+    return compose_server(
+        backend, name=name, enable_experimental=enable_experimental,
+    )[0]
 
 
 def diagnose_tool_surface(server: "FastMCP") -> dict[str, Any]:

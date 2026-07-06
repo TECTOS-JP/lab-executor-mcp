@@ -94,6 +94,7 @@ def _build_sweep_chart(store: ReadOnlyJobStore, job_id: str) -> dict | None:
 def create_app(
     db_path: Path | str | None = None,
     edit_dir: Path | str | None = None,
+    control_client=None,
 ) -> FastAPI:
     """読み取り専用モニタ UI の FastAPI アプリを生成する。
 
@@ -103,6 +104,12 @@ def create_app(
     edit_dir を指定すると M3 のレシピ編集ルートを登録する (state DB への接続は
     引き続き read-only。書き込みは edit_dir 配下の YAML と git のみ)。
     ``edit_dir=None`` なら編集ルートは一切登録せず M1/M2 と同一の read-only UI。
+
+    control_client (M4): コントロールプレーンへの ``ControlClient``。省略時は
+    ``default_control_path()`` を見る既定 client を使う。コントロールプレーン用
+    ルート ``/api/control/*`` は **常時登録** されるが、control.json が無い /
+    到達不能なら ``available: false`` / 503 を返す (UI はボタンを隠す)。テストで
+    monkeypatch できるよう引数で差し替え可能。
     """
     resolved = Path(db_path) if db_path is not None else default_store_path()
     store = ReadOnlyJobStore(resolved)
@@ -110,6 +117,10 @@ def create_app(
     edit_store: EditDirStore | None = None
     if edit_dir is not None:
         edit_store = EditDirStore(edit_dir)
+
+    if control_client is None:
+        from lab_executor.ui.control_client import ControlClient
+        control_client = ControlClient()
 
     app = FastAPI(title="lab-executor monitor", version=PKG_VERSION)
     templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
@@ -170,12 +181,16 @@ def create_app(
             store.list_target_runs(job_id),
         )
         sweep = _build_sweep_chart(store, job_id)
+        control_available = (
+            await asyncio.to_thread(control_client.available)
+        ) is not None
         return templates.TemplateResponse(
             request,
             "job_detail.html",
             {
                 "detail": detail,
                 "sweep_json": json.dumps(sweep) if sweep else None,
+                "control_available": control_available,
             },
         )
 
@@ -376,12 +391,115 @@ def create_app(
         return h
 
     # ============================================================
+    # M4: コントロールプレーン proxy ルート (常時登録)
+    # ============================================================
+    _register_control_routes(app, control_client)
+
+    # ============================================================
     # M3: レシピ編集ルート (edit_store があるときだけ登録)
     # ============================================================
     if edit_store is not None:
-        _register_edit_routes(app, templates, edit_store)
+        _register_edit_routes(app, templates, edit_store, control_client)
 
     return app
+
+
+# ================================================================
+# M4 コントロールプレーン proxy ルートの登録
+# ================================================================
+
+
+def _register_control_routes(app, control_client) -> None:
+    """UI → コントロールプレーンへの proxy ルート群を app に登録する。
+
+    実行系操作は UI プロセスでは行わず、必ず serve 内コントロールプレーンへ
+    転送する。POST は M3 と同じく ``Content-Type: application/json`` のみ。
+    コントロール無効 (control.json 無し / 到達不能) は 503。
+    """
+
+    def _require_json(request: Request) -> JSONResponse | None:
+        ctype = request.headers.get("content-type", "")
+        if not ctype.startswith("application/json"):
+            return JSONResponse(
+                status_code=415,
+                content={
+                    "error": "unsupported_media_type",
+                    "detail": "Content-Type: application/json のみ受け付けます",
+                },
+            )
+        return None
+
+    @app.get("/api/control/status")
+    async def api_control_status():
+        info = await asyncio.to_thread(control_client.available)
+        if info is None:
+            return {"available": False, "backend_id": None}
+        return {
+            "available": True,
+            "backend_id": info.get("backend_id"),
+            "pid": info.get("pid"),
+            "started_at": info.get("started_at"),
+        }
+
+    @app.post("/api/control/jobs/{job_id}/cancel")
+    async def api_control_cancel(request: Request, job_id: str):
+        bad = _require_json(request)
+        if bad is not None:
+            return bad
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001
+            return JSONResponse(
+                status_code=422,
+                content={"error": "invalid_json", "detail": "JSON body が不正です"},
+            )
+        if not isinstance(body, dict):
+            return JSONResponse(
+                status_code=422,
+                content={"error": "invalid_json", "detail": "object を送ってください"},
+            )
+        cancel_mode = body.get("cancel_mode", "after_current_step")
+        timeout_s = body.get("timeout_s", 30.0)
+        status, resp = await asyncio.to_thread(
+            control_client.cancel, job_id, cancel_mode, timeout_s,
+        )
+        return JSONResponse(status_code=status, content=resp)
+
+    @app.post("/api/control/start-recipe")
+    async def api_control_start_recipe(request: Request):
+        bad = _require_json(request)
+        if bad is not None:
+            return bad
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001
+            return JSONResponse(
+                status_code=422,
+                content={"error": "invalid_json", "detail": "JSON body が不正です"},
+            )
+        if not isinstance(body, dict):
+            return JSONResponse(
+                status_code=422,
+                content={"error": "invalid_json", "detail": "object を送ってください"},
+            )
+        resource_name = body.get("resource_name") or ""
+        recipe_name = body.get("recipe_name") or ""
+        if not resource_name or not recipe_name:
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "error": "invalid_request",
+                    "detail": "resource_name と recipe_name は必須です",
+                },
+            )
+        parameters = body.get("parameters") or {}
+        status, resp = await asyncio.to_thread(
+            control_client.start_recipe,
+            resource_name,
+            recipe_name,
+            parameters if isinstance(parameters, dict) else {},
+        )
+        return JSONResponse(status_code=status, content=resp)
 
 
 # ================================================================
@@ -446,7 +564,9 @@ def _build_dryrun(content: str, recipe_name: str, parameters: dict) -> dict:
     return dryrun_view(plan)
 
 
-def _register_edit_routes(app, templates, edit_store: EditDirStore) -> None:
+def _register_edit_routes(
+    app, templates, edit_store: EditDirStore, control_client=None
+) -> None:
     """レシピ編集ルート群を app に登録する。"""
 
     @app.exception_handler(EditStoreError)
@@ -468,10 +588,19 @@ def _register_edit_routes(app, templates, edit_store: EditDirStore) -> None:
     @app.get("/recipes", response_class=HTMLResponse)
     async def recipes_list(request: Request):
         files = edit_store.list_files()
+        control_available = False
+        if control_client is not None:
+            control_available = (
+                await asyncio.to_thread(control_client.available)
+            ) is not None
         return templates.TemplateResponse(
             request,
             "recipes.html",
-            {"files": files, "edit_dir": str(edit_store.root)},
+            {
+                "files": files,
+                "edit_dir": str(edit_store.root),
+                "control_available": control_available,
+            },
         )
 
     @app.get("/recipes/edit/{rel:path}", response_class=HTMLResponse)

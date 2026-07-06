@@ -1,5 +1,63 @@
 # 変更履歴
 
+## v2.23.0 — Web UI M4: コントロールプレーン (ジョブキャンセル + レシピ実行) (UI M4)
+
+合言葉: **「窓から手を伸ばすが、鍵は関所の内側にしか渡さない」**
+
+### 追加
+
+- `lab-executor serve --backend mock --control-port <PORT>` — serve プロセス内に
+  **127.0.0.1 固定** の HTTP コントロールプレーンを立て、`lab-executor ui` から
+  ジョブのキャンセル (3 モード) とレシピのジョブ投入を可能にする。`--control-port 0`
+  で OS 任せのポートを使う。環境変数 `LAB_EXECUTOR_CONTROL_PORT` でも指定可
+  (CLI 優先)。**未指定なら従来どおりコントロールプレーンは無効** (挙動不変)。
+  - `src/lab_executor/control_plane.py` — `create_control_app(job_mgr, *, token)`
+    (Starlette app) + `control.json` の read/write/remove + `default_control_path()`。
+    token は起動毎に `secrets.token_hex(32)`、比較は `secrets.compare_digest`。
+    starlette / JSONResponse は関数内で遅延 import (必須依存に足さない)。
+  - `server.py` に `compose_server()` を追加し、内部 `JobManager` を公開。
+    `create_server()` は `compose_server(...)[0]` を返す薄いラッパになり、
+    公開シグネチャ・挙動は不変。
+  - 実行系操作は MCP ツール (`tools/jobs.py`) と **同一の** `JobManager.cancel` /
+    `start_recipe_job` 経由。`override_safety` は body に来ても **常に False 固定**。
+    audit は `tool_name="control.cancel_job"` / `"control.start_recipe_job"`、
+    `client_id="control-plane"` で記録。
+  - MCP (stdio) とコントロールプレーン (uvicorn) を `asyncio.gather` で並走。
+    `control.json` は起動時に書き、終了時に削除 (finally + atexit で二重化)。
+- `lab-executor serve --backend mock --state-db <PATH>` — mock serve の Job state
+  を指定 SQLite ファイルに永続化する (省略時は従来どおり in-memory で挙動不変)。
+  mock serve は v2.1 から `JobStore(":memory:")` のため、そのままでは control
+  plane 経由で投入したジョブが `lab-executor ui` のモニタから見えない。
+  `lab-executor ui --db <同じ PATH>` と組み合わせることで E2E ループが閉じる。
+  `compose_server()` に `store_path` パラメータを追加 (default None = 不変)。
+  `create_server()` の公開シグネチャは不変。
+- UI プロキシ (`src/lab_executor/ui/control_client.py` + `ui/app.py`):
+  - `ControlClient` は `control.json` を読んで token を取得し (**ブラウザには
+    渡さない**)、`urllib` で HTTP 転送する。`available()` は `/control/health` を
+    token 付きで叩き 2xx なら info を返す (timeout 2s)。
+  - `/api/control/status` / `/api/control/jobs/{job_id}/cancel` /
+    `/api/control/start-recipe` を **常時登録** (control 無効時は 503)。POST は
+    `Content-Type: application/json` のみ (非 JSON は 415)。
+  - `job_detail.html`: 非終端ジョブにキャンセルボタン 3 種 (after_current_step /
+    immediate / safe_shutdown。後 2 者は confirm)。control available 時のみ表示。
+  - `recipes.html`: レシピ実行フォーム (resource_name + name=value パラメータ)。
+    control available 時のみ表示。
+- 設計文書 `docs/web_ui_m4_plan.md` / 利用者向け `docs/web_ui.md` に M4 追記。
+
+### 互換性
+
+- MCP tool surface 不変 (Stable 43 + Experimental 7 = 50)。`create_server()` の
+  公開シグネチャ不変。`tests/test_separation_boundary.py` / `diagnose tool-surface`
+  は green のまま。
+- コントロール無効時 (`--control-port` も env も無し) の serve は挙動が
+  1 行も変わらない (従来どおり `server.run()`)。
+- 必須依存に追加なし。コントロールプレーンは starlette + uvicorn を遅延 import し
+  (`[ui]` extra)、明示 `--control-port` 指定時に未インストールなら exit 1、
+  env 経由なら案内してコントロール無効で継続。
+- state DB への UI からの書き込みなし。実行系操作は必ずコントロールプレーンへ
+  プロキシする。
+- version を `2.23.0` に更新。UI_VERSION を `m4` に更新。
+
 ## v2.22.1 — result_json の UTF-8 直列化ハードニング
 
 合言葉: **「化けても落ちない、正しいものは変えない」**

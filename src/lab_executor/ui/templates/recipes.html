@@ -30,4 +30,86 @@
   </tbody>
 </table>
 {% endif %}
+
+{% if control_available and files %}
+<section class="control-section" id="run-recipe-panel">
+  <h2>レシピ実行</h2>
+  <p class="control-note">
+    実行は serve プロセス内のコントロールプレーン経由でジョブとして投入されます
+    (MCP ツールと同じ safety / audit を通ります)。
+  </p>
+  <form id="run-recipe-form" onsubmit="return false;">
+    <label>resource_name
+      <input type="text" name="resource_name" placeholder="GPIB0::1::INSTR">
+    </label>
+    <label>recipe_name
+      <input type="text" name="recipe_name" placeholder="safe_output_on">
+    </label>
+    <label>パラメータ (name=value、1 行 1 件)
+      <textarea name="parameters" rows="4"
+                placeholder="target_v=5.0&#10;current_limit=2.0"></textarea>
+    </label>
+    <button type="button" class="btn run-recipe" id="run-recipe-btn">実行</button>
+  </form>
+  <p class="control-result" id="run-result" hidden></p>
+  <script>
+    (function () {
+      var btn = document.getElementById("run-recipe-btn");
+      if (!btn) return;
+      var form = document.getElementById("run-recipe-form");
+      var result = document.getElementById("run-result");
+      function parseParams(text) {
+        var out = {};
+        (text || "").split("\n").forEach(function (line) {
+          var t = line.trim();
+          if (!t) return;
+          var i = t.indexOf("=");
+          if (i < 0) return;
+          var k = t.slice(0, i).trim();
+          var v = t.slice(i + 1).trim();
+          if (!k) return;
+          var num = Number(v);
+          out[k] = (v !== "" && !isNaN(num)) ? num : v;
+        });
+        return out;
+      }
+      btn.addEventListener("click", function () {
+        var resource = form.resource_name.value.trim();
+        var recipe = form.recipe_name.value.trim();
+        if (!resource || !recipe) {
+          result.hidden = false;
+          result.textContent = "resource_name と recipe_name は必須です";
+          return;
+        }
+        result.hidden = false;
+        result.textContent = "投入中…";
+        fetch("/api/control/start-recipe", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            resource_name: resource,
+            recipe_name: recipe,
+            parameters: parseParams(form.parameters.value),
+          }),
+        })
+          .then(function (r) { return r.json().then(function (b) {
+            return { status: r.status, body: b };
+          }); })
+          .then(function (o) {
+            if (o.status >= 200 && o.status < 300 && o.body.job_id) {
+              result.innerHTML = "投入完了: <a href=\"/jobs/" +
+                o.body.job_id + "\">" + o.body.job_id + "</a> (" +
+                (o.body.status || "?") + ")";
+            } else {
+              result.textContent = "エラー: " +
+                (o.body.detail || o.body.error || o.body.last_step_summary ||
+                 o.status);
+            }
+          })
+          .catch(function () { result.textContent = "通信エラー"; });
+      });
+    })();
+  </script>
+</section>
+{% endif %}
 {% endblock %}

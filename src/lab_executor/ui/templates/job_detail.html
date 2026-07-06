@@ -14,6 +14,62 @@
   <span class="resource">resource: {{ detail.job.resource_name }}</span>
 </div>
 
+{% if control_available and not detail.is_terminal %}
+<section class="control-section" id="cancel-panel">
+  <h2>ジョブ操作</h2>
+  <p class="control-note">
+    キャンセルは serve プロセス内のコントロールプレーン経由で実行されます
+    (MCP ツールと同じ経路)。
+  </p>
+  <div class="control-buttons">
+    <button type="button" class="btn cancel-after"
+            data-mode="after_current_step">現在のステップ後に停止</button>
+    <button type="button" class="btn cancel-immediate"
+            data-mode="immediate">即時停止</button>
+    <button type="button" class="btn cancel-safe"
+            data-mode="safe_shutdown">安全停止 (OUTP OFF)</button>
+  </div>
+  <p class="control-result" id="cancel-result" hidden></p>
+  <script>
+    (function () {
+      var panel = document.getElementById("cancel-panel");
+      if (!panel) return;
+      var result = document.getElementById("cancel-result");
+      function post(mode) {
+        var confirmNeeded = (mode === "immediate" || mode === "safe_shutdown");
+        if (confirmNeeded &&
+            !window.confirm("このモード (" + mode + ") で本当にキャンセルしますか?")) {
+          return;
+        }
+        result.hidden = false;
+        result.textContent = "キャンセル要求中… (" + mode + ")";
+        fetch("/api/control/jobs/{{ detail.job_id }}/cancel", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ cancel_mode: mode }),
+        })
+          .then(function (r) { return r.json().then(function (b) {
+            return { status: r.status, body: b };
+          }); })
+          .then(function (o) {
+            if (o.status >= 200 && o.status < 300) {
+              result.textContent = "状態: " + (o.body.status || "?") +
+                (o.body.is_terminal ? " (終端)" : "");
+            } else {
+              result.textContent = "エラー: " +
+                (o.body.detail || o.body.error || o.status);
+            }
+          })
+          .catch(function () { result.textContent = "通信エラー"; });
+      }
+      panel.querySelectorAll(".control-buttons .btn").forEach(function (b) {
+        b.addEventListener("click", function () { post(b.dataset.mode); });
+      });
+    })();
+  </script>
+</section>
+{% endif %}
+
 <section class="steps-section">
   <h2>ステップ実行履歴</h2>
   <table class="steps">

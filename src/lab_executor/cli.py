@@ -171,6 +171,27 @@ def _build_parser() -> argparse.ArgumentParser:
         "--dry-run", action="store_true",
         help="Compose server and list tools only (no transport start)",
     )
+    sp_serve.add_argument(
+        "--control-port", type=int, default=None,
+        help=(
+            "v2.23 (Web UI M4): enable the in-process control plane on "
+            "127.0.0.1:<PORT> (0 = OS-assigned). Lets `lab-executor ui` "
+            "cancel jobs / start recipes via a token in control.json. "
+            "Also settable via LAB_EXECUTOR_CONTROL_PORT (CLI wins). "
+            "Requires the [ui] extra. Omit to keep the default behavior "
+            "(control plane disabled, identical to prior versions)."
+        ),
+    )
+    sp_serve.add_argument(
+        "--state-db", default=None,
+        help=(
+            "v2.23 (Web UI M4): persist mock serve job state to this "
+            "SQLite file instead of in-memory (default: in-memory, "
+            "unchanged behavior). Use with `lab-executor ui --db <same "
+            "path>` so jobs started via the control plane are visible "
+            "in the monitor (E2E)."
+        ),
+    )
 
     # ---- ui (Web UI M1: 読み取り専用モニタ) ---------------------
     sp_ui = sub.add_parser(
@@ -563,9 +584,16 @@ def _cmd_serve(args: argparse.Namespace) -> int:
 
     if args.backend == "mock":
         from lab_executor.backends import MockBackend
-        from lab_executor.server import create_server, list_registered_tools
+        from lab_executor.server import (
+            compose_server, list_registered_tools,
+        )
         backend = MockBackend()
-        server = create_server(backend=backend, name="lab-executor")
+        # v2.23 (M4): --state-db 指定時は Job state をファイルに永続化
+        # (lab-executor ui と共有する E2E 用)。省略時は従来どおり in-memory。
+        state_db = getattr(args, "state_db", None)
+        server, job_mgr = compose_server(
+            backend=backend, name="lab-executor", store_path=state_db,
+        )
         tools = list_registered_tools(server)
         if args.dry_run:
             print(
@@ -576,20 +604,170 @@ def _cmd_serve(args: argparse.Namespace) -> int:
             for t in sorted(tools):
                 print(f"  - {t}")
             return 0
-        # 実 transport 起動
+
+        # v2.23 (M4): コントロールプレーン有効判定。CLI --control-port が
+        # 優先、無ければ env LAB_EXECUTOR_CONTROL_PORT。どちらも無ければ
+        # 従来どおり (server.run() のみ、挙動は 1 行も変わらない)。
+        control_port = _resolve_control_port(args)
+
+        if control_port is None:
+            # ---- 従来経路 (コントロール無効): 挙動不変 ----
+            print(
+                f"lab-executor MCP server starting (backend=mock, "
+                f"tools={len(tools)})...",
+                file=sys.stderr,
+            )
+            try:
+                server.run()
+            except KeyboardInterrupt:
+                return 0
+            return 0
+
+        # ---- v2.23 (M4): コントロールプレーン有効経路 ----
+        try:
+            import uvicorn  # noqa: F401  (遅延 import; 存在確認)
+            from lab_executor import control_plane  # noqa: F401
+            from starlette.applications import Starlette  # noqa: F401
+        except ImportError:
+            if args.control_port is not None:
+                # 明示指定なのに [ui] が無い → exit 1
+                print(
+                    "lab-executor serve --control-port は [ui] extra が "
+                    "必要です: pip install lab-executor-mcp[ui]",
+                    file=sys.stderr,
+                )
+                return 1
+            # env 経由の指定で [ui] 無し → 案内してコントロール無効で継続
+            print(
+                "WARNING: LAB_EXECUTOR_CONTROL_PORT が指定されましたが "
+                "[ui] extra が未インストールのためコントロールプレーンは "
+                "無効です (pip install lab-executor-mcp[ui])。",
+                file=sys.stderr,
+            )
+            print(
+                f"lab-executor MCP server starting (backend=mock, "
+                f"tools={len(tools)})...",
+                file=sys.stderr,
+            )
+            try:
+                server.run()
+            except KeyboardInterrupt:
+                return 0
+            return 0
+
         print(
             f"lab-executor MCP server starting (backend=mock, "
-            f"tools={len(tools)})...",
+            f"tools={len(tools)}, control-port={control_port})...",
             file=sys.stderr,
         )
         try:
-            server.run()
+            import asyncio
+            asyncio.run(
+                _serve_with_control(
+                    server, job_mgr, control_port,
+                    backend_id=backend.backend_id,
+                )
+            )
         except KeyboardInterrupt:
             return 0
         return 0
 
     print(f"unsupported backend: {args.backend}", file=sys.stderr)
     return 2
+
+
+def _resolve_control_port(args: argparse.Namespace) -> int | None:
+    """v2.23 (M4): コントロールプレーンのポートを解決する。
+
+    CLI ``--control-port`` が優先。未指定なら env
+    ``LAB_EXECUTOR_CONTROL_PORT``。どちらも無ければ None (無効)。
+    env が非整数なら無視して None を返す。
+    """
+    import os
+
+    if getattr(args, "control_port", None) is not None:
+        return int(args.control_port)
+    raw = os.environ.get("LAB_EXECUTOR_CONTROL_PORT")
+    if raw is None or raw.strip() == "":
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        print(
+            f"WARNING: LAB_EXECUTOR_CONTROL_PORT={raw!r} は整数ではありません "
+            "(コントロールプレーン無効)。",
+            file=sys.stderr,
+        )
+        return None
+
+
+async def _serve_with_control(
+    server, job_mgr, port: int, *, backend_id: str = "mock",
+) -> None:
+    """v2.23 (M4): MCP (stdio) とコントロールプレーン (uvicorn) を並走。
+
+    - bind は 127.0.0.1 固定 (外部 bind オプションは作らない)。
+    - token は起動毎に ``secrets.token_hex(32)`` で生成。
+    - port=0 (OS 任せ) を許可し、実ポートを control.json に書く。
+    - 終了時に control.json を削除 (finally + atexit の二重化)。
+    """
+    import asyncio
+    import atexit
+    import os
+    import secrets
+
+    import uvicorn
+
+    from lab_executor.control_plane import (
+        create_control_app,
+        default_control_path,
+        remove_control_file,
+        write_control_file,
+    )
+
+    token = secrets.token_hex(32)
+    pid = os.getpid()
+    app = create_control_app(
+        job_mgr, token=token, backend_id=backend_id, pid=pid,
+    )
+    config = uvicorn.Config(
+        app, host="127.0.0.1", port=port, log_level="warning",
+    )
+    ctl = uvicorn.Server(config)
+
+    ctl_path = default_control_path()
+
+    # kill -9 で残った control.json のため atexit でも掃除する (二重化)。
+    atexit.register(remove_control_file, str(ctl_path))
+
+    async def _write_control_when_bound() -> None:
+        # uvicorn がソケットを bind するまで待ち、実ポートを control.json に書く。
+        while not getattr(ctl, "started", False):
+            await asyncio.sleep(0.02)
+        actual_port = port
+        try:
+            servers = getattr(ctl, "servers", None) or []
+            if servers and servers[0].sockets:
+                actual_port = servers[0].sockets[0].getsockname()[1]
+        except Exception:  # noqa: BLE001 - 取得失敗時は指定 port を使う
+            actual_port = port
+        write_control_file(
+            ctl_path,
+            url=f"http://127.0.0.1:{actual_port}",
+            token=token,
+            pid=pid,
+            backend_id=backend_id,
+        )
+
+    try:
+        await asyncio.gather(
+            server.run_async(transport="stdio"),
+            ctl.serve(),
+            _write_control_when_bound(),
+        )
+    finally:
+        ctl.should_exit = True
+        remove_control_file(str(ctl_path))
 
 
 # ============================================================

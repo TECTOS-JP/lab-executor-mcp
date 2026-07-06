@@ -16,4 +16,4 @@ FastAPI 依存モジュールを import しない。
 """
 from __future__ import annotations
 
-UI_VERSION = "m3"
+UI_VERSION = "m4"

@@ -189,9 +189,86 @@ commit のみ失敗した場合 (変更なし等) は **ファイルは保存済
 - フォーム⇔YAML 双方向同期、新規ファイル作成、Mock 実行での dry-run、
   実行中ジョブとの競合検知、認証。
 
-## M4 以降の予定
+## M4: コントロールプレーン (ジョブキャンセル + レシピ実行)
 
-- **M4**: ジョブ操作 (cancel など)
+M4 で UI は初めて **実行系操作** (ジョブのキャンセル / レシピのジョブ投入) を
+できるようになる。ただし UI プロセスは実行を **自分では行わず**、serve プロセス内
+の HTTP コントロールプレーンへ **プロキシ** する。実行は MCP ツール
+(`tools/jobs.py`) と同一の `JobManager.cancel` / `start_recipe_job` を通り、
+safety / audit を共通化する。state DB は引き続き read-only。
+
+### 有効化
+
+```
+lab-executor serve --backend mock --control-port 8300
+```
+
+- `--control-port 0` で OS 任せのポートを使う (ポート衝突回避)。
+- 環境変数 `LAB_EXECUTOR_CONTROL_PORT` でも指定可 (CLI が優先)。
+- **`--control-port` も env も無ければコントロールプレーンは無効** で、serve の
+  挙動は従来と完全に同一 (1 行も変わらない)。
+- bind は **127.0.0.1 固定** (外部 bind オプションは提供しない)。
+- 明示 `--control-port` 指定時に `[ui]` extra が未インストールなら exit 1、
+  env 経由指定なら案内してコントロール無効で継続する。
+
+### E2E: mock serve + UI で state DB を共有する (`--state-db`)
+
+mock serve の Job state は既定で **in-memory** (`JobStore(":memory:")`、v2.1
+からの仕様) のため、control plane 経由で投入したジョブはそのままでは
+`lab-executor ui` のモニタに表示されない。`--state-db` で永続化先を指定し、
+UI 側の `--db` に同じパスを渡すと E2E ループが閉じる:
+
+```
+# ターミナル 1: serve (コントロールプレーン有効 + state をファイルに永続化)
+lab-executor serve --backend mock --control-port 0 --state-db C:\tmp\lab_state.sqlite
+
+# ターミナル 2: UI (同じ state DB を read-only で監視)
+lab-executor ui --db C:\tmp\lab_state.sqlite
+```
+
+UI のレシピ実行フォームから投入したジョブがダッシュボードに現れ、ジョブ詳細
+からキャンセルできる。`--state-db` 省略時は従来どおり in-memory (挙動不変)。
+実機経路 (`visa-mcp serve`) は元々ファイル DB (`default_store_path()`) を使う
+ため、この指定は不要。
+
+### control.json (ディスカバリ)
+
+serve がコントロール有効で起動すると `default_store_path().parent /
+"control.json"` (= `~/.visa-mcp/control.json`、`VISA_MCP_STATE_DB` 設定時はその隣)
+に `{"url", "token", "pid", "backend_id", "started_at"}` を書く。
+
+- token は起動毎に `secrets.token_hex(32)` で生成する。
+- serve 終了時に削除する (finally + atexit で二重化。`kill -9` では残る前提で、
+  UI は使用前に必ず `/control/health` を叩いて生死を確認する)。
+- 複数 serve は last-writer-wins (M4 の割り切り)。UI は health が通った 1 個だけ使う。
+
+### UI ボタン
+
+- `lab-executor ui` は control.json を読み、`/api/control/status` が
+  `available: true` のときだけボタンを出す (token は **ブラウザに渡さない**。
+  UI プロセスが control.json から読んで転送時のヘッダに載せる)。
+- ジョブ詳細: 非終端ジョブに「現在のステップ後に停止 / 即時停止 / 安全停止」の
+  3 モード。即時停止・安全停止は confirm ダイアログを出す。
+- レシピ一覧 (`--edit-dir` 有効時): 各レシピの実行フォーム (resource_name +
+  name=value パラメータ)。
+
+### 制約
+
+- `override_safety` は body に来ても **常に False 固定** で無視する。
+- audit には `tool_name="control.cancel_job"` / `"control.start_recipe_job"`、
+  `client_id="control-plane"` で記録する。
+- コントロールプレーンは starlette + uvicorn を **遅延 import** し、必須依存には
+  足さない (`[ui]` extra)。POST は `Content-Type: application/json` のみ。
+
+### visa-mcp serve での有効化
+
+M4 で対応するのは **`lab-executor serve` のみ**。`visa-mcp serve` は独自の起動
+経路を持つため、そちらでコントロールプレーンを有効化するには **visa-mcp 側の
+対応が別途必要** (別タスク)。
+
+## M5 以降の予定
+
+- DSL プラン投入 / グループジョブ投入、認証の高度化。
 
 いずれも read-only 境界 (state DB) を保ったまま段階的に拡張する。詳細は
 `wiki/concepts/lab-executor-web-ui.md` を参照。
