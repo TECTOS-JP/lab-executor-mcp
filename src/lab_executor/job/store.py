@@ -290,6 +290,41 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def _dumps_utf8_safe(obj: Any | None) -> str | None:
+    """result / error dict を UTF-8 で安全に round-trip 可能な JSON へ直列化する。
+
+    背景 (v2.22.x 文字化け調査):
+      wait 系ジョブの WaitConditionTimeout など、日本語を含む message を
+      result_json として保存する。通常経路 (MockBackend 等) では
+      ``json.dumps(ensure_ascii=False)`` の結果は妥当な UTF-8 であり、
+      ``last_step_summary`` (素の TEXT) と result_json 内 message は
+      同一バイト列になる。
+
+      しかし実機 (日本語 Windows + NI-VISA) では、VisaError 等の例外
+      メッセージが CP932 由来のバイトを ``surrogateescape`` で抱えた
+      ``str`` として dict に紛れ込むことがある。その場合:
+        - ``ensure_ascii=False`` の json.dumps は成功する
+        - しかし直後の SQLite への保存 (TEXT = UTF-8 encode) が
+          ``UnicodeEncodeError: surrogates not allowed`` で失敗し、
+          steps_executed ごと結果が失われる / 破損する。
+
+      ここで surrogate を含む文字列を UTF-8 へ lossless に畳み込んでから
+      保存することで、message が壊れず・欠落せず round-trip できることを
+      保証する。正常な UTF-8 文字列 (日本語含む) は一切変化しない。
+    """
+    if obj is None:
+        return None
+    text = json.dumps(obj, ensure_ascii=False, default=str)
+    # surrogate (孤立サロゲート = 非UTF-8 バイト由来) を検知したら
+    # surrogatepass で bytes 化 → replace で decode し、確実に
+    # UTF-8 保存可能な文字列へ正規化する。
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        text = text.encode("utf-8", "surrogatepass").decode("utf-8", "replace")
+    return text
+
+
 class JobStore:
     """
     Job メタデータの SQLite 永続化 (スレッドセーフ)。
@@ -446,10 +481,7 @@ class JobStore:
             new_step = rec.current_step_index if current_step_index is None else current_step_index
             new_err = rec.error_class if error_class is None else error_class
             new_summary = rec.last_step_summary if last_step_summary is None else last_step_summary
-            new_result_json = (
-                json.dumps(result, ensure_ascii=False, default=str)
-                if result is not None else None
-            )
+            new_result_json = _dumps_utf8_safe(result)
 
             self._connect().execute(
                 """
@@ -563,10 +595,7 @@ class JobStore:
           verify_passed / verify_failed
         """
         now = _now_iso()
-        payload_json = (
-            json.dumps(payload, ensure_ascii=False, default=str)
-            if payload is not None else None
-        )
+        payload_json = _dumps_utf8_safe(payload)
         with self._write_lock:
             try:
                 self._connect().execute(
@@ -650,8 +679,8 @@ class JobStore:
                 """,
                 (
                     status, now,
-                    json.dumps(result, ensure_ascii=False, default=str) if result else None,
-                    json.dumps(error, ensure_ascii=False, default=str) if error else None,
+                    _dumps_utf8_safe(result) if result else None,
+                    _dumps_utf8_safe(error) if error else None,
                     step_row_id,
                 ),
             )
@@ -718,8 +747,8 @@ class JobStore:
                         json.dumps(required_resources or [], ensure_ascii=False),
                         json.dumps(bindings or {}, ensure_ascii=False),
                         json.dumps(parameters or {}, ensure_ascii=False, default=str),
-                        json.dumps(result, ensure_ascii=False, default=str) if result else None,
-                        json.dumps(error, ensure_ascii=False, default=str) if error else None,
+                        _dumps_utf8_safe(result) if result else None,
+                        _dumps_utf8_safe(error) if error else None,
                     ),
                 )
             else:
@@ -735,8 +764,8 @@ class JobStore:
                     (
                         status,
                         is_start, now,
-                        json.dumps(result, ensure_ascii=False, default=str) if result else None,
-                        json.dumps(error, ensure_ascii=False, default=str) if error else None,
+                        _dumps_utf8_safe(result) if result else None,
+                        _dumps_utf8_safe(error) if error else None,
                         existing["id"],
                     ),
                 )

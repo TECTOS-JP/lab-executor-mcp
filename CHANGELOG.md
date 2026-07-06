@@ -1,5 +1,22 @@
 # 変更履歴
 
+## v2.22.1 — result_json の UTF-8 直列化ハードニング
+
+合言葉: **「化けても落ちない、正しいものは変えない」**
+
+### 修正
+
+- `job/store.py` に `_dumps_utf8_safe()` を追加し、result / error /
+  payload の全直列化経路に適用。実機 (日本語 Windows + NI-VISA) で
+  例外メッセージに surrogate 由来バイトが混入した場合でも、SQLite
+  保存が `UnicodeEncodeError` でクラッシュして steps_executed が
+  失われる事故を防ぐ。正常な日本語 UTF-8 は round-trip 不変。
+- 回帰テスト 3 件 (`tests/test_polling_wait_v2223_encoding.py`)。
+
+### 互換性
+
+- MCP tool surface 不変。version を `2.22.1` に更新。
+
 ## v2.22.0 — Web UI M3: レシピエディタ (検証 → dry-run → git 保存) (UI M3)
 
 合言葉: **「窓の中に手を入れる、ただし検証の関所を通って」**
