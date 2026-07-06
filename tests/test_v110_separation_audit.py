@@ -22,20 +22,10 @@ ROOT = Path(__file__).parent.parent
 
 # 要人間判断 (test debt triage フェーズ1):
 # 以下 2 test は v1.10 当時「visa-mcp からの分割準備」を監査するもので、
-# docs/separation/{module_ownership,split_manifest}.yaml が分割 *前* の
-# visa_mcp.* module / src/visa_mcp/*.py path を列挙している前提だった。
-# v2.0 で分割は完了し、本 repo には visa_mcp ツリーが存在しないため、
-# これらの planning artifact は現状と整合しない (ghost module 76 件 /
-# 実在 path 7/47)。planning doc を lab_executor.* へ全面書き換えするか、
-# それとも歴史的監査として削除するかは人間の判断が必要なため、
-# 安全側に倒して skip 化する。詳細は docs/test_debt_triage.md 参照。
-_SPLIT_PLANNING_OBSOLETE = pytest.mark.skip(
-    reason=(
-        "要人間判断: v1.10 分割準備監査。docs/separation/*.yaml は分割前の "
-        "visa_mcp.* を列挙しており v2.0 完了後の本 repo と不整合。"
-        "planning doc 書き換え or 削除の判断待ち (test_debt_triage.md)。"
-    )
-)
+# v1.10 分割準備監査のうち、分割前の visa_mcp ツリーを前提とするテスト
+# (test_module_ownership_manifest_complete / test_split_manifest_paths_exist)
+# は v2.0 分割完了に伴い 2026-07-04 に削除した (人間判断済み)。
+# 経緯: docs/test_debt_triage.md
 
 
 def test_version_is_1_10_or_later():
@@ -45,18 +35,6 @@ def test_version_is_1_10_or_later():
     major, minor = parts[0], parts[1]
     assert (major, minor) >= (1, 10), (
         f"v1.10 audit テストは v1.10+ で動く想定 (got {__version__})")
-
-
-@_SPLIT_PLANNING_OBSOLETE
-def test_module_ownership_manifest_complete():
-    """module_ownership.yaml が src/visa_mcp 配下の全 module を分類"""
-    from lab_executor.dev.ownership_check import collect_report
-    rep = collect_report()
-    assert rep["unclassified_modules"] == [], (
-        f"未分類 module: {rep['unclassified_modules']}")
-    assert rep["manifest_ghost_modules"] == [], (
-        f"manifest 幽霊 module: {rep['manifest_ghost_modules']}")
-    assert rep["declared_modules_count"] == rep["actual_modules_count"]
 
 
 def test_no_new_lab_to_visa_top_level_violations():
@@ -78,26 +56,6 @@ def test_known_v1_11_to_resolve_tracked():
     # report で known_pending として一致登録されている (0 でも OK)
     assert rep["known_v1_11_to_resolve_count"] == len(
         KNOWN_V111_TO_RESOLVE)
-
-
-@_SPLIT_PLANNING_OBSOLETE
-def test_split_manifest_paths_exist():
-    """split_manifest.yaml に列挙された path が概ね実在"""
-    manifest_path = ROOT / "docs" / "separation" / "split_manifest.yaml"
-    data = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
-    move_paths = data.get("move_to_lab_executor", []) or []
-    keep_paths = data.get("keep_in_visa_mcp", []) or []
-    # 少なくとも 80% は実在
-    all_paths = [p for p in move_paths + keep_paths
-                  if not p.startswith("docs/") and "raw_visa" not in p]
-    existing = sum(1 for p in all_paths if (ROOT / p).exists())
-    # v1.10: 70% で OK (draft)
-    # v1.11: split_files 予定を除き 100% にする TODO (notes.md 参照)
-    # v2.0.0-rc1: move_to_lab_executor / keep_in_visa_mcp は 100%、
-    #             split_files はすべて resolved
-    assert existing / max(len(all_paths), 1) > 0.7, (
-        f"split_manifest の path 多くが実在しない: "
-        f"{existing}/{len(all_paths)}")
 
 
 def test_dependency_graph_generated(tmp_path):

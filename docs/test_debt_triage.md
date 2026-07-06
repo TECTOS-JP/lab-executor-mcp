@@ -153,7 +153,15 @@ docs / README / CI workflow / 設定側のみを修正して負債を解消し�
   `LAB_EXECUTOR_HW_TESTS=1` を設定した場合のみ実行される。ファイル内 28 件が skip。
   `hardware` マーカーは `pyproject.toml` に登録済み。
 
-## 要人間判断として残した項目 (skip 化 8 件)
+## 要人間判断として残した項目 (skip 化 8 件) — 【解決済み 2026-07-04】
+
+> **決定: 削除。** 所有者の判断により、分割プロセス監査テスト群は
+> 2026-07-04 に削除した (skip 8 件 + 同グループで空振り pass していた
+> `test_split_rehearsal_candidate_has_no_visa_mcp_imports` /
+> `test_split_rehearsal_cli_verify_flag` の 2 件、計 10 件)。
+> `src/lab_executor/dev/split_rehearsal.py` (tool 本体) と
+> `docs/separation/*.yaml` は残置 (指示は「テスト群の削除」のため)。
+> 以下は当時の記録として保持する。
 
 分割プロセス *自体* を監査するテスト群。分割が完了した本 repo では前提
 (src/visa_mcp ツリー・分割前 planning artifact) が失われており、検査が
