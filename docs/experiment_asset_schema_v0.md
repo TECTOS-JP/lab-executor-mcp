@@ -12,7 +12,11 @@ doi:10.11410/kenbikyo.59.1_20）+ 自動実験エコシステム構想メモ（2
 > - `level_verified` は資産に書き込まず、`asset check` のレポートで返す。
 > - `requires:`（L4 の capability 宣言）は `RecipeDefinition` の **optional**
 >   フィールド。既存 YAML の検証結果は不変。
-> - `dry_run.ok`（L5）は builder が自動記入せず、将来 M3 の dry-run 実行記録を接続する。
+> - `dry_run.ok`（L5）は **v0.2 (v2.26.0) で builder が記入できる**。
+>   `asset export --dry-run-now` で export 時に同梱レシピを `recipe_to_plan` で
+>   コンパイル検証し、同梱装置定義を検証して結果を書き込む（成功 `ok=true` +
+>   `step_count`、失敗 `ok=false` + `error`、ただし export 自体は失敗しない）。
+>   v0.1 では builder は自動記入せず API 経由 (`build_asset`) でのみ L5 に到達できた。
 
 ## 目的
 

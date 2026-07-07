@@ -571,6 +571,21 @@ def _build_parser() -> argparse.ArgumentParser:
         "--declare-level", dest="declare_level", type=int, default=None)
     asset_export.add_argument(
         "--git-commit", dest="git_commit", default=None)
+    asset_export.add_argument(
+        "--dry-run-now", dest="dry_run_now", action="store_true",
+        help=(
+            "v2.26: export 時に同梱レシピをコンパイル検証し、結果を "
+            "asset.yaml の dry_run に記録する (L5 到達用)。失敗しても "
+            "export 自体は成功する"
+        ),
+    )
+    asset_export.add_argument(
+        "--meta", dest="meta", default=None,
+        help=(
+            "v2.26: conditions / hazards / expected_results / sample を "
+            "一括指定する YAML ファイル。未知のトップレベルキーはエラー"
+        ),
+    )
     asset_export.add_argument("--json", action="store_true")
 
     asset_check = asset_sub.add_parser(
@@ -1631,7 +1646,47 @@ def _cmd_asset(args: argparse.Namespace) -> int:
     sub = getattr(args, "asset_command", None)
 
     if sub == "export":
+        import yaml as _yaml
+
         from lab_executor.asset import build_asset
+
+        # --meta: YAML ファイルを読み、未知トップレベルキーは明確なエラーで
+        # 弾く (誤記で L5 を逃すのを防ぐため、黙って無視しない)。
+        meta: dict | None = None
+        if getattr(args, "meta", None):
+            meta_path = _P(args.meta)
+            if not meta_path.exists():
+                print(f"asset export: --meta file not found: {meta_path}",
+                      file=sys.stderr)
+                return 1
+            try:
+                loaded = _yaml.safe_load(
+                    meta_path.read_text(encoding="utf-8"))
+            except Exception as e:
+                print(f"asset export: --meta YAML parse failed: {e}",
+                      file=sys.stderr)
+                return 1
+            if loaded is None:
+                loaded = {}
+            if not isinstance(loaded, dict):
+                print(
+                    "asset export: --meta must be a YAML mapping "
+                    "(conditions / hazards / expected_results / sample)",
+                    file=sys.stderr,
+                )
+                return 1
+            allowed = {"conditions", "hazards", "expected_results", "sample"}
+            unknown = sorted(set(loaded.keys()) - allowed)
+            if unknown:
+                print(
+                    "asset export: --meta unknown top-level key(s): "
+                    f"{', '.join(unknown)} "
+                    f"(allowed: {', '.join(sorted(allowed))})",
+                    file=sys.stderr,
+                )
+                return 1
+            meta = loaded
+
         try:
             res = build_asset(
                 job_id=args.job,
@@ -1643,6 +1698,8 @@ def _cmd_asset(args: argparse.Namespace) -> int:
                 analysis_path=_P(args.analysis) if args.analysis else None,
                 declare_level=args.declare_level,
                 git_commit=args.git_commit,
+                dry_run_now=getattr(args, "dry_run_now", False),
+                meta=meta,
             )
         except KeyError:
             print(f"asset export: job not found: {args.job}",
@@ -1660,6 +1717,15 @@ def _cmd_asset(args: argparse.Namespace) -> int:
             print(f"  level_declared: {res['level_declared']}")
             print(f"  contents:       {res['contents_count']} files")
             print(f"  sha256:         {res['sha256']}")
+            dr = res.get("dry_run")
+            if dr is None:
+                print("  dry_run:        (not requested)")
+            elif dr.get("ok"):
+                print(
+                    f"  dry_run:        ok (step_count="
+                    f"{dr.get('step_count')})")
+            else:
+                print(f"  dry_run:        FAILED: {dr.get('error')}")
         return 0
 
     if sub == "check":

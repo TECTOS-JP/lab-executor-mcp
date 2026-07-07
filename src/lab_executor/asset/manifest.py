@@ -48,9 +48,17 @@ class ExpectedResult(BaseModel):
 
 
 class DryRunInfo(BaseModel):
-    """Phase B (L5)。dry-run 検証記録。"""
+    """Phase B (L5)。dry-run 検証記録。
+
+    v0.2 (v2.26.0): builder が ``--dry-run-now`` で export 時に
+    梱包レシピをコンパイル検証し、その結果をここに記入できる。
+    """
     performed_at: str | None = None
     ok: bool | None = None
+    method: str | None = None            # 例: recipe_to_plan+validate@export
+    runtime: str | None = None           # lab-executor-mcp <version>
+    step_count: int | None = None
+    error: str | None = None             # ok=False のときの一行要約
 
 
 class ContentEntry(BaseModel):

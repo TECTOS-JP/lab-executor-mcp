@@ -29,6 +29,7 @@ from fastmcp import FastMCP
 
 from lab_executor.job import JobManager
 from lab_executor.response_envelope import make_envelope, make_error
+from lab_executor.tools.observation import _value_numeric_from_result
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +50,23 @@ RESULT_COLUMNS = (
     "sweep_index",
     "sweep_value",
 )
+
+
+def _coerce_number(value: Any) -> float | int | None:
+    """value を数値化する (bool は除外、数値文字列は float 化)。
+
+    observation._value_numeric_from_result 内の _as_number と同じ規約。
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return value
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return None
+    return None
 
 
 def _resolve_export_dir() -> Path:
@@ -271,6 +289,24 @@ def _extract_result_rows(
                     "measurement": r.get("command") or s.get("step_type"),
                     "value": v,
                     "unit": r.get("unit", ""),
+                })
+            # v2.25.1: レシピジョブの step result 対応。recipe 実行では
+            # result 直下に value_numeric を持つ形や、parsed の数値が
+            # 文字列のまま残る形があり、上の parsed 分岐では数値行が
+            # 出ない。UI (get_job_instrument_view) と同じ寛容な抽出
+            # (_value_numeric_from_result) で value_numeric 行を補完し、
+            # raw 行との対応 (asset check L3) を成立させる。
+            vn = _coerce_number(r.get("value_numeric"))
+            if vn is None:
+                vn = _value_numeric_from_result(r)
+            if vn is not None:
+                cmd_name = r.get("command") or s.get("step_type")
+                rows.append({
+                    **common,
+                    "measurement": (f"{cmd_name}.value_numeric"
+                                    if cmd_name else "value_numeric"),
+                    "value": vn,
+                    "unit": "",
                 })
 
     # target_runs: 同じく result 内のキー抽出

@@ -1,5 +1,52 @@
 # 変更履歴
 
+## v2.26.0 — 実験資産 v0.2: dry-run 接続 + CLI 単独での L5 到達
+
+合言葉: **「梱包物そのものを検証してこそ、資産は自立を名乗れる」**
+
+### 修正
+
+- **export の結果行抽出をレシピジョブに対応**（並行セッション作業、v2.25.1 相当を
+  本バージョンに統合）。recipe 実行の step result（`parsed` を持たない /
+  数値が文字列のまま等の形）でも、observation と同じ寛容な抽出で
+  `value_numeric` 行を補完し、raw 行との対応（asset check L3）を成立させる。
+  RESULT_COLUMNS の列契約・既存 export テストの挙動は不変。
+  回帰テスト: `tests/test_v2_25_1_recipe_export_rows.py`。
+
+### 追加
+
+- **`lab-executor asset export --dry-run-now`** — export 時に builder 自身が
+  同梱レシピを `recipe_to_plan` でコンパイル検証し、同梱装置定義を
+  `validate_instrument_file`(非 strict) で検証して、その結果を asset.yaml の
+  `dry_run` に記録する。成功で `ok=true` + `step_count`、失敗 (コンパイル例外 /
+  検証 errors / 定義・レシピ不在) は `ok=false` + `error` (一行要約)。
+  **dry-run 失敗でも export 自体は成功する** (L5 に届かないだけ)。UI M3 の
+  過去 dry-run 記録ではなく「梱包物そのもの」を検証するため、資産内容と
+  検証内容が乖離しない。
+- **`lab-executor asset export --meta FILE`** — `conditions` / `hazards` /
+  `expected_results` / `sample` を 1 つの YAML ファイルで一括指定する
+  (v0.1 で CLI 未対応だった L5 メタデータを CLI から書けるようにした)。
+  未知のトップレベルキーは黙って無視せず明確なエラーで **exit 1**
+  (誤記で L5 を逃すのを防ぐ)。meta 指定は `build_asset` の個別引数より優先。
+- 上記 2 つにより **CLI だけで L5 資産を作れる** ようになった
+  (v0.1 の残ギャップ「L5 は API 経由でのみ到達可能」を解消)。
+- `DryRunInfo` に `method` / `runtime` / `step_count` / `error` を追加。
+- `build_asset(..., dry_run_now=False, meta=None)` 引数を追加。戻り値に
+  `dry_run` を追加 (CLI の人間向け出力に 1 行反映)。
+
+### ドキュメント
+
+- `docs/asset_usage.md` に `--dry-run-now` / `--meta` と CLI 単独 L5 到達手順、
+  meta ファイル例を追記。
+- `docs/experiment_asset_schema_v0.md` の「dry_run.ok は builder が自動記入せず」
+  注記を v0.2 の挙動に更新。
+
+### スコープ外 (据え置き)
+
+- MCP ツール面 50 個は不変 / `levels.py` の判定基準は不変 /
+  `tools/export.py` には触れていない (bundle 生成コアは v0.1 で抽出済みの
+  `build_bundle_files` を再利用)。
+
 ## v2.25.0 — 実験資産 v0.1: asset export / check + L4/L5 基盤
 
 合言葉: **「資産は自立して初めて流通する — 独立可用性を機械が刻む」**

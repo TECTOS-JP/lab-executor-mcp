@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import tempfile
 import uuid
 import zipfile
 from datetime import datetime, timezone
@@ -87,6 +88,83 @@ def _find_recipe_and_instruments(
     return recipe_fragment, instruments
 
 
+_META_KEYS = ("conditions", "hazards", "expected_results", "sample")
+
+
+def _run_dry_run(
+    recipe_fragment: dict | None,
+    instr_list: list[tuple[str, str]],
+    *,
+    parameters: dict,
+    resource_name: str,
+) -> dict[str, Any]:
+    """export 時に梱包レシピをコンパイル検証し dry_run 記録を返す。
+
+    成功: recipe_to_plan が通り、同梱 instrument 定義が (非 strict) 検証で
+    errors 0 なら ``ok=True`` + step_count。
+    失敗 (定義 or レシピ不在 / コンパイル例外 / 検証 errors) は ``ok=False`` +
+    一行 error を返す。**呼び出し側は export を失敗させないこと。**
+    """
+    import lab_executor as _le
+    from lab_executor.recipe_executor import recipe_to_plan
+    from lab_executor.models.instrument_def import RecipeDefinition
+
+    runtime = f"lab-executor-mcp {getattr(_le, '__version__', '?')}"
+    base: dict[str, Any] = {
+        "performed_at": _now_iso(),
+        "method": "recipe_to_plan+validate@export",
+        "runtime": runtime,
+    }
+
+    def _fail(msg: str) -> dict[str, Any]:
+        return {**base, "ok": False, "step_count": None, "error": msg}
+
+    if not recipe_fragment or not recipe_fragment.get("definition"):
+        return _fail("recipe fragment not found (レシピ定義が同梱されていない)")
+    if not instr_list:
+        return _fail("instrument definition not found (装置定義が同梱されていない)")
+
+    # 1. レシピをコンパイル (recipe_to_plan)
+    try:
+        recipe = RecipeDefinition(**(recipe_fragment.get("definition") or {}))
+        plan = recipe_to_plan(
+            recipe, dict(parameters or {}),
+            primary_resource=resource_name or None,
+        )
+        step_count = len(plan.steps)
+    except Exception as e:  # noqa: BLE001 (一行要約に集約)
+        return _fail(f"recipe compile failed: {type(e).__name__}: {e}")
+
+    # 2. 同梱装置定義を (非 strict) 検証
+    from lab_executor.registry import validate_instrument_file
+
+    for slug, text in instr_list:
+        tmp = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".yaml", delete=False, encoding="utf-8",
+            ) as tf:
+                tf.write(text)
+                tmp = tf.name
+            report = validate_instrument_file(tmp, strict=False)
+            if report.errors:
+                return _fail(
+                    f"instrument validation failed ({slug}): "
+                    f"{report.errors[0]}")
+        except Exception as e:  # noqa: BLE001
+            return _fail(
+                f"instrument validation error ({slug}): "
+                f"{type(e).__name__}: {e}")
+        finally:
+            if tmp:
+                try:
+                    Path(tmp).unlink()
+                except Exception:
+                    pass
+
+    return {**base, "ok": True, "step_count": step_count}
+
+
 def build_asset(
     *,
     job_id: str,
@@ -102,6 +180,8 @@ def build_asset(
     hazards: dict | None = None,
     expected_results: list | None = None,
     sample: dict | None = None,
+    dry_run_now: bool = False,
+    meta: dict | None = None,
 ) -> dict[str, Any]:
     """完了 Job から実験資産 zip を生成する。
 
@@ -152,6 +232,22 @@ def build_asset(
         for slug, text in instr_list:
             files[f"instrument/{slug}.yaml"] = text.encode("utf-8")
 
+        # 2b. meta マージ (meta が個別引数より優先。両方指定時は meta 勝ち)
+        meta = meta or {}
+        eff_conditions = meta.get("conditions", conditions)
+        eff_hazards = meta.get("hazards", hazards)
+        eff_expected_results = meta.get("expected_results", expected_results)
+        eff_sample = meta.get("sample", sample)
+
+        # 2c. dry-run 検証 (--dry-run-now): 失敗しても export は継続する
+        dry_run = None
+        if dry_run_now:
+            dry_run = _run_dry_run(
+                recipe_fragment, instr_list,
+                parameters=job_record.get("parameters", {}) or {},
+                resource_name=job_record.get("resource_name", "") or "",
+            )
+
         # 3. analysis/
         if analysis_path is not None:
             ap = Path(analysis_path)
@@ -187,11 +283,11 @@ def build_asset(
                 "runtime": f"lab-executor-mcp {getattr(_le, '__version__', '?')}",
                 "git_commit": git_commit,
             },
-            conditions=conditions or {},
-            sample=sample,
-            hazards=hazards,
-            expected_results=expected_results or [],
-            dry_run=None,
+            conditions=eff_conditions or {},
+            sample=eff_sample,
+            hazards=eff_hazards,
+            expected_results=eff_expected_results or [],
+            dry_run=dry_run,
             contents=[c.model_dump() for c in contents],
         )
         asset_yaml = yaml.safe_dump(
@@ -221,6 +317,7 @@ def build_asset(
             "level_declared": level_declared,
             "contents_count": len(contents),
             "sha256": hashlib.sha256(zip_bytes).hexdigest(),
+            "dry_run": dry_run,
         }
     finally:
         store.close()

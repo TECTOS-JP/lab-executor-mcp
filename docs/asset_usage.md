@@ -1,4 +1,4 @@
-# 実験資産 (experiment asset) の使い方 (v0.1 / v2.25.0)
+# 実験資産 (experiment asset) の使い方 (v0.2 / v2.26.0)
 
 実験資産は、完了 Job を **独立可用性レベル L0〜L5** で格付けした 1 つの zip
 アーカイブ。MaiML (JIS K 0200:2024) の独立可用性概念に基づく。仕様の正本は
@@ -15,7 +15,8 @@ lab-executor asset export \
     --db <state.sqlite> \
     --instruments-dir <装置定義 YAML のディレクトリ> \
     [--out PATH] [--title STR] [--license SPDX-ID] \
-    [--analysis PATH] [--declare-level N] [--git-commit HASH] [--json]
+    [--analysis PATH] [--declare-level N] [--git-commit HASH] \
+    [--dry-run-now] [--meta META.yaml] [--json]
 ```
 
 - `--out` を省略すると `~/.visa-mcp/exports/<asset_id>.asset.zip` に出力。
@@ -24,6 +25,10 @@ lab-executor asset export \
 - `--instruments-dir` から、Job の recipe を持つ装置定義 YAML を探して同梱する。
   特定できない場合はエラーにならず、instrument 無しで続行する (宣言可能レベルが
   下がるだけ)。
+- `--dry-run-now` (v0.2) — export 時に同梱レシピをコンパイル検証し、結果を
+  `asset.yaml` の `dry_run` に記録する (L5 の要件)。詳細は下記「L5 に上げる」。
+- `--meta META.yaml` (v0.2) — `conditions` / `hazards` / `expected_results` /
+  `sample` を 1 ファイルで一括指定する (下記「meta ファイル」)。
 
 ### 資産 zip レイアウト
 
@@ -86,13 +91,61 @@ recipes:
 
 `requires` は optional。無い既存レシピの検証結果は一切変わらない。
 
+### meta ファイル — L2/L5 メタデータを CLI から書く (v0.2)
+
+`--meta META.yaml` は、トップレベルに `conditions` / `hazards` /
+`expected_results` / `sample` の任意サブセットを持つ YAML ファイル。
+
+```yaml
+conditions:
+  calibration: "2026-06 校正証明書 #1234"
+  environment: "23±1°C, 45%RH"
+hazards:
+  none_declared: true
+expected_results:
+  - {command: measure_voltage, value_min: -0.1, value_max: 0.1}
+sample:
+  uuid: null
+  metadata: {description: "無負荷 (出力OFF基線)"}
+```
+
+- 上の 4 つ以外のトップレベルキーがあると **exit 1** でエラーになる
+  (誤記で L5 を逃さないよう、黙って無視しない)。
+- meta の指定は `build_asset` の個別引数 (`conditions=` 等) より優先される。
+
 ### L5 に上げる — hazards / expected_results / dry_run
 
-`build_asset(hazards={...}, expected_results=[...])` で危険性宣言と期待結果を
-書き込む。`hazards` は `none_declared: true` か、電圧 / 温度 / 化学物質の上限を記入。
-`dry_run.ok=true` は M3 の dry-run 実行記録の接続で満たす (v0.1 では builder は
-自動記入しない)。加えて同梱装置定義が
-`validate_instrument_file(strict=True)` の errors 0 を満たすこと。
+L5 は次の 4 つをすべて満たす:
+
+1. `hazards` を明示 (`none_declared: true` か、電圧 / 温度 / 化学物質の上限)。
+2. `expected_results` が 1 件以上。
+3. `dry_run.ok=true`。
+4. 同梱装置定義が `validate_instrument_file(strict=True)` の errors 0。
+
+v0.2 では **`--dry-run-now` で 3 を CLI から満たせる**。builder が export 時に
+同梱レシピを `recipe_to_plan` でコンパイルし、同梱装置定義を検証して、成功なら
+`dry_run.ok=true` (+ `step_count` / `performed_at` / `method`) を書き込む。
+コンパイル例外・検証 errors・定義/レシピ不在の場合は `ok=false` + `error` を
+記録するが **export 自体は成功する** (L5 に届かないだけ)。UI で過去に dry-run した
+内容ではなく「梱包物そのもの」を検証するため、資産内容と検証内容が乖離しない。
+
+`hazards` / `expected_results` は `--meta` (上記) で渡す。
+
+#### CLI だけで L5 資産を作る (end-to-end)
+
+```text
+lab-executor asset export \
+    --job <job_id> --db <state.sqlite> \
+    --instruments-dir <dir> --analysis procedure.md \
+    --meta l5_meta.yaml --dry-run-now --out my.asset.zip
+
+lab-executor asset check my.asset.zip
+#   => verified level: L5
+```
+
+`l5_meta.yaml` は上の meta ファイル例のように `hazards` (`none_declared` か上限) と
+`expected_results` を含めること。`conditions.calibration/environment` (L2) も
+併せて書けば L2〜L5 を CLI 単独で満たせる。
 
 ## 関連 docs
 
