@@ -1,5 +1,49 @@
 # 変更履歴
 
+## v2.27.0 — P3.0 資産レジストリ: publish / catalog + 共有ゲート
+
+合言葉: **「品質を機械が保証してこそ、資産は安全に外へ出せる」**
+
+### 追加
+
+- **`lab-executor asset registry-init --dir DIR [--name] [--visibility team|external]`**
+  — 資産レジストリ (INDEX.yaml + `assets/`) を任意の場所に初期化する。既存の
+  extension registry (`registry/INDEX.yaml`、instruments 用) とは**別物**で、
+  そちらには一切触れない。二重 init は拒否。
+- **`lab-executor asset publish <zip> --registry DIR [--tags a,b] [--force]`**
+  — 資産 zip を掲載ゲートを通してレジストリに publish する。ゲート:
+  (1) **check pass 必須** (schema_ok かつ checksums_ok。改ざん zip は拒否)、
+  (2) **external 共有ゲート** — `visibility=external` のレジストリでは
+  共有ポリシー (2026-07-07 所有者決定) に基づき **level_verified <= 3**
+  かつ **license 付与** (UNLICENSED / 空でない) を要求。
+  `--force` は同一 asset_id の**重複置換のみ**に使え、**ゲートは迂回できない**。
+- **`lab-executor asset catalog --registry DIR [--check]`** — 掲載資産を
+  **level_verified 降順 → published_at 降順**で一覧する (人気指標は持たない —
+  集中リスク対策の設計原則)。`--check` で各 zip の sha256 を再計算し integrity
+  を照合する。
+- `lab_executor.asset.registry` モジュール (`init_registry` / `load_index` /
+  `publish_asset` / `catalog` / `AssetRegistryError`) を追加し `lab_executor.asset`
+  から公開。
+
+### 修正
+
+- **builder の declare_level 自動宣言** — `--declare-level` 省略時、従来は
+  `level_declared=0` 固定だったのを、**梱包物そのものを check 相当で自己判定**し
+  その値を宣言するよう修正 (計画 v0.1 の仕様)。checker と同じ `levels.py` の
+  純関数を build 直後の in-memory 材料で呼ぶ (schema_ok / checksums_ok は build
+  直後ゆえ True 扱い)。これにより **export 直後の check で
+  `level_declared == level_verified`** が成立する。明示指定は従来どおり優先。
+
+### ドキュメント
+
+- `docs/asset_usage.md` に資産レジストリ節 (init / publish / catalog、共有ゲートの
+  説明) を追記。既存の「共有ポリシー」節と接続。
+
+### テスト
+
+- `tests/test_asset_registry_p30.py` (新規)。MCP ツール面 50 は不変
+  (レジストリも CLI のみ)。
+
 ## v2.26.0 — 実験資産 v0.2: dry-run 接続 + CLI 単独での L5 到達
 
 合言葉: **「梱包物そのものを検証してこそ、資産は自立を名乗れる」**

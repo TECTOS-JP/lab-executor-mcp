@@ -1,4 +1,4 @@
-# 実験資産 (experiment asset) の使い方 (v0.2 / v2.26.0)
+# 実験資産 (experiment asset) の使い方 (v0.2 + registry / v2.27.0)
 
 実験資産は、完了 Job を **独立可用性レベル L0〜L5** で格付けした 1 つの zip
 アーカイブ。MaiML (JIS K 0200:2024) の独立可用性概念に基づく。仕様の正本は
@@ -158,6 +158,68 @@ lab-executor asset check my.asset.zip
 `l5_meta.yaml` は上の meta ファイル例のように `hazards` (`none_declared` か上限) と
 `expected_results` を含めること。`conditions.calibration/environment` (L2) も
 併せて書けば L2〜L5 を CLI 単独で満たせる。
+
+## 4. registry — 資産を掲載・一覧する (P3.0 / v2.27.0)
+
+資産レジストリは **ディレクトリ 1 つ + `INDEX.yaml` + `assets/<id>.asset.zip` 群**。
+利用者が任意の場所に作る。既存の extension registry (`registry/INDEX.yaml`、
+instruments 用) とは**別物**で、そちらには一切触れない。市場流通は外部行為であり、
+レジストリ操作も **CLI のみ** (MCP ツール面 50 は不変)。
+
+```text
+lab-executor asset registry-init --dir DIR [--name STR] [--visibility team|external]
+lab-executor asset publish <zip> --registry DIR [--tags a,b] [--force] [--json]
+lab-executor asset catalog --registry DIR [--check] [--json]
+```
+
+### registry-init — レジストリを作る
+
+`--visibility` は `team` (既定) か `external`。作成時に決まり、以後の変更は手動
+編集。二重 init は拒否される。
+
+### publish — 掲載ゲートを通して掲載する
+
+`publish` は次の**掲載ゲート**を通す。ゲートを迂回する経路は無い。
+
+1. **check pass 必須** — `asset check` の `schema_ok` かつ `checksums_ok` が真で
+   あること (改ざん / 破損 zip は拒否)。
+2. **external 共有ゲート** — `visibility=external` のレジストリでは、上記の
+   「共有ポリシー (2026-07-07 所有者決定)」を機械化する:
+   - **`level_verified <= 3`** (L3 上限。L4/L5 の再実行可能物は外部に出さない)。
+   - **license が付与されている** (`UNLICENSED` / 空は拒否)。外部共有する資産には
+     `asset export --license CC-BY-4.0` 等で明示的に付与する。
+3. **`--force` は重複置換のみ** — 同一 `asset_id` の再 publish は既定で拒否。
+   `--force` を付けると entry と zip を置換する。**`--force` でゲートはスキップ
+   できない** (external の L 上限 / license は `--force` でも効く)。
+
+掲載時、zip 全体の sha256 と資産内 recipe の `requires.commands` (発見性用) を
+INDEX に記録する。`level_verified` は publish 時の check 結果であり、作成者の
+自己申告 (`level_declared`) ではない。
+
+### catalog — 一覧する
+
+`catalog` は掲載資産を **`level_verified` 降順 → `published_at` 降順**で返す
+(品質を第一ソートに。人気指標は持たない — 集中リスク対策の設計原則)。`--check` で
+各 zip の sha256 を再計算し、INDEX と不一致なら `integrity: FAILED` を付ける。
+
+### レジストリのディスク形式
+
+```text
+<registry_dir>/
+├── INDEX.yaml          # registry_version / visibility / name / created_at / assets[]
+└── assets/
+    └── <asset_id>.asset.zip
+```
+
+`INDEX.yaml` の各 asset entry: `id` / `title` / `level_verified` / `license` /
+`sha256` / `path` / `tags` / `requires_commands` / `published_at` / `producer`。
+
+### 補足: declare_level の自動宣言 (v2.27.0)
+
+`asset export` で `--declare-level` を省略すると、builder は**梱包物そのもの**を
+check 相当で自己判定し、その値を `asset.yaml` の `level_declared` に書く (従来は 0
+固定)。このため **export 直後の `asset check` で `level_declared == level_verified`**
+になる。明示指定 (`--declare-level N`) は従来どおり優先する。
 
 ## 関連 docs
 

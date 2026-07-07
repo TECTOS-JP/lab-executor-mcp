@@ -21,6 +21,13 @@ from lab_executor.asset.manifest import (
 from lab_executor.asset.capability import match_capabilities
 from lab_executor.asset.builder import build_asset
 from lab_executor.asset.checker import CheckReport, check_asset
+from lab_executor.asset.registry import (
+    AssetRegistryError,
+    catalog,
+    init_registry,
+    load_index,
+    publish_asset,
+)
 
 __all__ = [
     "ASSET_VERSION",
@@ -30,4 +37,9 @@ __all__ = [
     "build_asset",
     "CheckReport",
     "check_asset",
+    "AssetRegistryError",
+    "init_registry",
+    "load_index",
+    "publish_asset",
+    "catalog",
 ]

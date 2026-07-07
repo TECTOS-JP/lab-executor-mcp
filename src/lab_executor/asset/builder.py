@@ -17,6 +17,10 @@ from typing import Any
 
 import yaml
 
+import json as _json
+
+from lab_executor.asset import levels as _L
+from lab_executor.asset.capability import match_capabilities
 from lab_executor.asset.manifest import (
     ASSET_VERSION,
     AssetManifest,
@@ -165,6 +169,173 @@ def _run_dry_run(
     return {**base, "ok": True, "step_count": step_count}
 
 
+def _count_result_rows_bytes(files: dict[str, bytes]) -> int:
+    """in-memory bundle bytes から results 行数を数える (checker と同ロジック)。"""
+    n = 0
+    blob = files.get("bundle/results.jsonl")
+    if blob is not None:
+        try:
+            n = sum(1 for line in blob.decode("utf-8").splitlines()
+                    if line.strip())
+        except Exception:
+            n = 0
+    if n == 0 and "bundle/results.csv" in files:
+        try:
+            data_lines = [
+                x for x in files["bundle/results.csv"].decode(
+                    "utf-8").splitlines() if x.strip()
+            ]
+            n = max(0, len(data_lines) - 1)
+        except Exception:
+            n = 0
+    return n
+
+
+def _raw_value_paired_bytes(files: dict[str, bytes]) -> bool:
+    """in-memory bundle bytes で raw↔numeric 対応を確認 (checker と同ロジック)。"""
+    blob = files.get("bundle/results.jsonl")
+    if blob is None:
+        return False
+    try:
+        txt = blob.decode("utf-8")
+    except Exception:
+        return False
+    has_numeric = False
+    for line in txt.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = _json.loads(line)
+        except Exception:
+            continue
+        v = obj.get("value")
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            has_numeric = True
+    return has_numeric
+
+
+def _instrument_strict_ok_texts(
+    instr_list: list[tuple[str, str]],
+) -> bool:
+    """同梱予定の装置定義 (text) が strict 検証 pass するか (checker と同判定)。"""
+    if not instr_list:
+        return False
+    from lab_executor.registry import validate_instrument_file
+
+    for _slug, text in instr_list:
+        tmp = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".yaml", delete=False, encoding="utf-8",
+            ) as tf:
+                tf.write(text)
+                tmp = tf.name
+            report = validate_instrument_file(tmp, strict=True)
+            if report.errors:
+                return False
+        except Exception:
+            return False
+        finally:
+            if tmp:
+                try:
+                    Path(tmp).unlink()
+                except Exception:
+                    pass
+    return True
+
+
+def _auto_declare_level(
+    *,
+    files: dict[str, bytes],
+    job_record: dict,
+    recipe_fragment: dict | None,
+    instr_list: list[tuple[str, str]],
+    conditions: dict | None,
+    hazards: dict | None,
+    expected_results: list | None,
+    dry_run: dict | None,
+) -> int:
+    """梱包物そのものから独立可用性レベルを自己判定する (level_declared 用)。
+
+    checker.check_asset と同じ levels.py 判定関数を、build 直後の in-memory
+    材料で呼ぶ。build 直後ゆえ ``schema_ok`` / ``checksums_ok`` は True 扱い。
+    これにより export 直後の check で level_declared == level_verified になる。
+    """
+    from lab_executor.asset.manifest import ConditionsInfo
+    from lab_executor.models.instrument_def import (
+        CapabilityRequirements,
+        InstrumentDefinition,
+    )
+
+    # checker は asset.yaml に直列化された conditions を読む。conditions 未指定でも
+    # manifest は ConditionsInfo の既定 (calibration/environment = not_recorded) を
+    # 書き込むため、L2 のキー存在判定はここでも同じ直列化形で行う。
+    try:
+        eff_conditions_serialized = ConditionsInfo(
+            **(conditions or {})).model_dump(mode="json")
+    except Exception:
+        eff_conditions_serialized = conditions or {}
+
+    results_row_count = _count_result_rows_bytes(files)
+    raw_value_paired = _raw_value_paired_bytes(files)
+    has_instrument_def = bool(instr_list)
+    has_timeline = "bundle/timeline.jsonl" in files
+    has_analysis = any(
+        n.startswith("analysis/") and not n.endswith("/") for n in files
+    )
+
+    # L4: recipe requires と同梱装置の capability 照合
+    recipe_requires = None
+    if recipe_fragment:
+        defn_frag = recipe_fragment.get("definition") or {}
+        recipe_requires = defn_frag.get("requires")
+    has_requires = recipe_requires is not None
+    capability_match = None
+    if has_requires:
+        try:
+            req = CapabilityRequirements(**recipe_requires)
+        except Exception:
+            req = None
+        instr_def = None
+        for _slug, text in instr_list:
+            try:
+                data = yaml.safe_load(text) or {}
+                instr_def = InstrumentDefinition(**data)
+                break
+            except Exception:
+                continue
+        capability_match = match_capabilities(req, instr_def)
+
+    instrument_strict_ok = _instrument_strict_ok_texts(instr_list)
+
+    lv: dict[str, dict] = {}
+    lv["L0"] = _L.judge_l0(results_row_count=results_row_count)
+    lv["L1"] = _L.judge_l1(job_record=job_record)
+    lv["L2"] = _L.judge_l2(
+        has_instrument_def=has_instrument_def,
+        has_timeline=has_timeline,
+        conditions=eff_conditions_serialized,
+    )
+    lv["L3"] = _L.judge_l3(
+        checksums_ok=True,   # build 直後: sha256 は今計算した値そのもの
+        raw_value_paired=raw_value_paired,
+        has_analysis=has_analysis,
+        schema_ok=True,      # build 直後: 自前生成した manifest ゆえ有効
+    )
+    lv["L4"] = _L.judge_l4(
+        has_requires=has_requires,
+        capability_match=capability_match,
+    )
+    lv["L5"] = _L.judge_l5(
+        hazards=hazards,
+        expected_results=expected_results,
+        dry_run=dry_run,
+        instrument_strict_ok=instrument_strict_ok,
+    )
+    return _L.summarize_verified_level(lv)
+
+
 def build_asset(
     *,
     job_id: str,
@@ -266,8 +437,27 @@ def build_asset(
 
         asset_id = str(uuid.uuid4())
 
-        # level_declared: 明示が無ければ 0 を宣言 (check が verified を出す)
-        level_declared = declare_level if declare_level is not None else 0
+        # level_declared:
+        # - 明示指定 (declare_level) があればそれを優先。
+        # - None のとき: 梱包物そのものを check 相当で自己判定し、その値を宣言する。
+        #   これにより「export 直後の check で level_declared == level_verified」が
+        #   成立する (計画 v0.1 の仕様)。判定は checker と同じ levels.py の純関数を
+        #   in-memory 材料で呼ぶ。build 直後ゆえ schema_ok / checksums_ok は True。
+        auto_declare = declare_level is None
+        if auto_declare:
+            level_declared = _auto_declare_level(
+                files=files,
+                job_record=job_record,
+                recipe_fragment=recipe_fragment,
+                instr_list=instr_list,
+                conditions=eff_conditions,
+                hazards=eff_hazards,
+                expected_results=eff_expected_results,
+                dry_run=dry_run,
+            )
+            level_declared = max(0, level_declared)
+        else:
+            level_declared = declare_level
 
         import lab_executor as _le
         manifest = AssetManifest(

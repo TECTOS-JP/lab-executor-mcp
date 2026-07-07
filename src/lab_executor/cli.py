@@ -595,6 +595,46 @@ def _build_parser() -> argparse.ArgumentParser:
     asset_check.add_argument("zip", help="asset .zip path")
     asset_check.add_argument("--json", action="store_true")
 
+    # v2.27.0: 資産レジストリ (registry-init / publish / catalog)
+    asset_reg_init = asset_sub.add_parser(
+        "registry-init",
+        help="Initialize an experiment asset registry directory (INDEX.yaml)",
+    )
+    asset_reg_init.add_argument("--dir", required=True, help="registry dir")
+    asset_reg_init.add_argument("--name", default="", help="display name")
+    asset_reg_init.add_argument(
+        "--visibility", default="team", choices=["team", "external"],
+        help="team (既定) | external。external は L3 上限 + license 必須",
+    )
+    asset_reg_init.add_argument("--json", action="store_true")
+
+    asset_publish = asset_sub.add_parser(
+        "publish",
+        help="Publish an asset zip to a registry (check + share gate)",
+    )
+    asset_publish.add_argument("zip", help="asset .zip path")
+    asset_publish.add_argument(
+        "--registry", required=True, help="registry dir")
+    asset_publish.add_argument(
+        "--tags", default=None, help="comma-separated tags")
+    asset_publish.add_argument(
+        "--force", action="store_true",
+        help="重複 asset_id の置換のみに使う (掲載ゲートは迂回できない)",
+    )
+    asset_publish.add_argument("--json", action="store_true")
+
+    asset_catalog = asset_sub.add_parser(
+        "catalog",
+        help="List assets in a registry (level 降順 → published_at 降順)",
+    )
+    asset_catalog.add_argument(
+        "--registry", required=True, help="registry dir")
+    asset_catalog.add_argument(
+        "--check", dest="recheck", action="store_true",
+        help="各 zip の sha256 を再計算して integrity を照合する",
+    )
+    asset_catalog.add_argument("--json", action="store_true")
+
     # ---- diagnose (v2.2.0: tool-surface CLI) ---------------------
     sp_diag = sub.add_parser(
         "diagnose",
@@ -1759,8 +1799,85 @@ def _cmd_asset(args: argparse.Namespace) -> int:
         # exit: スキーマ or checksum 破損で 1、それ以外は 0
         return 1 if rep.integrity_broken else 0
 
+    if sub == "registry-init":
+        from lab_executor.asset import AssetRegistryError, init_registry
+
+        try:
+            index = init_registry(
+                _P(args.dir), name=args.name, visibility=args.visibility)
+        except AssetRegistryError as e:
+            print(f"asset registry-init: {e}", file=sys.stderr)
+            return 1
+        if args.json:
+            print(json.dumps(index, ensure_ascii=False, indent=2,
+                             default=str))
+        else:
+            print(f"asset registry-init: {args.dir}")
+            print(f"  visibility:     {index['visibility']}")
+            print(f"  name:           {index['name'] or '(none)'}")
+            print(f"  created_at:     {index['created_at']}")
+        return 0
+
+    if sub == "publish":
+        from lab_executor.asset import AssetRegistryError, publish_asset
+
+        tags = None
+        if getattr(args, "tags", None):
+            tags = [t.strip() for t in args.tags.split(",") if t.strip()]
+        try:
+            res = publish_asset(
+                _P(args.zip), _P(args.registry),
+                tags=tags, force=args.force,
+            )
+        except AssetRegistryError as e:
+            print(f"asset publish: {e}", file=sys.stderr)
+            return 1
+        except Exception as e:  # noqa: BLE001
+            print(f"asset publish failed: {e}", file=sys.stderr)
+            return 1
+        if args.json:
+            print(json.dumps(res, ensure_ascii=False, indent=2,
+                             default=str))
+        else:
+            print(f"asset publish: {res['id']}")
+            print(f"  level_verified: L{res['level_verified']}")
+            print(f"  registry:       {res['registry']}")
+            print(f"  path:           {res['path']}")
+        return 0
+
+    if sub == "catalog":
+        from lab_executor.asset import AssetRegistryError, catalog, load_index
+
+        try:
+            index = load_index(_P(args.registry))
+            entries = catalog(_P(args.registry), recheck=args.recheck)
+        except AssetRegistryError as e:
+            print(f"asset catalog: {e}", file=sys.stderr)
+            return 1
+        if args.json:
+            print(json.dumps(entries, ensure_ascii=False, indent=2,
+                             default=str))
+        else:
+            print(f"asset catalog: {args.registry}")
+            print(f"  visibility: {index.get('visibility', '?')}  "
+                  f"assets: {len(entries)}")
+            for e in entries:
+                lv = e.get("level_verified")
+                lv_s = f"L{lv}" if isinstance(lv, int) and lv >= 0 else "L?"
+                tags = ",".join(e.get("tags") or []) or "-"
+                line = (
+                    f"  {lv_s} | {e.get('title') or '(untitled)'} | "
+                    f"{e.get('license') or '-'} | {tags} | "
+                    f"{str(e.get('id') or '')[:8]}"
+                )
+                if args.recheck:
+                    line += f" | {e.get('integrity', '?')}"
+                print(line)
+        return 0
+
     print(
-        "lab-executor asset: subcommand required (export / check)",
+        "lab-executor asset: subcommand required "
+        "(export / check / registry-init / publish / catalog)",
         file=sys.stderr,
     )
     return 2
