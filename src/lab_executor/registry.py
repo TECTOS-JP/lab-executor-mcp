@@ -148,6 +148,58 @@ class ValidationReport:
         }
 
 
+def _lint_deferred_ranges(defn: InstrumentDefinition, rep: "ValidationReport") -> None:
+    """recipe の ${...} 実行時解決引数が範囲宣言を持つか検査 (SP-2 安全要件)。
+
+    宣言 (ParameterDefinition.range または recipe.requires.ranges) が無い場合は
+    error を追加する。文字列内埋め込み (${...} が arg 値全体を占めない) も
+    未対応として error にする。
+    """
+    from lab_executor.utils.seq_expression import SeqExpressionError, parse_deferred
+
+    for recipe_name, recipe in (defn.recipes or {}).items():
+        ranges_decl = (recipe.requires.ranges if recipe.requires else {}) or {}
+        for i, rs in enumerate(recipe.steps):
+            if rs.step_type != "command":
+                continue
+            command = rs.command or ""
+            for arg, value in (rs.args or {}).items():
+                try:
+                    expr = parse_deferred(value)
+                except SeqExpressionError as e:
+                    rep.errors.append({
+                        "error_class": "recipe_deferred_arg_unsupported",
+                        "message": (
+                            f"recipe '{recipe_name}' step[{i}] {command}.{arg}: {e}"
+                        ),
+                        "field_path": f"recipes.{recipe_name}.steps[{i}]",
+                    })
+                    continue
+                if expr is None:
+                    continue
+                # 範囲宣言の存在を確認
+                declared = f"{command}.{arg}" in ranges_decl
+                if not declared:
+                    cmd_def = defn.commands.get(command)
+                    if cmd_def is not None:
+                        for pdef in cmd_def.parameters:
+                            if pdef.name == arg and pdef.range:
+                                declared = True
+                                break
+                if not declared:
+                    rep.errors.append({
+                        "error_class": "recipe_deferred_arg_missing_range",
+                        "message": (
+                            f"recipe '{recipe_name}' step[{i}]: 実行時解決引数 "
+                            f"'{command}.{arg}' に範囲宣言がありません。"
+                            "ParameterDefinition.range または requires.ranges "
+                            "が必須です (安全要件 §6)"
+                        ),
+                        "field_path": f"recipes.{recipe_name}.steps[{i}]",
+                        "details": {"command": command, "arg": arg},
+                    })
+
+
 def validate_instrument_file(
     path: str | Path,
     *,
@@ -259,6 +311,15 @@ def validate_instrument_file(
                     ),
                     "field_path": f"commands.{name}.verify",
                 })
+
+    # ============================================================
+    # v2.28.0 (SP-2): recipe の ${...} 実行時解決引数に範囲宣言必須
+    # ============================================================
+    # 安全要件 (sequence_processing_spec §6): 実行時解決される引数は
+    # 事前レビューで値が読めないため、範囲 (ParameterDefinition.range または
+    # recipe.requires.ranges) で縛る以外に審査できない。宣言が無い場合は error
+    # とし、保存・実行を弾く。
+    _lint_deferred_ranges(defn, rep)
 
     # ============================================================
     # v1.9: strict mode 追加検査

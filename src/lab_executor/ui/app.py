@@ -517,6 +517,8 @@ class _DryrunBody(BaseModel):
     content: str
     recipe: str
     parameters: dict = {}
+    # v2.28.0 (SP-2): 実行時解決 / compute のテスト値注入 ("steps.x": 1.0 等)
+    test_values: dict = {}
 
 
 class _SaveBody(BaseModel):
@@ -525,11 +527,17 @@ class _SaveBody(BaseModel):
     message: str = ""
 
 
-def _build_dryrun(content: str, recipe_name: str, parameters: dict) -> dict:
+def _build_dryrun(
+    content: str, recipe_name: str, parameters: dict,
+    test_values: dict | None = None,
+) -> dict:
     """編集中の YAML 文字列 + レシピ名 + パラメータ → 展開 Step 列 dict。
 
     パース / 式評価エラーは ValueError を送出する (ルート側で 422 に変換)。
     validate / dry-run のロジックは再実装せず、既存 API を import して使う。
+
+    v2.28.0 (SP-2): definition を渡して ${...} の範囲宣言検証を有効化し、
+    test_values があれば deferred / compute の解決値も表示する。
     """
     import yaml
 
@@ -557,11 +565,11 @@ def _build_dryrun(content: str, recipe_name: str, parameters: dict) -> dict:
         # 欠落 (default 無しかつ未入力) は入れない → 式評価時に ExpressionError
 
     try:
-        plan = recipe_to_plan(recipe, variables)
+        plan = recipe_to_plan(recipe, variables, definition=defn)
     except (ExpressionError, KeyError, ValueError, TypeError) as exc:
         raise ValueError(f"dry-run 展開に失敗しました: {exc}")
 
-    return dryrun_view(plan)
+    return dryrun_view(plan, test_values=test_values or {})
 
 
 def _register_edit_routes(
@@ -635,7 +643,8 @@ def _register_edit_routes(
         edit_store._resolve(body.rel)
         try:
             result = await asyncio.to_thread(
-                _build_dryrun, body.content, body.recipe, body.parameters
+                _build_dryrun, body.content, body.recipe, body.parameters,
+                body.test_values,
             )
         except ValueError as exc:
             return JSONResponse(

@@ -14,9 +14,11 @@ from lab_executor.experiment_ir.step import (
     WaitForConditionStep,
     WaitForStableStep,
     BarrierStep,
+    ComputeStep,
     Step,
 )
 from lab_executor.experiment_ir.plan import Plan
+from lab_executor.experiment_ir.context import VariableStore, VariableStoreError
 
 __all__ = [
     "CommandStep",
@@ -25,6 +27,9 @@ __all__ = [
     "WaitForConditionStep",
     "WaitForStableStep",
     "BarrierStep",
+    "ComputeStep",
     "Step",
     "Plan",
+    "VariableStore",
+    "VariableStoreError",
 ]

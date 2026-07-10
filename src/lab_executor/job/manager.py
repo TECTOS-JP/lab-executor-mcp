@@ -29,9 +29,11 @@ if TYPE_CHECKING:
     )
 
 from lab_executor.experiment_ir import (
-    CommandStep, Plan, WaitStep,
+    CommandStep, ComputeStep, Plan, WaitStep,
     WaitUntilStep, WaitForConditionStep, WaitForStableStep,
+    VariableStore,
 )
+from lab_executor import seq_runtime
 from lab_executor.job.state_machine import (
     CancelMode,
     JobStatus,
@@ -376,6 +378,7 @@ class JobManager:
                     variables[p.name] = p.default
             tentative_plan = recipe_to_plan(
                 recipe, variables, primary_resource=resource_name,
+                definition=session.definition,
             )
             required_resources = list(tentative_plan.required_resources) or [resource_name]
         except Exception:
@@ -1867,6 +1870,7 @@ class JobManager:
                         variables[p.name] = p.default
                 plan = recipe_to_plan(
                     recipe, variables, primary_resource=primary_resource,
+                    definition=primary_session.definition,
                 )
                 # required_resources は plan.required_resources + bindings 全部
                 target_resources = collect_target_resources(bindings, self._system_config)
@@ -2701,6 +2705,7 @@ class JobManager:
         try:
             plan: Plan = recipe_to_plan(
                 recipe, variables, primary_resource=rec.resource_name,
+                definition=session.definition,
             )
         except Exception as e:
             self._store.transition_status(
@@ -2721,6 +2726,16 @@ class JobManager:
         )
 
         step_results: list[dict] = []
+
+        # v2.28.0 (SP-1/2): 実行時変数ストア (capture / compute / ${...})。
+        import datetime as _dt
+        store = VariableStore(
+            params=dict(plan.parameters),
+            env={"job_id": job_id, "started_at": _dt.datetime.now().isoformat()},
+        )
+
+        async def _job_safe_shutdown() -> dict:
+            return await self._best_effort_safe_shutdown(session)
 
         try:
             for idx, step in enumerate(plan.steps):
@@ -2791,10 +2806,28 @@ class JobManager:
                     runtime.current_progress = None
                     self._safe_transition(job_id, JobStatus.RUNNING)
                 elif isinstance(step, CommandStep):
-                    result = await execute_command_step(
-                        self._visa, session, step,
+                    result = await seq_runtime.process_command_step(
+                        self._visa, session, step, store,
                         override_safety=override_safety,
                         override_reason=override_reason,
+                        source_step_path=f"steps[{idx}]",
+                        emit_event=(
+                            lambda et, pl, _i=idx: self._safe_record_event(
+                                job_id, et, step_index=_i, payload=pl,
+                            )
+                        ),
+                        safe_shutdown=_job_safe_shutdown,
+                    )
+                elif isinstance(step, ComputeStep):
+                    result = await seq_runtime.process_compute_step(
+                        step, store,
+                        source_step_path=f"steps[{idx}]",
+                        emit_event=(
+                            lambda et, pl, _i=idx: self._safe_record_event(
+                                job_id, et, step_index=_i, payload=pl,
+                            )
+                        ),
+                        safe_shutdown=_job_safe_shutdown,
                     )
                 else:
                     result = {
@@ -2864,6 +2897,7 @@ class JobManager:
                                 "success": False, "recipe": rec.recipe,
                                 "steps_executed": step_results,
                                 "halted_at_step": idx,
+                                "variables": store.snapshot(),
                             },
                         ),
                     )
@@ -2886,6 +2920,7 @@ class JobManager:
                 "success": True, "recipe": rec.recipe,
                 "steps_executed": step_results,
                 "step_count": len(step_results),
+                "variables": store.snapshot(),
             }
             self._attach_persistence_warnings(job_id, _final_result)
             self._store.transition_status(
@@ -3269,4 +3304,6 @@ class JobManager:
             )
         if isinstance(step, CommandStep):
             return f"command {step.command}"
+        if isinstance(step, ComputeStep):
+            return f"compute {step.set} = {step.expr}"
         return f"step type={getattr(step, 'type', '?')}"

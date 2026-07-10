@@ -1,5 +1,62 @@
 # 変更履歴
 
+## v2.28.0 — シーケンス処理拡張 SP-1 / SP-2: 変数・演算・実行時引数解決
+
+合言葉: **「コードが何を計算しようと、装置に届く値は範囲宣言で縛る」**
+
+手動作成シーケンスの自動化に向けた第一歩。測定値を変数へ捕獲し (capture)、
+演算し (compute)、演算結果を後続コマンドの引数へ実行時注入する (${...}) 機構を
+導入する。実行時に決まる引数には**範囲宣言を必須**とし、範囲外は実行前に弾く。
+仕様正本は `sequence_processing_spec.html` (§3 変数モデル・§4 式言語・§5.1/5.2・§6)。
+
+### 追加
+
+- **統合式評価器 `utils/seq_expression.py`** — 既存 `utils/expression.py` (算術) と
+  `utils/condition.py` (比較・論理) を **1 つの式言語に統合** (両ファイルは変更せず、
+  既存経路は不変)。算術・連鎖比較・論理短絡・三項 (`A if c else B`)・関数
+  (`abs/min/max/round/floor/ceil/sqrt/log10/log/exp/clamp/len`) をサポート。参照は
+  `params.x` / `steps.x` / `vars.x` / `env.x` の 1 段のみ。dunder・2 段属性・未知関数は
+  拒否。ゼロ除算・NaN/inf・型不整合は `SeqExpressionError`。
+- **実行時変数ストア `experiment_ir/context.py` (`VariableStore`)** — 1 Job スコープの
+  `steps.*` (capture) / `vars.*` (compute) を保持し、代入毎に `var_assigned` イベントを
+  蓄積。型は float/int/bool/str の 4 型 (array は SP-5)。
+- **capture 拡張 (SP-1)** — `result_as` に `value_path` (ドットパス抽出) と `unit`
+  (注記) を追加。未指定時は observation と同じ寛容抽出。**抽出失敗 (None) はステップ
+  failed** (`capture_failed`。silent NaN を防ぐ)。
+- **compute ステップ (SP-1)** — `- compute: { set, expr, unit?, on_error? }`。
+  `vars.*` へ 1 代入。コンパイル時に前方参照・未定義参照を検出。実行時エラーは
+  `on_error` に従う (abort / safe_shutdown)。
+- **`${...}` 実行時引数解決 (SP-2)** — arg 値全体が `${expr}` のとき、コンパイル時
+  評価せず deferred として保持し、ステップ実行直前に評価する。`CommandStep.deferred_args`
+  (`{arg: {expr, min, max}}`) として IR に持つ。**範囲宣言 (ParameterDefinition.range
+  または requires.ranges) が無ければ検証エラー** (保存も実行も不可)。実行時は範囲執行し、
+  範囲外は `range_violation` で failed + safe_shutdown。解決値・範囲・執行結果を
+  `deferred_arg_resolved` イベントに記録。
+- 上記を**同期経路 (execute_plan) と非同期 Job 経路 (job/manager) の両方**に通す。
+  Job result に `variables` スナップショット、timeline に `var_assigned` /
+  `deferred_arg_resolved` を記録。
+- **dry-run 拡張 (SP-2, `/api/edit/dryrun`)** — deferred 引数の式・範囲宣言の有無を明示。
+  `test_values` (`{"steps.x": 1.0}`) を渡すと deferred / compute の解決値を表示する。
+- `validate_instrument_file` に lint 追加 — recipe の `${...}` 引数に範囲宣言が無い場合は
+  `recipe_deferred_arg_missing_range` error (UI 保存時にも弾ける)。
+
+### 互換性
+
+- 全て追加的。既存 YAML・既存レシピの検証結果とコンパイル結果は不変
+  (後方互換テストで固定)。MCP ツール面 50 個は不変。
+- `utils/expression.py` / `utils/condition.py` は**変更していない** (既存経路の挙動保護)。
+
+### ドキュメント
+
+- `docs/sequence_processing.md` を新設 (変数モデル・式言語・capture/compute・
+  `${...}` と範囲執行・dry-run の実装版リファレンス)。
+- `docs/recipes.md` に「変数と演算 (SP-1/2)」節を追記。
+
+### スコープ外 (後続 SP)
+
+- branch / repeat / guard / pause (SP-3/4)、array / NumPy / repeat collect (SP-5)、
+  py / dll ステップ (SP-6)、サブシーケンス (SP-7)、message 内の文字列補間。
+
 ## v2.27.0 — P3.0 資産レジストリ: publish / catalog + 共有ゲート
 
 合言葉: **「品質を機械が保証してこそ、資産は安全に外へ出せる」**

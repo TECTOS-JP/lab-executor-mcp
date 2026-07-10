@@ -54,6 +54,14 @@ class CommandStep(BaseModel):
     sweep_index: int | None = None
     sweep_param: str | None = None
     sweep_value: Any = None
+    # v2.28.0 (SP-1): capture 拡張。result_as で登録する値の抽出パスと単位注記。
+    # value_path 未指定時は observation と同じ寛容抽出を使う。
+    value_path: str = ""
+    unit: str = ""
+    # v2.28.0 (SP-2): ${...} 実行時引数解決。arg 名 -> {"expr", "min", "max"}。
+    # コンパイル時は解決せず deferred として保持し、ステップ実行直前に評価 + 範囲執行する。
+    # min/max は ParameterDefinition.range と requires.ranges の積集合 (片側可)。
+    deferred_args: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("stagger_ms")
     @classmethod
@@ -294,12 +302,47 @@ class BarrierStep(BaseModel):
         return v
 
 
+# ============================================================
+# v2.28.0 (SP-1): compute (演算処理)
+# ============================================================
+
+
+class ComputeStep(BaseModel):
+    """1 ステップ 1 代入の演算処理 (sequence_processing_spec §5.2)。
+
+    ``set`` に指定した名前で ``vars.*`` へ代入する。``expr`` は統合式言語
+    (utils/seq_expression) で評価され、steps.* / vars.* / params.* / env.* を
+    参照できる。評価エラー (ゼロ除算・NaN/inf・型不整合・未定義参照) 時は
+    ``on_error`` に従う (abort=step failed / safe_shutdown=安全停止後 failed)。
+    """
+    type: Literal["compute"] = "compute"
+    set: str
+    expr: str
+    unit: str = ""
+    on_error: Literal["abort", "safe_shutdown"] = "abort"
+    description: str = ""
+
+    @field_validator("set")
+    @classmethod
+    def _set_nonempty(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("ComputeStep.set は空にできません")
+        return v
+
+    @field_validator("expr")
+    @classmethod
+    def _expr_nonempty(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("ComputeStep.expr は空にできません")
+        return v
+
+
 # discriminated union: type フィールドで自動的に正しいモデルが選ばれる
 Step = Annotated[
     Union[
         CommandStep, WaitStep, WaitUntilStep,
         WaitForConditionStep, WaitForStableStep,
-        BarrierStep,
+        BarrierStep, ComputeStep,
     ],
     Field(discriminator="type"),
 ]

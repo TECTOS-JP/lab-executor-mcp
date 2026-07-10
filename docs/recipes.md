@@ -130,3 +130,56 @@ recipe を実行。返り値に各ステップの結果が含まれる。
 - recipe ステップの `command` は **同じ機器の YAML で定義されたコマンド**を参照する
 - 複数機器をまたぐ recipe は v0.3.0 では非対応（将来課題）
 - recipe 内で別の recipe を呼ぶ（recipe of recipes）も非対応（同上）
+
+## 変数と演算 (SP-1 / SP-2, v2.28.0)
+
+手動作成シーケンスの自動化のため、測定値の**捕獲 (capture)** → **演算 (compute)**
+→ **後続コマンド引数への実行時注入 (`${...}`)** をサポートする。詳細な
+リファレンスは `docs/sequence_processing.md` を参照。
+
+### capture (result_as 拡張)
+
+```yaml
+- { command: "measure_thickness", result_as: "thickness",
+    value_path: "parsed.value_numeric", unit: "nm" }
+```
+
+- `result_as` で測定値を `steps.<名前>` に登録する
+- `value_path`: result dict からドットパスで値を抽出 (未指定は寛容抽出)
+- **値が抽出できない場合はステップ failed** (silent NaN 防止)
+
+### compute (演算ステップ)
+
+```yaml
+- compute:
+    set: "resistivity"                              # vars.resistivity に代入
+    expr: "steps.sheet_res * steps.thickness * 1e-9"
+    unit: "ohm.m"
+    on_error: "abort"                               # abort | safe_shutdown
+```
+
+- 式言語: 算術・連鎖比較・論理・三項・関数 (`abs/min/max/round/floor/ceil/`
+  `sqrt/log10/log/exp/clamp/len`)。参照は `params.` / `steps.` / `vars.` / `env.`
+- 前方参照 (未定義変数の参照) はコンパイルエラー
+
+### `${...}` 実行時引数解決 + 範囲宣言
+
+```yaml
+requires:
+  ranges: { "set_current.current": { min: 0.0, max: 0.02 } }   # 範囲宣言 (必須)
+steps:
+  - { command: "set_current", args: { current: "${vars.meas_current}" } }
+```
+
+- `"$expr"` (単一 `$`) は従来どおりコンパイル時解決 (params のみ)
+- `"${expr}"` は**実行時解決**。`steps` / `vars` / `env` を参照できる
+- **安全要件**: 実行時解決される引数には**範囲宣言が必須**
+  (装置定義の `ParameterDefinition.range` または recipe の `requires.ranges`)。
+  どちらも無い場合は**検証エラー** (保存も実行も不可)
+- 実行時に範囲執行し、範囲外なら実行せず `range_violation` で failed
+  (+ 定義に `safe_shutdown` があれば実行)
+
+### dry-run のテスト値注入
+
+`/api/edit/dryrun` に `test_values: {"steps.thickness": 100}` を渡すと、
+deferred 引数と compute の解決値を確認できる。省略時は deferred のまま表示する。

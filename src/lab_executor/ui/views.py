@@ -164,15 +164,45 @@ def sweep_chart_view(
     return {"x": x, "series": series, "x_label": x_label}
 
 
-def dryrun_view(plan: Any) -> dict[str, Any]:
+def _seed_ctx_from_test_values(
+    plan: Any, test_values: dict[str, Any] | None,
+) -> dict[str, dict]:
+    """dry-run のテスト値注入用に評価コンテキストを組む。
+
+    test_values のキーは "steps.x" / "vars.y" / "params.z" / "env.w" 形式。
+    名前空間を省いた裸のキーは steps.* とみなす (最も一般的な測定値注入)。
+    """
+    ctx: dict[str, dict] = {
+        "params": dict(getattr(plan, "parameters", {}) or {}),
+        "steps": {}, "vars": {}, "env": {},
+    }
+    for key, val in (test_values or {}).items():
+        if "." in key:
+            ns, name = key.split(".", 1)
+            if ns in ctx:
+                ctx[ns][name] = val
+                continue
+        ctx["steps"][key] = val
+    return ctx
+
+
+def dryrun_view(plan: Any, test_values: dict[str, Any] | None = None) -> dict[str, Any]:
     """recipe_to_plan の返り値 (Plan) を dry-run 表示用 dict に整える。
 
     展開された IR Step 列を「種別 / コマンド名 / instrument / 解決済み引数 /
-    wait 秒数 / description」に平坦化する。Mock 実行は M3 スコープ外なので
-    ここでは式が評価済みの具体値だけを見せる。
+    wait 秒数 / description」に平坦化する。
+
+    v2.28.0 (SP-2): 実行時解決 (${...}) の引数は ``deferred_args`` として
+    式・範囲宣言の有無を明示し、``test_values`` があれば解決値も表示する。
+    compute ステップは式と (test_values があれば) 評価値を表示する。
 
     Plan の import はしない (FastAPI 非依存を保つため型は Any で受ける)。
     """
+    from lab_executor.utils.seq_expression import SeqExpressionError, evaluate
+
+    ctx = _seed_ctx_from_test_values(plan, test_values)
+    has_test = bool(test_values)
+
     steps_out: list[dict[str, Any]] = []
     for st in plan.steps:
         step_type = getattr(st, "type", "command")
@@ -184,7 +214,56 @@ def dryrun_view(plan: Any) -> dict[str, Any]:
             "seconds": getattr(st, "seconds", None),
             "description": getattr(st, "description", "") or "",
         }
+
+        # SP-2: 実行時解決引数
+        deferred = dict(getattr(st, "deferred_args", {}) or {})
+        if deferred:
+            dinfo: list[dict[str, Any]] = []
+            for arg, spec in deferred.items():
+                entry: dict[str, Any] = {
+                    "arg": arg,
+                    "expr": spec.get("expr"),
+                    "min": spec.get("min"),
+                    "max": spec.get("max"),
+                    "range_declared": (
+                        spec.get("min") is not None or spec.get("max") is not None
+                    ),
+                }
+                if has_test:
+                    try:
+                        val = evaluate(spec["expr"], ctx)
+                        entry["resolved"] = val
+                        entry["in_range"] = (
+                            (spec.get("min") is None or val >= spec["min"])
+                            and (spec.get("max") is None or val <= spec["max"])
+                        )
+                    except SeqExpressionError as e:
+                        entry["error"] = str(e)
+                else:
+                    entry["resolved"] = "deferred"
+                dinfo.append(entry)
+            row["deferred_args"] = dinfo
+
+        # SP-1: compute
+        if step_type == "compute":
+            row["set"] = getattr(st, "set", "")
+            row["expr"] = getattr(st, "expr", "")
+            row["unit"] = getattr(st, "unit", "")
+            if has_test:
+                try:
+                    val = evaluate(st.expr, ctx)
+                    row["value"] = val
+                    ctx["vars"][st.set] = val
+                except SeqExpressionError as e:
+                    row["error"] = str(e)
+
+        # capture 注記
+        if getattr(st, "result_as", None):
+            row["result_as"] = st.result_as
+            row["value_path"] = getattr(st, "value_path", "") or ""
+
         steps_out.append(row)
+
     return {
         "name": getattr(plan, "name", ""),
         "parameters": dict(getattr(plan, "parameters", {}) or {}),

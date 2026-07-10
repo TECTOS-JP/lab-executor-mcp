@@ -242,8 +242,15 @@ class RecipeStep(BaseModel):
     # command step フィールド (従来)
     command: str | None = None              # YAML commands のキーを参照
     args: dict[str, Any] = Field(default_factory=dict)
-    # args の値は文字列の場合 "$varname" や "$var * 1.1" のような式評価が可能
-    result_as: str | None = None            # 後続ステップから ${steps.<result_as>} で参照 (v0.6.0+ で実装)
+    # args の値は文字列の場合:
+    #   - "$var" / "$var * 1.1" : コンパイル時式評価 (params のみ)
+    #   - "${steps.x}" 形式      : 実行時解決 (steps/vars/env、v2.28.0 SP-2)
+    result_as: str | None = None            # 後続ステップから ${steps.<result_as>} で参照 (v2.28.0 で実装)
+    # v2.28.0 (SP-1): capture 拡張。result_as で登録する値の抽出パスと単位注記。
+    value_path: str = ""                    # 例 "parsed.value"。未指定は寛容抽出
+    unit: str = ""                          # 注記 (計算には関与しない)
+    # v2.28.0 (SP-1): compute (演算) ステップ。{set, expr, unit?, on_error?}
+    compute: dict[str, Any] | None = None
     description: str = ""
     # v0.6.0: instrument logical ref ("$psu" / alias / resource)
     # map_recipe で各 target ごとに違う instrument を指す場合に使用
@@ -268,18 +275,32 @@ class RecipeStep(BaseModel):
             "wait_for_condition": self.wait_for_condition is not None,
             "wait_for_stable":    self.wait_for_stable is not None,
             "barrier":            self.barrier is not None,
+            "compute":            self.compute is not None,
         }
         active = [k for k, v in flags.items() if v]
         if len(active) > 1:
             raise ValueError(
                 f"RecipeStep には command / wait / wait_until / wait_for_condition / "
-                f"wait_for_stable / barrier のうち 1 つだけを指定してください (検出: {active})"
+                f"wait_for_stable / barrier / compute のうち 1 つだけを指定してください (検出: {active})"
             )
         if not active:
             raise ValueError(
                 "RecipeStep には command / wait / wait_until / wait_for_condition / "
-                "wait_for_stable / barrier のいずれかが必須です"
+                "wait_for_stable / barrier / compute のいずれかが必須です"
             )
+
+        if flags["compute"]:
+            cp = self.compute
+            if not isinstance(cp, dict):
+                raise ValueError("compute は mapping である必要があります")
+            for k in ("set", "expr"):
+                if not cp.get(k):
+                    raise ValueError(f"compute には '{k}' が必須です")
+            oe = cp.get("on_error", "abort")
+            if oe not in ("abort", "safe_shutdown"):
+                raise ValueError(
+                    f"compute.on_error は abort / safe_shutdown のいずれか: {oe!r}"
+                )
 
         if flags["wait"]:
             if "seconds" not in self.wait:
@@ -340,6 +361,7 @@ class RecipeStep(BaseModel):
         if self.wait_for_condition is not None: return "wait_for_condition"
         if self.wait_for_stable is not None: return "wait_for_stable"
         if self.barrier is not None: return "barrier"
+        if self.compute is not None: return "compute"
         return "command"
 
 
