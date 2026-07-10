@@ -23,6 +23,7 @@ from .experiment_ir import (
     CommandStep, ComputeStep, Plan, Step, WaitStep,
     WaitUntilStep, WaitForConditionStep, WaitForStableStep,
     BarrierStep, VariableStore,
+    GuardStep, BranchCase, BranchStep, RepeatStep,
 )
 from .models.instrument_def import InstrumentDefinition, RecipeDefinition, RecipeStep
 from .step_executor import execute_command_step, execute_wait_step
@@ -53,8 +54,15 @@ logger = logging.getLogger(__name__)
 # Recipe → IR Plan 変換
 # ============================================================
 
-# 予約 env 名 (実行時に VariableStore が供給する)。SP-3 で loop_index を追加予定。
+# 予約 env 名 (実行時に VariableStore が供給する)。
+# loop_index は repeat body 内でのみ利用可 (SP-3)。
 _ENV_NAMES = frozenset({"job_id", "started_at"})
+
+# v2.29.0 (SP-3): 展開・ネスト上限 (spec §10「レビュー可能性の上限」)。
+# 値は docs/sequence_processing.md に記載。
+BRANCH_MAX_DEPTH = 3            # branch のネスト最大深さ
+REPEAT_MAX_COUNT = 10_000       # repeat count / max_iterations の上限
+MAX_TOTAL_STEPS_ESTIMATE = 100_000  # 展開後総ステップ数の静的見積り上限
 
 
 def _validate_expr_refs(
@@ -64,11 +72,13 @@ def _validate_expr_refs(
     defined_vars: set[str],
     param_names: set[str],
     context: str,
+    env_names: frozenset[str] | set[str] = _ENV_NAMES,
 ) -> None:
-    """compute / ${...} の式をコンパイル時検証する。
+    """compute / ${...} / branch when / guard / repeat while の式をコンパイル時検証する。
 
     - 構文 + AST ホワイトリスト (check_expr)
     - 参照名がその時点までに定義される名前に含まれること (前方参照禁止)
+    - env_names: その文脈で参照可能な env 予約名 (repeat body 内は + loop_index)
     """
     try:
         check_expr(expr)
@@ -80,7 +90,7 @@ def _validate_expr_refs(
         "params": param_names,
         "steps": defined_steps,
         "vars": defined_vars,
-        "env": _ENV_NAMES,
+        "env": set(env_names),
     }
     for ref in refs:
         if "." in ref:
@@ -164,141 +174,31 @@ def recipe_to_plan(
     definition (機器定義) は ${...} の範囲宣言検証 (ParameterDefinition.range)
     に使う。deferred arg があるのに definition が無く requires.ranges にも
     宣言が無い場合は SeqExpressionError。
+
+    v2.29.0 (SP-3): branch / repeat / guard をネスト構造を保った IR
+    (BranchStep.cases[].steps / RepeatStep.body が Step のリスト) に変換する。
+    ネスト内では全経路定義検証・branch 深さ上限・展開見積り上限を執行する。
     """
-    plan_steps: list[Step] = []
     aux_resources: set[str] = set()
 
     # コンパイル時検証用: その時点までに定義される名前を追跡する
     param_names: set[str] = set(variables.keys()) | {p.name for p in recipe.parameters}
-    defined_steps: set[str] = set()
-    defined_vars: set[str] = set()
 
-    for rs in recipe.steps:
-        st = rs.step_type
-        if st == "compute":
-            cp = rs.compute or {}
-            set_name = cp["set"]
-            expr = cp["expr"]
-            _validate_expr_refs(
-                expr,
-                defined_steps=defined_steps, defined_vars=defined_vars,
-                param_names=param_names, context=f"compute(set={set_name})",
-            )
-            plan_steps.append(ComputeStep(
-                set=set_name,
-                expr=expr,
-                unit=cp.get("unit", ""),
-                on_error=cp.get("on_error", "abort"),
-                description=rs.description,
-            ))
-            defined_vars.add(set_name)
-        elif st == "wait":
-            seconds_raw = rs.wait["seconds"]
-            seconds = float(resolve_arg(seconds_raw, variables))
-            plan_steps.append(WaitStep(
-                seconds=seconds,
-                description=rs.description,
-            ))
-        elif st == "wait_until":
-            wu = dict(rs.wait_until)
-            sec = wu.get("seconds_from_now")
-            if isinstance(sec, str):
-                sec = float(resolve_arg(sec, variables))
-                wu["seconds_from_now"] = sec
-            plan_steps.append(WaitUntilStep(
-                timestamp=wu.get("timestamp"),
-                seconds_from_now=wu.get("seconds_from_now"),
-                description=rs.description,
-            ))
-        elif st == "wait_for_condition":
-            wfc = dict(rs.wait_for_condition)
-            resolved_args = {
-                k: resolve_arg(v, variables) for k, v in (wfc.get("args") or {}).items()
-            }
-            inst = wfc["instrument"]
-            aux_resources.add(inst)
-            plan_steps.append(WaitForConditionStep(
-                instrument=inst,
-                command=wfc["command"],
-                args=resolved_args,
-                condition_expr=wfc["condition_expr"],
-                interval_s=float(resolve_arg(wfc.get("interval_s", 1.0), variables)),
-                timeout_s=float(resolve_arg(wfc.get("timeout_s", 60.0), variables)),
-                command_timeout_s=(
-                    float(resolve_arg(wfc["command_timeout_s"], variables))
-                    if wfc.get("command_timeout_s") is not None else None
-                ),
-                value_path=wfc.get("value_path"),
-                retry_on_error=int(wfc.get("retry_on_error", 1)),
-                max_consecutive_errors=int(wfc.get("max_consecutive_errors", 3)),
-                description=rs.description,
-            ))
-        elif st == "wait_for_stable":
-            wfs = dict(rs.wait_for_stable)
-            resolved_args = {
-                k: resolve_arg(v, variables) for k, v in (wfs.get("args") or {}).items()
-            }
-            inst = wfs["instrument"]
-            aux_resources.add(inst)
-            plan_steps.append(WaitForStableStep(
-                instrument=inst,
-                command=wfs["command"],
-                args=resolved_args,
-                tolerance=float(resolve_arg(wfs["tolerance"], variables)),
-                window_s=float(resolve_arg(wfs["window_s"], variables)),
-                interval_s=float(resolve_arg(wfs.get("interval_s", 1.0), variables)),
-                timeout_s=float(resolve_arg(wfs.get("timeout_s", 60.0), variables)),
-                command_timeout_s=(
-                    float(resolve_arg(wfs["command_timeout_s"], variables))
-                    if wfs.get("command_timeout_s") is not None else None
-                ),
-                value_path=wfs.get("value_path"),
-                min_samples=int(wfs.get("min_samples", 3)),
-                method=wfs.get("method", "range"),
-                retry_on_error=int(wfs.get("retry_on_error", 1)),
-                max_consecutive_errors=int(wfs.get("max_consecutive_errors", 3)),
-                description=rs.description,
-            ))
-        elif st == "barrier":
-            br = dict(rs.barrier)
-            plan_steps.append(BarrierStep(
-                name=br["name"],
-                timeout_s=float(resolve_arg(br.get("timeout_s", 60.0), variables)),
-                description=rs.description,
-            ))
-        else:  # command
-            resolved_args: dict[str, Any] = {}
-            deferred_args: dict[str, Any] = {}
-            for k, v in rs.args.items():
-                expr = parse_deferred(v)  # ${...} 検出 (SP-2)
-                if expr is not None:
-                    _validate_expr_refs(
-                        expr,
-                        defined_steps=defined_steps, defined_vars=defined_vars,
-                        param_names=param_names,
-                        context=f"{rs.command}.{k} (${{...}})",
-                    )
-                    mn, mx = _resolve_range_decl(
-                        recipe, definition, rs.command or "", k,
-                    )
-                    deferred_args[k] = {"expr": expr, "min": mn, "max": mx}
-                else:
-                    resolved_args[k] = resolve_arg(v, variables)
-            # v0.6.0: instrument は logical ref ($psu / alias / resource_name) としてそのまま渡す。
-            # 実 resource への解決は Job executor / step_executor 側で行う。
-            plan_steps.append(CommandStep(
-                command=rs.command or "",
-                args=resolved_args,
-                deferred_args=deferred_args,
-                result_as=rs.result_as,
-                value_path=rs.value_path or "",
-                unit=rs.unit or "",
-                description=rs.description,
-                instrument=getattr(rs, "instrument", None),
-                stagger_ms=getattr(rs, "stagger_ms", None),
-            ))
-            if rs.result_as:
-                defined_steps.add(rs.result_as)
+    conv = _StepConverter(
+        recipe=recipe, variables=variables, definition=definition,
+        aux_resources=aux_resources, param_names=param_names,
+    )
+    plan_steps, estimate = conv.convert(
+        recipe.steps,
+        defined_steps=set(), defined_vars=set(),
+        env_names=set(_ENV_NAMES), branch_depth=0, nested=False,
+        path="steps",
+    )
+    if estimate > MAX_TOTAL_STEPS_ESTIMATE:
+        raise SeqExpressionError(
+            f"展開後の総ステップ数見積り ({estimate}) が上限 "
+            f"({MAX_TOTAL_STEPS_ESTIMATE}) を超えています (spec §10 展開上限)"
+        )
 
     # required_resources: primary + aux を canonical sorted
     req: set[str] = set(aux_resources)
@@ -313,6 +213,387 @@ def recipe_to_plan(
         resource_hint=primary_resource,
         required_resources=required,
     )
+
+
+class _StepConverter:
+    """RecipeStep 列 → IR Step 列の再帰変換器 (v2.29.0 SP-3 で導入)。
+
+    branch / repeat のネスト steps (raw dict) を RecipeStep として検証しつつ
+    再帰変換する。defined_steps / defined_vars は呼び出し側の set を直接
+    mutate する (branch case は copy を渡して分岐間の漏れを防ぐ)。
+    返り値は (steps, 展開後ステップ数の静的見積り)。
+    """
+
+    # ネスト (branch case / repeat body) 内で許可しない step 種別。
+    # polling / barrier は Job manager のトップレベル状態遷移 (WAITING 等)
+    # と密結合のため SP-3 では未対応 (逸脱として docs に記載)。
+    _NESTED_FORBIDDEN = frozenset({
+        "wait_until", "wait_for_condition", "wait_for_stable", "barrier",
+    })
+
+    def __init__(
+        self,
+        *,
+        recipe: RecipeDefinition,
+        variables: dict[str, Any],
+        definition: InstrumentDefinition | None,
+        aux_resources: set[str],
+        param_names: set[str],
+    ):
+        self.recipe = recipe
+        self.variables = variables
+        self.definition = definition
+        self.aux_resources = aux_resources
+        self.param_names = param_names
+
+    def convert(
+        self,
+        raw_steps: list,
+        *,
+        defined_steps: set[str],
+        defined_vars: set[str],
+        env_names: set[str],
+        branch_depth: int,
+        nested: bool,
+        path: str,
+    ) -> tuple[list[Step], int]:
+        out: list[Step] = []
+        estimate = 0
+
+        for i, raw in enumerate(raw_steps):
+            spath = f"{path}[{i}]"
+            rs = self._as_recipe_step(raw, spath)
+            st = rs.step_type
+
+            if nested and st in self._NESTED_FORBIDDEN:
+                raise SeqExpressionError(
+                    f"{spath}: branch / repeat 内の {st} は SP-3 では未対応です"
+                )
+
+            if st == "compute":
+                out.append(self._convert_compute(
+                    rs, defined_steps, defined_vars, env_names, spath,
+                ))
+                defined_vars.add(rs.compute["set"])
+                estimate += 1
+            elif st == "guard":
+                out.append(self._convert_guard(
+                    rs, defined_steps, defined_vars, env_names, spath,
+                ))
+                estimate += 1
+            elif st == "branch":
+                step, est = self._convert_branch(
+                    rs, defined_steps, defined_vars, env_names,
+                    branch_depth, spath,
+                )
+                out.append(step)
+                estimate += est
+            elif st == "repeat":
+                step, est = self._convert_repeat(
+                    rs, defined_steps, defined_vars, env_names,
+                    branch_depth, spath,
+                )
+                out.append(step)
+                estimate += est
+            elif st == "wait":
+                seconds_raw = rs.wait["seconds"]
+                seconds = float(resolve_arg(seconds_raw, self.variables))
+                out.append(WaitStep(seconds=seconds, description=rs.description))
+                estimate += 1
+            elif st == "wait_until":
+                wu = dict(rs.wait_until)
+                sec = wu.get("seconds_from_now")
+                if isinstance(sec, str):
+                    sec = float(resolve_arg(sec, self.variables))
+                    wu["seconds_from_now"] = sec
+                out.append(WaitUntilStep(
+                    timestamp=wu.get("timestamp"),
+                    seconds_from_now=wu.get("seconds_from_now"),
+                    description=rs.description,
+                ))
+                estimate += 1
+            elif st == "wait_for_condition":
+                wfc = dict(rs.wait_for_condition)
+                resolved_args = {
+                    k: resolve_arg(v, self.variables)
+                    for k, v in (wfc.get("args") or {}).items()
+                }
+                inst = wfc["instrument"]
+                self.aux_resources.add(inst)
+                out.append(WaitForConditionStep(
+                    instrument=inst,
+                    command=wfc["command"],
+                    args=resolved_args,
+                    condition_expr=wfc["condition_expr"],
+                    interval_s=float(resolve_arg(wfc.get("interval_s", 1.0), self.variables)),
+                    timeout_s=float(resolve_arg(wfc.get("timeout_s", 60.0), self.variables)),
+                    command_timeout_s=(
+                        float(resolve_arg(wfc["command_timeout_s"], self.variables))
+                        if wfc.get("command_timeout_s") is not None else None
+                    ),
+                    value_path=wfc.get("value_path"),
+                    retry_on_error=int(wfc.get("retry_on_error", 1)),
+                    max_consecutive_errors=int(wfc.get("max_consecutive_errors", 3)),
+                    description=rs.description,
+                ))
+                estimate += 1
+            elif st == "wait_for_stable":
+                wfs = dict(rs.wait_for_stable)
+                resolved_args = {
+                    k: resolve_arg(v, self.variables)
+                    for k, v in (wfs.get("args") or {}).items()
+                }
+                inst = wfs["instrument"]
+                self.aux_resources.add(inst)
+                out.append(WaitForStableStep(
+                    instrument=inst,
+                    command=wfs["command"],
+                    args=resolved_args,
+                    tolerance=float(resolve_arg(wfs["tolerance"], self.variables)),
+                    window_s=float(resolve_arg(wfs["window_s"], self.variables)),
+                    interval_s=float(resolve_arg(wfs.get("interval_s", 1.0), self.variables)),
+                    timeout_s=float(resolve_arg(wfs.get("timeout_s", 60.0), self.variables)),
+                    command_timeout_s=(
+                        float(resolve_arg(wfs["command_timeout_s"], self.variables))
+                        if wfs.get("command_timeout_s") is not None else None
+                    ),
+                    value_path=wfs.get("value_path"),
+                    min_samples=int(wfs.get("min_samples", 3)),
+                    method=wfs.get("method", "range"),
+                    retry_on_error=int(wfs.get("retry_on_error", 1)),
+                    max_consecutive_errors=int(wfs.get("max_consecutive_errors", 3)),
+                    description=rs.description,
+                ))
+                estimate += 1
+            elif st == "barrier":
+                br = dict(rs.barrier)
+                out.append(BarrierStep(
+                    name=br["name"],
+                    timeout_s=float(resolve_arg(br.get("timeout_s", 60.0), self.variables)),
+                    description=rs.description,
+                ))
+                estimate += 1
+            else:  # command
+                out.append(self._convert_command(
+                    rs, defined_steps, defined_vars, env_names, spath,
+                ))
+                if rs.result_as:
+                    defined_steps.add(rs.result_as)
+                estimate += 1
+
+        return out, estimate
+
+    # ---- 個別変換 ----
+
+    @staticmethod
+    def _as_recipe_step(raw, spath: str) -> RecipeStep:
+        if isinstance(raw, RecipeStep):
+            return raw
+        try:
+            return RecipeStep.model_validate(raw)
+        except Exception as e:  # pydantic ValidationError 等
+            raise SeqExpressionError(f"{spath}: ステップ定義が不正です: {e}")
+
+    def _convert_compute(
+        self, rs: RecipeStep,
+        defined_steps: set[str], defined_vars: set[str],
+        env_names: set[str], spath: str,
+    ) -> ComputeStep:
+        cp = rs.compute or {}
+        set_name = cp["set"]
+        expr = cp["expr"]
+        _validate_expr_refs(
+            expr,
+            defined_steps=defined_steps, defined_vars=defined_vars,
+            param_names=self.param_names, env_names=env_names,
+            context=f"{spath} compute(set={set_name})",
+        )
+        return ComputeStep(
+            set=set_name,
+            expr=expr,
+            unit=cp.get("unit", ""),
+            on_error=cp.get("on_error", "abort"),
+            description=rs.description,
+        )
+
+    def _convert_guard(
+        self, rs: RecipeStep,
+        defined_steps: set[str], defined_vars: set[str],
+        env_names: set[str], spath: str,
+    ) -> GuardStep:
+        gd = rs.guard or {}
+        _validate_expr_refs(
+            gd["expr"],
+            defined_steps=defined_steps, defined_vars=defined_vars,
+            param_names=self.param_names, env_names=env_names,
+            context=f"{spath} guard",
+        )
+        return GuardStep(
+            expr=gd["expr"],
+            on_fail=gd.get("on_fail", "abort"),
+            message=gd.get("message", ""),
+            description=rs.description,
+        )
+
+    def _convert_branch(
+        self, rs: RecipeStep,
+        defined_steps: set[str], defined_vars: set[str],
+        env_names: set[str], branch_depth: int, spath: str,
+    ) -> tuple[BranchStep, int]:
+        if branch_depth + 1 > BRANCH_MAX_DEPTH:
+            raise SeqExpressionError(
+                f"{spath}: branch のネスト深さが上限 ({BRANCH_MAX_DEPTH}) を超えています"
+            )
+        cases: list[BranchCase] = []
+        new_defs: list[tuple[set[str], set[str]]] = []
+        case_estimates: list[int] = []
+        has_else = False
+
+        for ci, case in enumerate(rs.branch or []):
+            is_else = "else" in case
+            when = None if is_else else case.get("when")
+            if is_else:
+                has_else = True
+            if when is not None:
+                _validate_expr_refs(
+                    when,
+                    defined_steps=defined_steps, defined_vars=defined_vars,
+                    param_names=self.param_names, env_names=env_names,
+                    context=f"{spath}/branch case[{ci}].when",
+                )
+            # 各 case は defined set の copy を使う (分岐間の定義漏れ防止)
+            ds = set(defined_steps)
+            dv = set(defined_vars)
+            sub_steps, est = self.convert(
+                case["steps"],
+                defined_steps=ds, defined_vars=dv, env_names=env_names,
+                branch_depth=branch_depth + 1, nested=True,
+                path=f"{spath}/case[{ci}]/steps",
+            )
+            cases.append(BranchCase(when=when, steps=sub_steps))
+            new_defs.append((ds - defined_steps, dv - defined_vars))
+            case_estimates.append(est)
+
+        # 全経路定義検証 (spec §3): else がある場合のみ、**全 case で定義された**
+        # 名前を分岐後スコープへ伝播する。else が無い場合は「どの case も実行され
+        # ない」経路があるため何も伝播しない → 分岐後にその変数を参照すると
+        # 未定義参照としてコンパイルエラーになる。
+        if has_else and new_defs:
+            common_steps = set.intersection(*[d[0] for d in new_defs])
+            common_vars = set.intersection(*[d[1] for d in new_defs])
+            defined_steps |= common_steps
+            defined_vars |= common_vars
+
+        step = BranchStep(cases=cases, description=rs.description)
+        return step, 1 + (max(case_estimates) if case_estimates else 0)
+
+    def _convert_repeat(
+        self, rs: RecipeStep,
+        defined_steps: set[str], defined_vars: set[str],
+        env_names: set[str], branch_depth: int, spath: str,
+    ) -> tuple[RepeatStep, int]:
+        rp = rs.repeat or {}
+        body_env = set(env_names) | {"loop_index"}
+
+        if rp.get("count") is not None:
+            # count はコンパイル時解決 ($param 可)
+            try:
+                count = int(float(resolve_arg(rp["count"], self.variables)))
+            except (ExpressionError, TypeError, ValueError) as e:
+                raise SeqExpressionError(f"{spath}: repeat.count を解決できません: {e}")
+            if count < 1:
+                raise SeqExpressionError(
+                    f"{spath}: repeat.count は 1 以上である必要があります: {count}"
+                )
+            if count > REPEAT_MAX_COUNT:
+                raise SeqExpressionError(
+                    f"{spath}: repeat.count ({count}) が上限 ({REPEAT_MAX_COUNT}) を"
+                    "超えています"
+                )
+            # count >= 1 が保証されるため body 内の定義は分岐後スコープへ伝播する
+            body_steps, est = self.convert(
+                rp["steps"],
+                defined_steps=defined_steps, defined_vars=defined_vars,
+                env_names=body_env,
+                branch_depth=branch_depth, nested=True,
+                path=f"{spath}/repeat/steps",
+            )
+            step = RepeatStep(count=count, body=body_steps, description=rs.description)
+            return step, 1 + count * est
+
+        # while 型
+        while_expr = rp["while"]
+        try:
+            max_it = int(rp["max_iterations"])
+        except (TypeError, ValueError) as e:
+            raise SeqExpressionError(f"{spath}: repeat.max_iterations が不正です: {e}")
+        if max_it < 1:
+            raise SeqExpressionError(
+                f"{spath}: repeat.max_iterations は 1 以上である必要があります: {max_it}"
+            )
+        if max_it > REPEAT_MAX_COUNT:
+            raise SeqExpressionError(
+                f"{spath}: repeat.max_iterations ({max_it}) が上限 "
+                f"({REPEAT_MAX_COUNT}) を超えています"
+            )
+        # while 条件は最初の反復の**前**に評価されるため、body 内でのみ定義される
+        # 変数は参照できない (外側の定義のみで検証。loop_index も不可)
+        _validate_expr_refs(
+            while_expr,
+            defined_steps=defined_steps, defined_vars=defined_vars,
+            param_names=self.param_names, env_names=env_names,
+            context=f"{spath}/repeat.while",
+        )
+        # while は 0 回実行があり得るため body 内の定義は伝播しない (copy で検証)
+        ds = set(defined_steps)
+        dv = set(defined_vars)
+        body_steps, est = self.convert(
+            rp["steps"],
+            defined_steps=ds, defined_vars=dv, env_names=body_env,
+            branch_depth=branch_depth, nested=True,
+            path=f"{spath}/repeat/steps",
+        )
+        step = RepeatStep(
+            while_expr=while_expr, max_iterations=max_it,
+            body=body_steps, description=rs.description,
+        )
+        return step, 1 + max_it * est
+
+    def _convert_command(
+        self, rs: RecipeStep,
+        defined_steps: set[str], defined_vars: set[str],
+        env_names: set[str], spath: str,
+    ) -> CommandStep:
+        resolved_args: dict[str, Any] = {}
+        deferred_args: dict[str, Any] = {}
+        for k, v in rs.args.items():
+            expr = parse_deferred(v)  # ${...} 検出 (SP-2)
+            if expr is not None:
+                _validate_expr_refs(
+                    expr,
+                    defined_steps=defined_steps, defined_vars=defined_vars,
+                    param_names=self.param_names, env_names=env_names,
+                    context=f"{spath} {rs.command}.{k} (${{...}})",
+                )
+                mn, mx = _resolve_range_decl(
+                    self.recipe, self.definition, rs.command or "", k,
+                )
+                deferred_args[k] = {"expr": expr, "min": mn, "max": mx}
+            else:
+                resolved_args[k] = resolve_arg(v, self.variables)
+        # v0.6.0: instrument は logical ref ($psu / alias / resource_name) としてそのまま渡す。
+        # 実 resource への解決は Job executor / step_executor 側で行う。
+        return CommandStep(
+            command=rs.command or "",
+            args=resolved_args,
+            deferred_args=deferred_args,
+            result_as=rs.result_as,
+            value_path=rs.value_path or "",
+            unit=rs.unit or "",
+            description=rs.description,
+            instrument=getattr(rs, "instrument", None),
+            stagger_ms=getattr(rs, "stagger_ms", None),
+        )
 
 
 # ============================================================
@@ -384,12 +665,49 @@ async def execute_plan(
     async def _safe_shutdown() -> dict:
         return await _run_safe_shutdown_sync(visa, session)
 
+    # v2.29.0 (SP-3): branch / repeat 内のリーフ step 実行コールバック (同期経路)
+    async def _nested_run_command(st: CommandStep, path: str) -> dict:
+        return await seq_runtime.process_command_step(
+            visa, session, st, store,
+            override_safety=override_safety,
+            override_reason=override_reason,
+            source_step_path=path,
+            safe_shutdown=_safe_shutdown,
+        )
+
+    async def _nested_run_wait(st: WaitStep, path: str) -> dict:
+        return await execute_wait_step(st)
+
+    nested_execs = seq_runtime.NestedExecutors(
+        run_command=_nested_run_command,
+        run_wait=_nested_run_wait,
+        cancel_check=None,
+    )
+
     for idx, step in enumerate(plan.steps):
         if isinstance(step, WaitStep):
             result = await execute_wait_step(step)
         elif isinstance(step, ComputeStep):
             result = await seq_runtime.process_compute_step(
                 step, store,
+                source_step_path=f"steps[{idx}]",
+                safe_shutdown=_safe_shutdown,
+            )
+        elif isinstance(step, GuardStep):
+            result = await seq_runtime.process_guard_step(
+                step, store,
+                source_step_path=f"steps[{idx}]",
+                safe_shutdown=_safe_shutdown,
+            )
+        elif isinstance(step, BranchStep):
+            result = await seq_runtime.process_branch_step(
+                step, store, nested_execs,
+                source_step_path=f"steps[{idx}]",
+                safe_shutdown=_safe_shutdown,
+            )
+        elif isinstance(step, RepeatStep):
+            result = await seq_runtime.process_repeat_step(
+                step, store, nested_execs,
                 source_step_path=f"steps[{idx}]",
                 safe_shutdown=_safe_shutdown,
             )

@@ -1,5 +1,73 @@
 # 変更履歴
 
+## v2.29.0 — シーケンス処理拡張 SP-3: branch / guard / repeat
+
+合言葉: **「判断を型に降ろし、残りは guard が受け止める」**
+
+SP-1/2 の変数・演算・実行時注入の上に、条件分岐 (branch)・範囲検証 (guard)・
+反復 (repeat) を導入する。これで仕様 §8 の「抵抗率に応じた条件付き測定」を
+分岐込みで事前定義できる。仕様正本は `sequence_processing_spec.html`
+(§5.3 branch / §5.4 repeat / §5.5 guard / §3 全経路定義検証)。
+
+### 追加
+
+- **branch ステップ (§5.3)** — `- branch: [{when: expr, steps: [...]}, ...,
+  {else:, steps: [...]}]`。上から評価し最初に真の case のみ実行 (if/elif/else
+  相当)。else は最後のみ。**ネスト最大深さ 3** (`BRANCH_MAX_DEPTH`)。採択は
+  timeline イベント `branch_taken` (条件式・評価値付き) に記録。
+  **全経路定義検証 (§3)**: 分岐内で定義した変数を分岐後に使う場合、else を含む
+  全 case で定義されていなければコンパイルエラー。
+- **repeat ステップ (§5.4、collect は SP-5)** — count 型
+  (`count: N | "$param"`) と while 型 (`while: expr` + **max_iterations 必須**)。
+  body 内で `env.loop_index` (0 始まり) を参照可 (ネスト時は内側が一時的に
+  上書きし復元)。**max_iterations 到達は failed にせず** `repeat_ended`
+  (reason=max_iterations) を記録し後続 guard で扱える。count / max_iterations
+  上限は `REPEAT_MAX_COUNT` (10,000)、展開後総ステップ見積り上限は
+  `MAX_TOTAL_STEPS_ESTIMATE` (100,000)。
+- **guard ステップ (§5.5)** — `- guard: {expr, on_fail: abort|safe_shutdown|warn,
+  message}`。偽なら on_fail に従う (warn は続行 + `guard_failed` イベント)。
+  式評価エラーは on_fail に関わらず failed (判定不能を通さない)。
+  `on_fail: pause` は SP-4 で追加予定 (指定すると検証エラー)。
+- IR はネスト構造を保持 (`BranchStep.cases[].steps` / `RepeatStep.body` が
+  Step のリスト)。実行は `seq_runtime.execute_step_list` +
+  `process_branch/repeat/guard_step` で、**同期経路と Job 経路の両方**に統合
+  (SP-1/2 と同じ二経路原則)。ネスト step の step_path は
+  `steps[3]/branch/case[1]/steps[0]` / `steps[0]/repeat/iter[2]/steps[1]` 形式で階層保持。
+- **dry-run 拡張** — branch は全 case を展開表示し、test_values があれば各 when
+  の評価値と採択 case を併記。repeat は count が小さければ (<= 5) イテレーション
+  展開、大きければ body 1 回 + 省略表示。guard は式・on_fail・判定結果を表示。
+- `validate_instrument_file` の deferred 範囲 lint を branch / repeat 内の
+  ネスト command にも再帰適用 (保存時ゲートの一貫性)。
+
+### 修正
+
+- **deferred の非数値解決値の明示エラー化** — `${...}` の解決値が str / bool の
+  場合、従来は範囲比較で TypeError が裸で伝播していた。`SeqExpressionError`
+  (「実行時引数は数値である必要があります」) として明示エラー化し、ステップは
+  `deferred_resolve_failed` で failed になる (安全要件 §6: 装置に届く値は数値 +
+  範囲で縛る)。
+
+### 互換性
+
+- 全て追加的。既存レシピの検証・コンパイル結果は不変。MCP ツール面 50 個は不変。
+  `utils/expression.py` / `utils/condition.py` は変更していない。
+- Job 経路の cancel / job_timeout は branch / repeat 内のネスト step 境界でも
+  検出される (`NestedExecutors.cancel_check`)。
+
+### 制限 (SP-3 スコープ)
+
+- branch / repeat 内の polling wait (wait_until / wait_for_condition /
+  wait_for_stable) と barrier は未対応 (コンパイルエラー)。Job manager の
+  トップレベル状態遷移と密結合のため後続 SP で検討。
+- repeat while 条件は最初の反復の**前**に評価されるため、body 内でのみ定義される
+  変数は while 式から参照できない (ループ前に capture / compute しておくこと)。
+- guard / pause 連携・repeat collect・array は SP-4/5。
+
+### ドキュメント
+
+- `docs/sequence_processing.md` に SP-3 節 (branch / repeat / guard・上限定数・
+  制限) を追記。
+
 ## v2.28.0 — シーケンス処理拡張 SP-1 / SP-2: 変数・演算・実行時引数解決
 
 合言葉: **「コードが何を計算しようと、装置に届く値は範囲宣言で縛る」**

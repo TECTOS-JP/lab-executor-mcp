@@ -32,6 +32,7 @@ from lab_executor.experiment_ir import (
     CommandStep, ComputeStep, Plan, WaitStep,
     WaitUntilStep, WaitForConditionStep, WaitForStableStep,
     VariableStore,
+    GuardStep, BranchStep, RepeatStep,
 )
 from lab_executor import seq_runtime
 from lab_executor.job.state_machine import (
@@ -2737,6 +2738,33 @@ class JobManager:
         async def _job_safe_shutdown() -> dict:
             return await self._best_effort_safe_shutdown(session)
 
+        # v2.29.0 (SP-3): branch / repeat 内のリーフ step 実行コールバック (Job 経路)。
+        # command は SP-1/2 と同じ deferred/capture 付き実行、wait は slice +
+        # cancel/timeout チェック付き。cancel_check で各ネスト step 前に中断検出。
+        def _make_nested_execs(idx: int):
+            async def _run_command(st, path):
+                return await seq_runtime.process_command_step(
+                    self._visa, session, st, store,
+                    override_safety=override_safety,
+                    override_reason=override_reason,
+                    source_step_path=path,
+                    emit_event=(
+                        lambda et, pl, _i=idx: self._safe_record_event(
+                            job_id, et, step_index=_i, payload=pl,
+                        )
+                    ),
+                    safe_shutdown=_job_safe_shutdown,
+                )
+
+            async def _run_wait(st, path):
+                return await self._run_wait_with_cancel_check(st, runtime)
+
+            return seq_runtime.NestedExecutors(
+                run_command=_run_command,
+                run_wait=_run_wait,
+                cancel_check=lambda: self._poll_cancel_reason(runtime),
+            )
+
         try:
             for idx, step in enumerate(plan.steps):
                 # 各 step 開始前の timeout / cancel チェック。
@@ -2821,6 +2849,39 @@ class JobManager:
                 elif isinstance(step, ComputeStep):
                     result = await seq_runtime.process_compute_step(
                         step, store,
+                        source_step_path=f"steps[{idx}]",
+                        emit_event=(
+                            lambda et, pl, _i=idx: self._safe_record_event(
+                                job_id, et, step_index=_i, payload=pl,
+                            )
+                        ),
+                        safe_shutdown=_job_safe_shutdown,
+                    )
+                elif isinstance(step, GuardStep):
+                    result = await seq_runtime.process_guard_step(
+                        step, store,
+                        source_step_path=f"steps[{idx}]",
+                        emit_event=(
+                            lambda et, pl, _i=idx: self._safe_record_event(
+                                job_id, et, step_index=_i, payload=pl,
+                            )
+                        ),
+                        safe_shutdown=_job_safe_shutdown,
+                    )
+                elif isinstance(step, BranchStep):
+                    result = await seq_runtime.process_branch_step(
+                        step, store, _make_nested_execs(idx),
+                        source_step_path=f"steps[{idx}]",
+                        emit_event=(
+                            lambda et, pl, _i=idx: self._safe_record_event(
+                                job_id, et, step_index=_i, payload=pl,
+                            )
+                        ),
+                        safe_shutdown=_job_safe_shutdown,
+                    )
+                elif isinstance(step, RepeatStep):
+                    result = await seq_runtime.process_repeat_step(
+                        step, store, _make_nested_execs(idx),
                         source_step_path=f"steps[{idx}]",
                         emit_event=(
                             lambda et, pl, _i=idx: self._safe_record_event(
@@ -3306,4 +3367,12 @@ class JobManager:
             return f"command {step.command}"
         if isinstance(step, ComputeStep):
             return f"compute {step.set} = {step.expr}"
+        if isinstance(step, GuardStep):
+            return f"guard [{step.expr}] on_fail={step.on_fail}"
+        if isinstance(step, BranchStep):
+            return f"branch ({len(step.cases)} cases)"
+        if isinstance(step, RepeatStep):
+            if step.count is not None:
+                return f"repeat count={step.count}"
+            return f"repeat while [{step.while_expr}] max={step.max_iterations}"
         return f"step type={getattr(step, 'type', '?')}"

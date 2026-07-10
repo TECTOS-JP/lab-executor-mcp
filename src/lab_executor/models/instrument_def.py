@@ -251,6 +251,12 @@ class RecipeStep(BaseModel):
     unit: str = ""                          # 注記 (計算には関与しない)
     # v2.28.0 (SP-1): compute (演算) ステップ。{set, expr, unit?, on_error?}
     compute: dict[str, Any] | None = None
+    # v2.29.0 (SP-3): branch / repeat / guard。
+    # ネストした steps は raw dict のまま保持し、recipe_to_plan が再帰的に
+    # RecipeStep として検証・変換する (深さ・参照・全経路定義の検証込み)。
+    branch: list[Any] | None = None          # [{when: expr, steps: [...]}, ..., {else:, steps: [...]}]
+    repeat: dict[str, Any] | None = None     # {count | while + max_iterations, steps: [...]}
+    guard: dict[str, Any] | None = None      # {expr, on_fail?, message?}
     description: str = ""
     # v0.6.0: instrument logical ref ("$psu" / alias / resource)
     # map_recipe で各 target ごとに違う instrument を指す場合に使用
@@ -276,17 +282,22 @@ class RecipeStep(BaseModel):
             "wait_for_stable":    self.wait_for_stable is not None,
             "barrier":            self.barrier is not None,
             "compute":            self.compute is not None,
+            "branch":             self.branch is not None,
+            "repeat":             self.repeat is not None,
+            "guard":              self.guard is not None,
         }
         active = [k for k, v in flags.items() if v]
         if len(active) > 1:
             raise ValueError(
                 f"RecipeStep には command / wait / wait_until / wait_for_condition / "
-                f"wait_for_stable / barrier / compute のうち 1 つだけを指定してください (検出: {active})"
+                f"wait_for_stable / barrier / compute / branch / repeat / guard のうち "
+                f"1 つだけを指定してください (検出: {active})"
             )
         if not active:
             raise ValueError(
                 "RecipeStep には command / wait / wait_until / wait_for_condition / "
-                "wait_for_stable / barrier / compute のいずれかが必須です"
+                "wait_for_stable / barrier / compute / branch / repeat / guard の"
+                "いずれかが必須です"
             )
 
         if flags["compute"]:
@@ -300,6 +311,61 @@ class RecipeStep(BaseModel):
             if oe not in ("abort", "safe_shutdown"):
                 raise ValueError(
                     f"compute.on_error は abort / safe_shutdown のいずれか: {oe!r}"
+                )
+
+        # v2.29.0 (SP-3): branch / repeat / guard の構造チェック (最小限)。
+        # ネスト steps の中身・式・深さは recipe_to_plan で検証される。
+        if flags["branch"]:
+            if not isinstance(self.branch, list) or not self.branch:
+                raise ValueError("branch は 1 つ以上の case のリストである必要があります")
+            for i, case in enumerate(self.branch):
+                if not isinstance(case, dict):
+                    raise ValueError(f"branch case[{i}] は mapping である必要があります")
+                has_when = case.get("when") not in (None, "")
+                has_else = "else" in case
+                if has_when and has_else:
+                    raise ValueError(f"branch case[{i}]: when と else は排他です")
+                if not has_when and not has_else:
+                    raise ValueError(f"branch case[{i}]: when または else が必須です")
+                if has_else and i != len(self.branch) - 1:
+                    raise ValueError("branch の else は最後の case のみ許可されます")
+                if not isinstance(case.get("steps"), list) or not case["steps"]:
+                    raise ValueError(f"branch case[{i}]: steps (非空リスト) が必須です")
+
+        if flags["repeat"]:
+            rp = self.repeat
+            if not isinstance(rp, dict):
+                raise ValueError("repeat は mapping である必要があります")
+            has_count = rp.get("count") is not None
+            has_while = rp.get("while") not in (None, "")
+            if has_count and has_while:
+                raise ValueError("repeat: count と while は排他です")
+            if not has_count and not has_while:
+                raise ValueError("repeat: count または while のいずれかが必須です")
+            if has_while and rp.get("max_iterations") is None:
+                raise ValueError(
+                    "repeat: while 使用時は max_iterations が必須です (無限ループ禁止)"
+                )
+            if "collect" in rp:
+                raise ValueError("repeat.collect は SP-5 で対応予定です (未対応)")
+            if not isinstance(rp.get("steps"), list) or not rp["steps"]:
+                raise ValueError("repeat: steps (非空リスト) が必須です")
+
+        if flags["guard"]:
+            gd = self.guard
+            if not isinstance(gd, dict):
+                raise ValueError("guard は mapping である必要があります")
+            if not gd.get("expr"):
+                raise ValueError("guard には 'expr' が必須です")
+            of = gd.get("on_fail", "abort")
+            if of == "pause":
+                raise ValueError(
+                    "guard.on_fail=pause は SP-4 で対応予定です "
+                    "(abort / safe_shutdown / warn を使用してください)"
+                )
+            if of not in ("abort", "safe_shutdown", "warn"):
+                raise ValueError(
+                    f"guard.on_fail は abort / safe_shutdown / warn のいずれか: {of!r}"
                 )
 
         if flags["wait"]:
@@ -362,6 +428,9 @@ class RecipeStep(BaseModel):
         if self.wait_for_stable is not None: return "wait_for_stable"
         if self.barrier is not None: return "barrier"
         if self.compute is not None: return "compute"
+        if self.branch is not None: return "branch"
+        if self.repeat is not None: return "repeat"
+        if self.guard is not None: return "guard"
         return "command"
 
 

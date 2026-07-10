@@ -186,83 +186,179 @@ def _seed_ctx_from_test_values(
     return ctx
 
 
+# dry-run で repeat count をイテレーション展開表示する上限 (超えたら body 1 回 + 省略)
+DRYRUN_REPEAT_EXPAND_MAX = 5
+
+
+def _copy_ctx(ctx: dict[str, dict]) -> dict[str, dict]:
+    return {ns: dict(table) for ns, table in ctx.items()}
+
+
+def _dryrun_step_row(
+    st: Any, ctx: dict[str, dict], has_test: bool,
+) -> dict[str, Any]:
+    """1 つの IR Step を dry-run 表示用 row に変換する (SP-3 で再帰化)。
+
+    branch / repeat のネスト steps は ``cases`` / ``body`` に再帰展開する。
+    has_test の場合、compute の代入は ctx を mutate して後続へ伝播する
+    (branch は採択 case のみ・repeat は表示イテレーション分)。
+    """
+    from lab_executor.utils.seq_expression import SeqExpressionError, evaluate
+
+    step_type = getattr(st, "type", "command")
+    row: dict[str, Any] = {
+        "type": step_type,
+        "command": getattr(st, "command", "") or "",
+        "instrument": getattr(st, "instrument", None),
+        "args": dict(getattr(st, "args", {}) or {}),
+        "seconds": getattr(st, "seconds", None),
+        "description": getattr(st, "description", "") or "",
+    }
+
+    # SP-2: 実行時解決引数
+    deferred = dict(getattr(st, "deferred_args", {}) or {})
+    if deferred:
+        dinfo: list[dict[str, Any]] = []
+        for arg, spec in deferred.items():
+            entry: dict[str, Any] = {
+                "arg": arg,
+                "expr": spec.get("expr"),
+                "min": spec.get("min"),
+                "max": spec.get("max"),
+                "range_declared": (
+                    spec.get("min") is not None or spec.get("max") is not None
+                ),
+            }
+            if has_test:
+                try:
+                    val = evaluate(spec["expr"], ctx)
+                    entry["resolved"] = val
+                    entry["in_range"] = (
+                        (spec.get("min") is None or val >= spec["min"])
+                        and (spec.get("max") is None or val <= spec["max"])
+                    )
+                except SeqExpressionError as e:
+                    entry["error"] = str(e)
+            else:
+                entry["resolved"] = "deferred"
+            dinfo.append(entry)
+        row["deferred_args"] = dinfo
+
+    # SP-1: compute
+    if step_type == "compute":
+        row["set"] = getattr(st, "set", "")
+        row["expr"] = getattr(st, "expr", "")
+        row["unit"] = getattr(st, "unit", "")
+        if has_test:
+            try:
+                val = evaluate(st.expr, ctx)
+                row["value"] = val
+                ctx["vars"][st.set] = val
+            except SeqExpressionError as e:
+                row["error"] = str(e)
+
+    # SP-3: guard
+    elif step_type == "guard":
+        row["expr"] = getattr(st, "expr", "")
+        row["on_fail"] = getattr(st, "on_fail", "abort")
+        row["message"] = getattr(st, "message", "") or ""
+        if has_test:
+            try:
+                row["passed"] = bool(evaluate(st.expr, ctx))
+            except SeqExpressionError as e:
+                row["error"] = str(e)
+
+    # SP-3: branch — 全 case を展開表示。test_values があれば採択 case を併記
+    elif step_type == "branch":
+        cases_out: list[dict[str, Any]] = []
+        taken_index: int | None = None
+        for ci, case in enumerate(getattr(st, "cases", []) or []):
+            centry: dict[str, Any] = {
+                "case_index": ci,
+                "when": case.when,
+                "is_else": case.when is None,
+            }
+            if has_test and taken_index is None:
+                if case.when is None:
+                    centry["taken"] = True
+                    taken_index = ci
+                else:
+                    try:
+                        val = evaluate(case.when, ctx)
+                        centry["when_value"] = val
+                        if bool(val):
+                            centry["taken"] = True
+                            taken_index = ci
+                        else:
+                            centry["taken"] = False
+                    except SeqExpressionError as e:
+                        centry["error"] = str(e)
+                        centry["taken"] = False
+            # 各 case は ctx の copy で展開し、採択 case のみ親 ctx へ反映
+            case_ctx = _copy_ctx(ctx)
+            centry["steps"] = [
+                _dryrun_step_row(s, case_ctx, has_test) for s in case.steps
+            ]
+            if has_test and centry.get("taken"):
+                for ns in ("steps", "vars"):
+                    ctx[ns].update(case_ctx[ns])
+            cases_out.append(centry)
+        row["cases"] = cases_out
+        if has_test:
+            row["taken_case"] = taken_index
+
+    # SP-3: repeat — count が小さければイテレーション展開、大きければ省略表示
+    elif step_type == "repeat":
+        count = getattr(st, "count", None)
+        row["count"] = count
+        row["while"] = getattr(st, "while_expr", None)
+        row["max_iterations"] = getattr(st, "max_iterations", None)
+        body = list(getattr(st, "body", []) or [])
+        if count is not None and count <= DRYRUN_REPEAT_EXPAND_MAX:
+            iters: list[dict[str, Any]] = []
+            for i in range(count):
+                ctx["env"]["loop_index"] = i
+                iters.append({
+                    "loop_index": i,
+                    "steps": [_dryrun_step_row(s, ctx, has_test) for s in body],
+                })
+            ctx["env"].pop("loop_index", None)
+            row["iterations"] = iters
+        else:
+            # 省略表示: body を 1 回だけ (loop_index=0) 展開する
+            ctx["env"]["loop_index"] = 0
+            row["body"] = [_dryrun_step_row(s, ctx, has_test) for s in body]
+            ctx["env"].pop("loop_index", None)
+            row["iterations_omitted"] = True
+
+    # capture 注記
+    if getattr(st, "result_as", None):
+        row["result_as"] = st.result_as
+        row["value_path"] = getattr(st, "value_path", "") or ""
+
+    return row
+
+
 def dryrun_view(plan: Any, test_values: dict[str, Any] | None = None) -> dict[str, Any]:
     """recipe_to_plan の返り値 (Plan) を dry-run 表示用 dict に整える。
 
     展開された IR Step 列を「種別 / コマンド名 / instrument / 解決済み引数 /
-    wait 秒数 / description」に平坦化する。
+    wait 秒数 / description」に整形する。
 
     v2.28.0 (SP-2): 実行時解決 (${...}) の引数は ``deferred_args`` として
     式・範囲宣言の有無を明示し、``test_values`` があれば解決値も表示する。
     compute ステップは式と (test_values があれば) 評価値を表示する。
 
+    v2.29.0 (SP-3): branch は全 case を展開表示 (test_values があれば採択 case を
+    併記)、repeat は count が小さければイテレーション展開 (大きければ省略表示)、
+    guard は式と on_fail (test_values があれば判定結果) を表示する。
+
     Plan の import はしない (FastAPI 非依存を保つため型は Any で受ける)。
     """
-    from lab_executor.utils.seq_expression import SeqExpressionError, evaluate
-
     ctx = _seed_ctx_from_test_values(plan, test_values)
     has_test = bool(test_values)
 
-    steps_out: list[dict[str, Any]] = []
-    for st in plan.steps:
-        step_type = getattr(st, "type", "command")
-        row: dict[str, Any] = {
-            "type": step_type,
-            "command": getattr(st, "command", "") or "",
-            "instrument": getattr(st, "instrument", None),
-            "args": dict(getattr(st, "args", {}) or {}),
-            "seconds": getattr(st, "seconds", None),
-            "description": getattr(st, "description", "") or "",
-        }
-
-        # SP-2: 実行時解決引数
-        deferred = dict(getattr(st, "deferred_args", {}) or {})
-        if deferred:
-            dinfo: list[dict[str, Any]] = []
-            for arg, spec in deferred.items():
-                entry: dict[str, Any] = {
-                    "arg": arg,
-                    "expr": spec.get("expr"),
-                    "min": spec.get("min"),
-                    "max": spec.get("max"),
-                    "range_declared": (
-                        spec.get("min") is not None or spec.get("max") is not None
-                    ),
-                }
-                if has_test:
-                    try:
-                        val = evaluate(spec["expr"], ctx)
-                        entry["resolved"] = val
-                        entry["in_range"] = (
-                            (spec.get("min") is None or val >= spec["min"])
-                            and (spec.get("max") is None or val <= spec["max"])
-                        )
-                    except SeqExpressionError as e:
-                        entry["error"] = str(e)
-                else:
-                    entry["resolved"] = "deferred"
-                dinfo.append(entry)
-            row["deferred_args"] = dinfo
-
-        # SP-1: compute
-        if step_type == "compute":
-            row["set"] = getattr(st, "set", "")
-            row["expr"] = getattr(st, "expr", "")
-            row["unit"] = getattr(st, "unit", "")
-            if has_test:
-                try:
-                    val = evaluate(st.expr, ctx)
-                    row["value"] = val
-                    ctx["vars"][st.set] = val
-                except SeqExpressionError as e:
-                    row["error"] = str(e)
-
-        # capture 注記
-        if getattr(st, "result_as", None):
-            row["result_as"] = st.result_as
-            row["value_path"] = getattr(st, "value_path", "") or ""
-
-        steps_out.append(row)
+    steps_out = [_dryrun_step_row(st, ctx, has_test) for st in plan.steps]
 
     return {
         "name": getattr(plan, "name", ""),

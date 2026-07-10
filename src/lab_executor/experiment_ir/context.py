@@ -105,3 +105,16 @@ class VariableStore:
     def snapshot(self) -> dict[str, dict]:
         """result 格納用のスナップショット (steps / vars の最終値)。"""
         return {"steps": dict(self._steps), "vars": dict(self._vars)}
+
+    # --- env 操作 (ランタイム内部専用、レシピからは読み取り専用) ---
+    # v2.29.0 (SP-3): repeat が env.loop_index を供給するために使う。
+    # レシピ側から env へ書く手段は提供しない (仕様 §3: env は読み取り専用)。
+
+    def set_env(self, name: str, value: Any) -> None:
+        self._env[name] = value
+
+    def get_env(self, name: str, default: Any = None) -> Any:
+        return self._env.get(name, default)
+
+    def del_env(self, name: str) -> None:
+        self._env.pop(name, None)

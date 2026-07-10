@@ -154,50 +154,101 @@ def _lint_deferred_ranges(defn: InstrumentDefinition, rep: "ValidationReport") -
     宣言 (ParameterDefinition.range または recipe.requires.ranges) が無い場合は
     error を追加する。文字列内埋め込み (${...} が arg 値全体を占めない) も
     未対応として error にする。
+
+    v2.29.0 (SP-3): branch case / repeat body 内の command (raw dict) も
+    再帰的に検査する (保存時に弾く安全要件はネストにも適用)。
     """
     from lab_executor.utils.seq_expression import SeqExpressionError, parse_deferred
+
+    def _check_command(
+        recipe_name: str, ranges_decl: dict,
+        command: str, args: dict, path: str,
+    ) -> None:
+        for arg, value in (args or {}).items():
+            try:
+                expr = parse_deferred(value)
+            except SeqExpressionError as e:
+                rep.errors.append({
+                    "error_class": "recipe_deferred_arg_unsupported",
+                    "message": (
+                        f"recipe '{recipe_name}' {path} {command}.{arg}: {e}"
+                    ),
+                    "field_path": f"recipes.{recipe_name}.{path}",
+                })
+                continue
+            if expr is None:
+                continue
+            # 範囲宣言の存在を確認
+            declared = f"{command}.{arg}" in ranges_decl
+            if not declared:
+                cmd_def = defn.commands.get(command)
+                if cmd_def is not None:
+                    for pdef in cmd_def.parameters:
+                        if pdef.name == arg and pdef.range:
+                            declared = True
+                            break
+            if not declared:
+                rep.errors.append({
+                    "error_class": "recipe_deferred_arg_missing_range",
+                    "message": (
+                        f"recipe '{recipe_name}' {path}: 実行時解決引数 "
+                        f"'{command}.{arg}' に範囲宣言がありません。"
+                        "ParameterDefinition.range または requires.ranges "
+                        "が必須です (安全要件 §6)"
+                    ),
+                    "field_path": f"recipes.{recipe_name}.{path}",
+                    "details": {"command": command, "arg": arg},
+                })
+
+    def _walk_raw_steps(
+        recipe_name: str, ranges_decl: dict, steps: list, path: str,
+    ) -> None:
+        """branch/repeat 内の raw dict step を再帰検査する。"""
+        for i, raw in enumerate(steps or []):
+            if not isinstance(raw, dict):
+                continue
+            spath = f"{path}[{i}]"
+            if raw.get("command"):
+                _check_command(
+                    recipe_name, ranges_decl,
+                    raw["command"], raw.get("args") or {}, spath,
+                )
+            for case in (raw.get("branch") or []):
+                if isinstance(case, dict):
+                    _walk_raw_steps(
+                        recipe_name, ranges_decl,
+                        case.get("steps") or [], f"{spath}.branch.steps",
+                    )
+            rp = raw.get("repeat")
+            if isinstance(rp, dict):
+                _walk_raw_steps(
+                    recipe_name, ranges_decl,
+                    rp.get("steps") or [], f"{spath}.repeat.steps",
+                )
 
     for recipe_name, recipe in (defn.recipes or {}).items():
         ranges_decl = (recipe.requires.ranges if recipe.requires else {}) or {}
         for i, rs in enumerate(recipe.steps):
-            if rs.step_type != "command":
-                continue
-            command = rs.command or ""
-            for arg, value in (rs.args or {}).items():
-                try:
-                    expr = parse_deferred(value)
-                except SeqExpressionError as e:
-                    rep.errors.append({
-                        "error_class": "recipe_deferred_arg_unsupported",
-                        "message": (
-                            f"recipe '{recipe_name}' step[{i}] {command}.{arg}: {e}"
-                        ),
-                        "field_path": f"recipes.{recipe_name}.steps[{i}]",
-                    })
-                    continue
-                if expr is None:
-                    continue
-                # 範囲宣言の存在を確認
-                declared = f"{command}.{arg}" in ranges_decl
-                if not declared:
-                    cmd_def = defn.commands.get(command)
-                    if cmd_def is not None:
-                        for pdef in cmd_def.parameters:
-                            if pdef.name == arg and pdef.range:
-                                declared = True
-                                break
-                if not declared:
-                    rep.errors.append({
-                        "error_class": "recipe_deferred_arg_missing_range",
-                        "message": (
-                            f"recipe '{recipe_name}' step[{i}]: 実行時解決引数 "
-                            f"'{command}.{arg}' に範囲宣言がありません。"
-                            "ParameterDefinition.range または requires.ranges "
-                            "が必須です (安全要件 §6)"
-                        ),
-                        "field_path": f"recipes.{recipe_name}.steps[{i}]",
-                        "details": {"command": command, "arg": arg},
-                    })
+            st = rs.step_type
+            if st == "command":
+                _check_command(
+                    recipe_name, ranges_decl,
+                    rs.command or "", rs.args or {}, f"steps[{i}]",
+                )
+            elif st == "branch":
+                for case in (rs.branch or []):
+                    if isinstance(case, dict):
+                        _walk_raw_steps(
+                            recipe_name, ranges_decl,
+                            case.get("steps") or [],
+                            f"steps[{i}].branch.steps",
+                        )
+            elif st == "repeat":
+                _walk_raw_steps(
+                    recipe_name, ranges_decl,
+                    (rs.repeat or {}).get("steps") or [],
+                    f"steps[{i}].repeat.steps",
+                )
 
 
 def validate_instrument_file(

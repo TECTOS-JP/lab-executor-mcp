@@ -337,12 +337,118 @@ class ComputeStep(BaseModel):
         return v
 
 
+# ============================================================
+# v2.29.0 (SP-3): guard / branch / repeat
+# ============================================================
+
+
+class GuardStep(BaseModel):
+    """範囲検証と安全動作 (sequence_processing_spec §5.5)。assert 相当。
+
+    ``expr`` が偽のとき ``on_fail`` に従う:
+    - ``abort``: ステップ failed で終端
+    - ``safe_shutdown``: 装置の安全停止後 failed
+    - ``warn``: 続行 + timeline warning (``guard_failed`` イベント)
+
+    ``pause`` は SP-4 で追加予定 (paused 状態機械が前提のため)。
+    式評価エラー (未定義参照等) は on_fail に関わらず failed (判定不能を通さない)。
+    """
+    type: Literal["guard"] = "guard"
+    expr: str
+    on_fail: Literal["abort", "safe_shutdown", "warn"] = "abort"
+    message: str = ""
+    description: str = ""
+
+    @field_validator("expr")
+    @classmethod
+    def _expr_nonempty(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("GuardStep.expr は空にできません")
+        return v
+
+
+class BranchCase(BaseModel):
+    """branch の 1 分岐。``when=None`` は else 分岐 (最後のみ許可)。"""
+    when: str | None = None
+    steps: list["Step"] = Field(default_factory=list)
+
+
+class BranchStep(BaseModel):
+    """条件判断 (sequence_processing_spec §5.3)。
+
+    ``cases`` を上から評価し、最初に真になった when の steps のみ実行する
+    (if / elif / else 相当)。else (when=None) は省略可・最後のみ。
+    採択された分岐は timeline イベント ``branch_taken`` に記録される。
+    ネスト最大深さ 3 (コンパイル時に recipe_to_plan が検証)。
+    """
+    type: Literal["branch"] = "branch"
+    cases: list[BranchCase] = Field(default_factory=list)
+    description: str = ""
+
+    @model_validator(mode="after")
+    def _validate_cases(self) -> "BranchStep":
+        if not self.cases:
+            raise ValueError("BranchStep には 1 つ以上の case が必要です")
+        for i, c in enumerate(self.cases):
+            if c.when is None and i != len(self.cases) - 1:
+                raise ValueError("branch の else は最後の case のみ許可されます")
+        return self
+
+
+class RepeatStep(BaseModel):
+    """反復 (sequence_processing_spec §5.4、collect は SP-5)。
+
+    - count 型: ``count`` 回 body を実行 (コンパイル時解決済みの int)
+    - while 型: ``while_expr`` が真の間 body を実行。``max_iterations`` 必須
+      (無限ループ禁止)。上限到達は「条件不成立のまま終了」として
+      ``repeat_ended`` (reason=max_iterations) を記録し **failed にはしない**
+      (後続 guard で扱えるようにする)
+
+    body 内では ``env.loop_index`` (0 始まり) を参照できる。
+    """
+    type: Literal["repeat"] = "repeat"
+    count: int | None = None
+    while_expr: str | None = None
+    max_iterations: int | None = None
+    body: list["Step"] = Field(default_factory=list)
+    description: str = ""
+
+    @model_validator(mode="after")
+    def _validate_mode(self) -> "RepeatStep":
+        has_count = self.count is not None
+        has_while = self.while_expr is not None and self.while_expr.strip() != ""
+        if has_count and has_while:
+            raise ValueError("repeat: count と while は排他です")
+        if not has_count and not has_while:
+            raise ValueError("repeat: count または while のいずれかが必須です")
+        if has_count and self.count < 1:  # type: ignore[operator]
+            raise ValueError(f"repeat.count は 1 以上である必要があります: {self.count}")
+        if has_while:
+            if self.max_iterations is None:
+                raise ValueError(
+                    "repeat: while 使用時は max_iterations が必須です (無限ループ禁止)"
+                )
+            if self.max_iterations < 1:
+                raise ValueError(
+                    f"repeat.max_iterations は 1 以上である必要があります: {self.max_iterations}"
+                )
+        if not self.body:
+            raise ValueError("repeat.body (steps) は空にできません")
+        return self
+
+
 # discriminated union: type フィールドで自動的に正しいモデルが選ばれる
 Step = Annotated[
     Union[
         CommandStep, WaitStep, WaitUntilStep,
         WaitForConditionStep, WaitForStableStep,
         BarrierStep, ComputeStep,
+        GuardStep, BranchStep, RepeatStep,
     ],
     Field(discriminator="type"),
 ]
+
+# 再帰参照 (BranchCase.steps / RepeatStep.body -> Step) の解決
+BranchCase.model_rebuild()
+BranchStep.model_rebuild()
+RepeatStep.model_rebuild()

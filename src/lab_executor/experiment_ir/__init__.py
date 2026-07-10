@@ -15,6 +15,10 @@ from lab_executor.experiment_ir.step import (
     WaitForStableStep,
     BarrierStep,
     ComputeStep,
+    GuardStep,
+    BranchCase,
+    BranchStep,
+    RepeatStep,
     Step,
 )
 from lab_executor.experiment_ir.plan import Plan
@@ -28,6 +32,10 @@ __all__ = [
     "WaitForStableStep",
     "BarrierStep",
     "ComputeStep",
+    "GuardStep",
+    "BranchCase",
+    "BranchStep",
+    "RepeatStep",
     "Step",
     "Plan",
     "VariableStore",
