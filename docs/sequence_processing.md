@@ -1,18 +1,19 @@
-# シーケンス処理拡張 リファレンス (SP-1 / SP-2 / SP-3)
+# シーケンス処理拡張 リファレンス (SP-1 〜 SP-4)
 
-v2.28.0 (SP-1/2)・v2.29.0 (SP-3) で導入。手動作成シーケンス (UI で作成 → 投入して
-放置) の中に「その場の判断」を事前定義するための機構。仕様正本は
-`sequence_processing_spec.html` (§3 変数モデル・§4 式言語・§5.1-5.5・§6)。
-本書はその **SP-1 / SP-2 / SP-3 段階の実装版**リファレンスである。
+v2.28.0 (SP-1/2)・v2.29.0 (SP-3)・v2.30.0 (SP-4) で導入。手動作成シーケンス
+(UI で作成 → 投入して放置) の中に「その場の判断」を事前定義するための機構。
+仕様正本は `sequence_processing_spec.html` (§3 変数モデル・§4 式言語・
+§5.1-5.6・§6)。本書はその **SP-1 〜 SP-4 段階の実装版**リファレンスである。
 
 対象範囲 (この版で実装):
 
 - SP-1: 統合式言語 / capture 拡張 / compute ステップ / 変数の timeline 記録
 - SP-2: `${...}` 実行時引数解決 / 範囲宣言必須 / 実行時範囲執行 / dry-run 拡張
 - SP-3: branch (条件分岐) / repeat (反復) / guard (範囲検証と安全動作)
+- SP-4: pause (人間 / AI の呼び出し。message の `${...}` 補間を含む)
 
-未実装 (後続 SP): pause (SP-4)、array / NumPy / repeat collect (SP-5)、
-py / dll (SP-6)、サブシーケンス (SP-7)、message 等の文字列補間。
+未実装 (後続 SP): array / NumPy / repeat collect (SP-5)、py / dll (SP-6)、
+サブシーケンス (SP-7)、args への `${...}` 部分埋め込み。
 
 ---
 
@@ -123,7 +124,8 @@ steps:
 | `"$expr"` | コンパイル時 (recipe_to_plan) | params のみからなる式 |
 | `"${expr}"` | 実行時 (ステップ実行直前) | steps/vars/env を含む式 |
 
-- `${expr}` は **arg 値全体を占める場合のみ**対応 (文字列内埋め込みは SP-4)。
+- `${expr}` は **arg 値全体を占める場合のみ**対応。文字列内埋め込みは v2.30.0 (SP-4) で
+  **pause の message 等の表示文字列に限り**解禁 (args への部分埋め込みは引き続き禁止)。
 - コンパイル時、deferred として `CommandStep.deferred_args`
   (`{arg: {"expr", "min", "max"}}`) に保持する。args からは除外される。
 
@@ -214,7 +216,8 @@ steps:
   - `abort`: ステップ failed で終端 (`error="guard_failed"`)
   - `safe_shutdown`: 装置の安全停止を実行してから failed
   - `warn`: **続行** + timeline イベント `guard_failed` (warning)
-- `on_fail: pause` は SP-4 で追加予定 (現在は検証エラー)。
+- `on_fail: pause` は未対応 (検証エラー)。pause ステップを guard の後に置くことで同等の
+  流れを構成できる (§13)。
 - 式評価エラー (未定義参照等) は on_fail に関わらず failed
   (`error="guard_error"`。判定不能のまま通さない)。
 - 推奨規約 (spec §5.5): capture / compute の直後に guard を置く。
@@ -307,3 +310,68 @@ recipes:
 
 系列の収集 (`collect:` で array に蓄積) は SP-5 で対応予定。それまでは各反復の
 capture は同名変数への上書きになる (最後の値のみ残る)。
+
+---
+
+## 13. pause — 人間 / AI の呼び出し (§5.6、v2.30.0 SP-4)
+
+```yaml
+- pause:
+    message: "抵抗率 ${vars.resistivity} Ω·m。続行してよいですか?"
+    timeout_s: 3600                # 必須 (既定 3600)
+    on_timeout: "safe_shutdown"    # abort | safe_shutdown (既定)
+    expose: ["vars.resistivity", "steps.thickness"]   # 確認画面に表示する値
+```
+
+「常時監視が難しい」問題への直接の答え: 監視は不要、**呼ばれたときだけ人が見る**。
+応答が無ければ timeout の既定は safe_shutdown (安全側)。
+
+### 状態機械の扱い (実装方針)
+
+- **JobStatus の 8 状態は変更しない** (v1 stability policy)。pause 中は
+  **status=WAITING のまま**。
+- 「pause 要求中」は `job_pauses` テーブルの未解決レコード (resolution IS NULL)
+  + timeline イベント `pause_requested` (message・expose 値・応答期限) で表現する。
+- observation 層 (`compute_current_phase`) が未解決 pause を検出したら
+  **phase="paused"** を返す (`PHASE_ENUM` に追加。get_experiment_timeline 等の
+  MCP observation・UI 詳細画面の両方に現れる)。
+
+### message の `${...}` 補間
+
+- SP-4 で文字列内埋め込みを解禁したのは **表示文字列 (message) のみ**。
+  装置に届く args への部分埋め込みは引き続き禁止 (SP-2 の安全要件のまま)。
+- 補間式はコンパイル時に参照検証される。実行時の評価エラーは fail-soft
+  (未解決のまま表示。表示専用のため failed にはしない)。
+
+### 応答経路 (3 つ)
+
+1. **UI**: ジョブ詳細画面の pause パネル (「続行 / 中止」ボタン。M4 の cancel と
+   同じ available 条件・confirm)。`/api/control/jobs/{id}/pause-response`
+   プロキシ経由。
+2. **control plane**: `POST /control/jobs/{job_id}/pause-response
+   {action: continue|abort, responder}` (X-Control-Token 認証・audit 記録は
+   cancel と同じ流儀)。
+3. **CLI**: `lab-executor job respond-pause <job_id> --action continue|abort
+   [--responder NAME] [--db PATH]` — control plane が使えない環境 (AI が MCP +
+   CLI のみ持つ場合等) のための直接応答 (state DB の resolution を更新)。
+   **MCP ツールは追加しない** (tool surface 50 不変)。
+
+### 実行時の挙動
+
+- 待機は 200ms slice で `resolution` をポーリング (job cancel / job_timeout_s
+  にも即応)。
+- `continue`: step success として再開。result に resolution / responder が残る。
+- `abort`: step failed (`error="pause_aborted"`) → job failed。
+- `timeout_s` 超過: `on_timeout` に従う。`safe_shutdown` なら装置の安全停止を
+  実行してから failed (`error="pause_timeout"`)。timeline に `pause_timeout`。
+- 応答は timeline イベント `pause_resolved` (action / responder) に記録される。
+
+### 制限 (SP-4 スコープ)
+
+- **Job 経路のみ対応**。同期 execute_recipe は `AsyncStepRequiresJob` で
+  start_recipe_job への切替を促す (wait 系の前例)。
+- branch / repeat 内の pause は未対応 (コンパイルエラー)。
+- guard の `on_fail: pause` は未対応 (guard の直後に pause ステップを置く)。
+- M-1 通知エンジンは未実装のため、通知は timeline イベント + UI 表示 +
+  control.json 経由の既存監視で行う (通知フックの将来接続点は
+  `JobManager._run_pause_step` の TODO(M-1) コメント)。

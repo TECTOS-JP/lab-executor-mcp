@@ -237,8 +237,29 @@ CREATE INDEX IF NOT EXISTS idx_locks_job_id ON locks(job_id);
 """
 
 
+_SCHEMA_V2_30_0_ADDITIONS = """
+-- v2.30.0 (SP-4): pause 要求の永続化。
+-- JobStatus 8 状態は変更しない (v1 stability policy)。pause 中は status=WAITING の
+-- まま、このテーブルの「未解決レコード (resolution IS NULL)」が pause 要求中を表す。
+-- observation 層はこれを見て phase="paused" を返す。
+CREATE TABLE IF NOT EXISTS job_pauses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id TEXT NOT NULL,
+    step_path TEXT NOT NULL DEFAULT '',
+    message TEXT NOT NULL DEFAULT '',
+    expose_json TEXT,
+    requested_at TEXT NOT NULL,
+    timeout_at TEXT,
+    resolution TEXT,
+    resolved_at TEXT,
+    responder TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_job_pauses_job_id ON job_pauses(job_id);
+"""
+
+
 # 現行 schema version (PRAGMA user_version で管理)
-CURRENT_SCHEMA_VERSION = 3
+CURRENT_SCHEMA_VERSION = 4
 
 
 def _apply_migrations(conn: sqlite3.Connection) -> int:
@@ -282,6 +303,17 @@ def _apply_migrations(conn: sqlite3.Connection) -> int:
             "(v0.9.3 additions: audit + locks)",
         )
         current = 3
+
+    if current < 4:
+        # v0.9.x → v2.30.0: job_pauses 追加 (SP-4 pause)
+        conn.executescript(_SCHEMA_V2_30_0_ADDITIONS)
+        conn.execute("PRAGMA user_version = 4")
+        conn.commit()
+        logger.info(
+            "SQLite schema migration: user_version 3 → 4 "
+            "(v2.30.0 additions: job_pauses)",
+        )
+        current = 4
 
     return current
 
@@ -637,6 +669,96 @@ class JobStore:
             }
             for r in rows
         ]
+
+    # --- job_pauses (v2.30.0 SP-4) ---
+
+    @staticmethod
+    def _pause_row_to_dict(r: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "id": r["id"],
+            "job_id": r["job_id"],
+            "step_path": r["step_path"],
+            "message": r["message"],
+            "expose": json.loads(r["expose_json"]) if r["expose_json"] else {},
+            "requested_at": r["requested_at"],
+            "timeout_at": r["timeout_at"],
+            "resolution": r["resolution"],
+            "resolved_at": r["resolved_at"],
+            "responder": r["responder"],
+        }
+
+    def create_pause(
+        self,
+        job_id: str,
+        *,
+        step_path: str,
+        message: str,
+        expose: dict[str, Any] | None = None,
+        timeout_at: str | None = None,
+    ) -> int:
+        """pause 要求レコードを追加する (resolution=NULL = 未解決)。返り値 = row id。"""
+        now = _now_iso()
+        with self._write_lock:
+            cur = self._connect().execute(
+                """
+                INSERT INTO job_pauses
+                (job_id, step_path, message, expose_json, requested_at, timeout_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (job_id, step_path, message,
+                 _dumps_utf8_safe(expose or {}), now, timeout_at),
+            )
+            self._connect().commit()
+            return cur.lastrowid or 0
+
+    def get_active_pause(self, job_id: str) -> dict[str, Any] | None:
+        """未解決 (resolution IS NULL) の pause レコードを返す。無ければ None。"""
+        row = self._connect().execute(
+            "SELECT * FROM job_pauses WHERE job_id = ? AND resolution IS NULL "
+            "ORDER BY id DESC LIMIT 1",
+            (job_id,),
+        ).fetchone()
+        return self._pause_row_to_dict(row) if row else None
+
+    def get_pause_by_id(self, pause_id: int) -> dict[str, Any] | None:
+        """row id で pause レコードを取得する (実行側のポーリング用)。"""
+        row = self._connect().execute(
+            "SELECT * FROM job_pauses WHERE id = ?", (int(pause_id),),
+        ).fetchone()
+        return self._pause_row_to_dict(row) if row else None
+
+    def resolve_pause(
+        self,
+        job_id: str,
+        resolution: str,
+        *,
+        responder: str = "",
+    ) -> bool:
+        """未解決 pause を resolution で解決する。
+
+        返り値: 解決できたら True、未解決 pause が無ければ False。
+        resolution: continue | abort | timeout | cancelled
+        """
+        now = _now_iso()
+        with self._write_lock:
+            cur = self._connect().execute(
+                """
+                UPDATE job_pauses
+                SET resolution = ?, resolved_at = ?, responder = ?
+                WHERE job_id = ? AND resolution IS NULL
+                """,
+                (resolution, now, responder, job_id),
+            )
+            self._connect().commit()
+            return cur.rowcount > 0
+
+    def list_pauses(self, job_id: str) -> list[dict[str, Any]]:
+        """job の pause レコードを古い順に列挙する。"""
+        rows = self._connect().execute(
+            "SELECT * FROM job_pauses WHERE job_id = ? ORDER BY id ASC",
+            (job_id,),
+        ).fetchall()
+        return [self._pause_row_to_dict(r) for r in rows]
 
     # --- job_steps ---
 

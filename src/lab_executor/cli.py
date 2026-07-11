@@ -635,6 +635,36 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     asset_catalog.add_argument("--json", action="store_true")
 
+    # ---- job (v2.30.0: SP-4 pause 応答) --------------------------
+    sp_job = sub.add_parser(
+        "job",
+        help="v2.30: Job operations (respond-pause)",
+    )
+    job_sub = sp_job.add_subparsers(dest="job_command")
+
+    job_rp = job_sub.add_parser(
+        "respond-pause",
+        help=(
+            "Respond to a paused job (SP-4). Writes the resolution "
+            "directly to the state DB (for AI/headless use when the "
+            "control plane is not reachable). MCP tool surface stays at 50."
+        ),
+    )
+    job_rp.add_argument("job_id", help="job id (job_...)")
+    job_rp.add_argument(
+        "--action", required=True, choices=["continue", "abort"],
+        help="continue: 実行を再開 / abort: ステップ failed で終了",
+    )
+    job_rp.add_argument(
+        "--responder", default="cli",
+        help="応答者の識別子 (timeline に記録)",
+    )
+    job_rp.add_argument(
+        "--db", default=None,
+        help="state DB path (省略時は VISA_MCP_STATE_DB または既定)",
+    )
+    job_rp.add_argument("--json", action="store_true")
+
     # ---- diagnose (v2.2.0: tool-surface CLI) ---------------------
     sp_diag = sub.add_parser(
         "diagnose",
@@ -1931,6 +1961,91 @@ def _cmd_diagnose(args: argparse.Namespace) -> int:
 
 
 # ============================================================
+# job (v2.30.0: SP-4 pause 応答)
+# ============================================================
+
+
+def _cmd_job(args) -> int:
+    """``lab-executor job respond-pause <job_id> --action continue|abort``。
+
+    control plane が使えない環境 (AI が MCP + CLI のみ持つ場合等) のための
+    直接応答経路。state DB の job_pauses.resolution を直接更新し、
+    ``pause_resolved`` timeline イベントを記録する。serve 側の pause 待ち
+    ループが resolution を拾って再開 / 中止する。MCP ツールは追加しない
+    (tool surface 50 不変。MCP ツール化は stability policy 判断が必要なため将来)。
+    """
+    sub = getattr(args, "job_command", None)
+    if sub != "respond-pause":
+        print(
+            "usage: lab-executor job respond-pause <job_id> "
+            "--action continue|abort [--responder NAME] [--db PATH]",
+            file=sys.stderr,
+        )
+        return 2
+
+    import json as _json
+    from pathlib import Path as _P
+
+    from lab_executor.job.store import JobStore
+
+    db_path = _P(args.db) if args.db else None
+    if db_path is not None and not db_path.exists():
+        print(f"respond-pause: state DB が見つかりません: {db_path}",
+              file=sys.stderr)
+        return 1
+
+    store = JobStore(db_path=db_path)
+    try:
+        active = store.get_active_pause(args.job_id)
+        if active is None:
+            print(
+                f"respond-pause: job {args.job_id} に未解決の pause がありません",
+                file=sys.stderr,
+            )
+            return 1
+        ok = store.resolve_pause(
+            args.job_id, args.action, responder=args.responder,
+        )
+        if ok:
+            try:
+                store.record_event(
+                    args.job_id, "pause_resolved",
+                    payload={
+                        "action": args.action,
+                        "responder": args.responder,
+                        "step_path": active["step_path"],
+                        "via": "cli",
+                    },
+                )
+            except Exception:  # noqa: BLE001 - イベント記録失敗は応答自体を妨げない
+                pass
+        result = {
+            "ok": ok,
+            "job_id": args.job_id,
+            "action": args.action,
+            "responder": args.responder,
+            "step_path": active["step_path"],
+            "message": active["message"],
+        }
+        if args.json:
+            print(_json.dumps(result, ensure_ascii=False, indent=2))
+        else:
+            if ok:
+                print(
+                    f"respond-pause: {args.job_id} へ '{args.action}' を"
+                    f"送信しました (step={active['step_path']})"
+                )
+            else:
+                print(
+                    "respond-pause: pause は既に解決されています",
+                    file=sys.stderr,
+                )
+        return 0 if ok else 1
+    finally:
+        store.close()
+
+
+# ============================================================
 # main
 # ============================================================
 
@@ -1956,6 +2071,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_instrument(args)
     if args.command == "asset":
         return _cmd_asset(args)
+    if args.command == "job":
+        return _cmd_job(args)
     if args.command == "diagnose":
         return _cmd_diagnose(args)
 

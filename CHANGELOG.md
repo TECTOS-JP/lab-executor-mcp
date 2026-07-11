@@ -1,5 +1,69 @@
 # 変更履歴
 
+## v2.30.0 — シーケンス処理拡張 SP-4: pause — 人間 / AI の呼び出し
+
+合言葉: **「監視は不要、呼ばれたときだけ人が見る」**
+
+定義しきれない判断を人間 (UI) または AI (control plane / CLI) に安全に返す
+pause ステップを導入する (sequence_processing_spec §5.6)。「常時監視が難しい」
+問題への直接の答え: 応答が無ければ timeout で安全側 (safe_shutdown 既定) に落ちる。
+
+### 設計指針 (状態機械の扱い)
+
+- **JobStatus の 8 状態は変更しない** (v1 stability policy で凍結された契約)。
+  pause 中は **status=WAITING のまま**、「pause 要求中」は新テーブル
+  ``job_pauses`` の未解決レコード + timeline イベント ``pause_requested`` で表現する。
+- observation 層の ``compute_current_phase`` が未解決 pause を検出したら
+  **phase="paused"** を返す (``PHASE_ENUM`` へ追加 — 状態機械契約の外の
+  observation 層拡張。既存 PHASE_ENUM 拡張の前例に従う)。
+
+### 追加
+
+- **pause ステップ** — ``- pause: {message?, timeout_s? (既定 3600),
+  on_timeout: abort|safe_shutdown (既定 safe_shutdown), expose?: [参照式]}``。
+  - ``message`` は **${...} 補間可** (SP-4 で文字列内埋め込みを解禁したのは
+    message 等の表示文字列のみ。**args への部分埋め込みは引き続き禁止**)。
+    補間はコンパイル時に参照検証、実行時評価エラーは fail-soft (表示専用)。
+  - ``expose`` の参照式は実行時に評価され、pause レコード /
+    ``pause_requested`` イベント / UI 確認画面に表示される。
+  - **Job 経路のみ対応**。同期 execute_recipe は AsyncStepRequiresJob で
+    Job 化を促す (wait 系の前例に従う)。branch / repeat 内の pause は未対応
+    (コンパイルエラー)。
+  - 待機は既存 wait と同じ 200ms slice + cancel/timeout チェックで、
+    job_pauses の resolution をポーリング。continue=再開 / abort=failed
+    (pause_aborted) / timeout=on_timeout に従い failed (pause_timeout。
+    safe_shutdown なら安全停止を実行)。
+- **応答経路 (control plane)** — ``POST /control/jobs/{job_id}/pause-response
+  {action: continue|abort, responder}`` を追加 (token 認証・audit 記録は
+  cancel と同じ流儀、``tool_name="control.pause_response"``)。
+- **UI (M4 流儀)** — ``/api/control/jobs/{id}/pause-response`` プロキシ +
+  ジョブ詳細画面に pause パネル (message・expose 値・応答期限・
+  「続行 / 中止」ボタン。abort は confirm)。詳細 API / 画面の phase が
+  paused になる。
+- **CLI** — ``lab-executor job respond-pause <job_id> --action continue|abort
+  [--responder NAME] [--db PATH]``。control plane が使えない環境 (AI が MCP +
+  CLI のみ持つ場合等) のための直接応答経路 (state DB の resolution を更新)。
+  **MCP ツールは追加しない** (tool surface 50 不変。MCP ツール化は stability
+  policy 判断が必要なため将来)。
+- **store** — 新テーブル ``job_pauses`` (schema user_version 3 → 4 の非破壊
+  migration)。``create_pause / get_active_pause / get_pause_by_id /
+  resolve_pause / list_pauses``。UI の ReadOnlyJobStore にも読み取りを追加
+  (テーブル未作成の旧 DB では None — エラーにしない)。
+- timeline イベント: ``pause_requested / pause_resolved / pause_timeout``。
+- get_experiment_timeline 系 (MCP observation): phase="paused" +
+  ``current_activity.pause`` (message / expose / 期限) を追加 (additive)。
+
+### 通知 (M-1 との関係)
+
+M-1 通知エンジンは未実装のため、timeline イベント + UI 表示 + control.json
+経由の既存監視で運用する。通知フックの将来接続点は
+``JobManager._run_pause_step`` 内の TODO(M-1) コメントに明示した。
+
+### 互換性
+
+- 全て追加的。JobStatus / MCP ツール面 50 / 既存レシピの検証結果は不変。
+  ``utils/expression.py`` / ``condition.py`` は変更していない。
+
 ## v2.29.0 — シーケンス処理拡張 SP-3: branch / guard / repeat
 
 合言葉: **「判断を型に降ろし、残りは guard が受け止める」**

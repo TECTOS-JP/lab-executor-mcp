@@ -237,6 +237,42 @@ class ReadOnlyJobStore:
         finally:
             conn.close()
 
+    # ---------- job_pauses (v2.30.0 SP-4) ----------
+
+    def get_active_pause(self, job_id: str) -> dict[str, Any] | None:
+        """未解決 (resolution IS NULL) の pause レコードを返す (JobStore と同形)。
+
+        古い DB (job_pauses テーブル未作成) では None を返す (エラーにしない —
+        pause 機能を使っていない DB を UI が読めなくならないように)。
+        """
+        conn = self._connect()
+        try:
+            try:
+                row = conn.execute(
+                    "SELECT * FROM job_pauses "
+                    "WHERE job_id = ? AND resolution IS NULL "
+                    "ORDER BY id DESC LIMIT 1",
+                    (job_id,),
+                ).fetchone()
+            except sqlite3.OperationalError:
+                return None  # テーブル未作成 (migration 前の DB)
+            if row is None:
+                return None
+            return {
+                "id": row["id"],
+                "job_id": row["job_id"],
+                "step_path": row["step_path"],
+                "message": row["message"],
+                "expose": (
+                    json.loads(row["expose_json"]) if row["expose_json"] else {}
+                ),
+                "requested_at": row["requested_at"],
+                "timeout_at": row["timeout_at"],
+                "resolution": row["resolution"],
+            }
+        finally:
+            conn.close()
+
     # ---------- health ----------
 
     def health(self) -> dict[str, Any]:

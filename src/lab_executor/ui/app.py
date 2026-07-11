@@ -179,6 +179,7 @@ def create_app(
             store.list_steps(job_id),
             store.list_events(job_id),
             store.list_target_runs(job_id),
+            pause=store.get_active_pause(job_id),
         )
         sweep = _build_sweep_chart(store, job_id)
         control_available = (
@@ -368,6 +369,7 @@ def create_app(
             store.list_steps(job_id),
             store.list_events(job_id),
             store.list_target_runs(job_id),
+            pause=store.get_active_pause(job_id),
         )
         return detail
 
@@ -462,6 +464,38 @@ def _register_control_routes(app, control_client) -> None:
         timeout_s = body.get("timeout_s", 30.0)
         status, resp = await asyncio.to_thread(
             control_client.cancel, job_id, cancel_mode, timeout_s,
+        )
+        return JSONResponse(status_code=status, content=resp)
+
+    @app.post("/api/control/jobs/{job_id}/pause-response")
+    async def api_control_pause_response(request: Request, job_id: str):
+        """v2.30.0 (SP-4): pause への「続行 / 中止」応答をコントロールプレーンへ転送。"""
+        bad = _require_json(request)
+        if bad is not None:
+            return bad
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001
+            return JSONResponse(
+                status_code=422,
+                content={"error": "invalid_json", "detail": "JSON body が不正です"},
+            )
+        if not isinstance(body, dict):
+            return JSONResponse(
+                status_code=422,
+                content={"error": "invalid_json", "detail": "object を送ってください"},
+            )
+        action = body.get("action", "")
+        if action not in ("continue", "abort"):
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "error": "invalid_action",
+                    "detail": "action は continue / abort のいずれかです",
+                },
+            )
+        status, resp = await asyncio.to_thread(
+            control_client.pause_response, job_id, action,
         )
         return JSONResponse(status_code=status, content=resp)
 

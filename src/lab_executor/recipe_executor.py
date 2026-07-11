@@ -23,13 +23,14 @@ from .experiment_ir import (
     CommandStep, ComputeStep, Plan, Step, WaitStep,
     WaitUntilStep, WaitForConditionStep, WaitForStableStep,
     BarrierStep, VariableStore,
-    GuardStep, BranchCase, BranchStep, RepeatStep,
+    GuardStep, BranchCase, BranchStep, RepeatStep, PauseStep,
 )
 from .models.instrument_def import InstrumentDefinition, RecipeDefinition, RecipeStep
 from .step_executor import execute_command_step, execute_wait_step
 from .utils.expression import resolve_arg, ExpressionError
 from .utils.seq_expression import (
     SeqExpressionError, check_expr, parse_deferred, referenced_names,
+    string_expr_parts,
 )
 from . import seq_runtime
 
@@ -225,10 +226,11 @@ class _StepConverter:
     """
 
     # ネスト (branch case / repeat body) 内で許可しない step 種別。
-    # polling / barrier は Job manager のトップレベル状態遷移 (WAITING 等)
-    # と密結合のため SP-3 では未対応 (逸脱として docs に記載)。
+    # polling / barrier / pause は Job manager のトップレベル状態遷移
+    # (WAITING 等)・pause レコード管理と密結合のため未対応 (docs に記載)。
     _NESTED_FORBIDDEN = frozenset({
         "wait_until", "wait_for_condition", "wait_for_stable", "barrier",
+        "pause",
     })
 
     def __init__(
@@ -278,6 +280,11 @@ class _StepConverter:
                 estimate += 1
             elif st == "guard":
                 out.append(self._convert_guard(
+                    rs, defined_steps, defined_vars, env_names, spath,
+                ))
+                estimate += 1
+            elif st == "pause":
+                out.append(self._convert_pause(
                     rs, defined_steps, defined_vars, env_names, spath,
                 ))
                 estimate += 1
@@ -432,6 +439,46 @@ class _StepConverter:
             expr=gd["expr"],
             on_fail=gd.get("on_fail", "abort"),
             message=gd.get("message", ""),
+            description=rs.description,
+        )
+
+    def _convert_pause(
+        self, rs: RecipeStep,
+        defined_steps: set[str], defined_vars: set[str],
+        env_names: set[str], spath: str,
+    ) -> PauseStep:
+        """pause の変換 (v2.30.0 SP-4)。
+
+        - message 内の ${...} (表示文字列補間) をコンパイル時検証
+        - expose の各参照式をコンパイル時検証
+        - timeout_s は $param 解決可
+        """
+        ps = rs.pause or {}
+        message = str(ps.get("message", ""))
+        for expr in string_expr_parts(message):
+            _validate_expr_refs(
+                expr,
+                defined_steps=defined_steps, defined_vars=defined_vars,
+                param_names=self.param_names, env_names=env_names,
+                context=f"{spath} pause.message",
+            )
+        expose = [str(x) for x in (ps.get("expose") or [])]
+        for expr in expose:
+            _validate_expr_refs(
+                expr,
+                defined_steps=defined_steps, defined_vars=defined_vars,
+                param_names=self.param_names, env_names=env_names,
+                context=f"{spath} pause.expose",
+            )
+        try:
+            timeout_s = float(resolve_arg(ps.get("timeout_s", 3600.0), self.variables))
+        except (ExpressionError, TypeError, ValueError) as e:
+            raise SeqExpressionError(f"{spath}: pause.timeout_s を解決できません: {e}")
+        return PauseStep(
+            message=message,
+            timeout_s=timeout_s,
+            on_timeout=ps.get("on_timeout", "safe_shutdown"),
+            expose=expose,
             description=rs.description,
         )
 
@@ -626,16 +673,18 @@ async def execute_plan(
     # LLM が誤って execute_recipe を選んだ場合に分かりやすく Job 化を促す。
     # barrier は Map Job 内の target 間同期なので、単一 target の execute_recipe では
     # 永遠に成立しない (1 つの target だけが arrive して全 target 揃わない)。
+    # v2.30.0 (SP-4): pause も同様 (応答待ちの pause レコード管理は Job 経路のみ)。
     for s in plan.steps:
-        if isinstance(s, (WaitUntilStep, WaitForConditionStep, WaitForStableStep, BarrierStep)):
+        if isinstance(s, (WaitUntilStep, WaitForConditionStep, WaitForStableStep,
+                          BarrierStep, PauseStep)):
             is_barrier = isinstance(s, BarrierStep)
             return {
                 "success": False,
                 "recipe": recipe_name or plan.name,
                 "error": "AsyncStepRequiresJob",
                 "message": (
-                    "wait_until / wait_for_condition / wait_for_stable / barrier を含む recipe は "
-                    "execute_recipe では実行できません。"
+                    "wait_until / wait_for_condition / wait_for_stable / barrier / pause "
+                    "を含む recipe は execute_recipe では実行できません。"
                     + ("**start_map_recipe_job** を使ってください "
                        "(barrier は target 間同期のため Map Job で意味を持ちます)。"
                        if is_barrier else

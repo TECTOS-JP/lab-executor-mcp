@@ -437,6 +437,41 @@ class RepeatStep(BaseModel):
         return self
 
 
+# ============================================================
+# v2.30.0 (SP-4): pause (人間 / AI の呼び出し)
+# ============================================================
+
+
+class PauseStep(BaseModel):
+    """実行を一時停止し、人間 (UI) または AI (control plane / CLI) の応答を待つ
+    (sequence_processing_spec §5.6)。
+
+    - ``message``: 確認画面に表示する文字列。``${...}`` 補間可
+      (SP-4 で解禁したのは表示文字列のみ。args への部分埋め込みは禁止のまま)
+    - ``timeout_s``: 応答待ちの上限 (必須、既定 3600)。超過時は ``on_timeout``
+    - ``on_timeout``: abort | safe_shutdown (既定 safe_shutdown — 応答が無ければ安全側)
+    - ``expose``: 確認画面に表示する参照式のリスト (例 "vars.resistivity")
+
+    状態機械上は WAITING のまま (JobStatus 8 状態は変更しない)。
+    「pause 要求中」は job_pauses テーブル + timeline イベント
+    ``pause_requested`` で表現し、observation 層が phase="paused" を返す。
+    Job 経路のみ対応 (同期 execute_plan は AsyncStepRequiresJob で Job 化を促す)。
+    """
+    type: Literal["pause"] = "pause"
+    message: str = ""
+    timeout_s: float = 3600.0
+    on_timeout: Literal["abort", "safe_shutdown"] = "safe_shutdown"
+    expose: list[str] = Field(default_factory=list)
+    description: str = ""
+
+    @field_validator("timeout_s")
+    @classmethod
+    def _timeout_positive(cls, v: float) -> float:
+        if v <= 0:
+            raise ValueError(f"PauseStep.timeout_s は正の値である必要があります: {v}")
+        return v
+
+
 # discriminated union: type フィールドで自動的に正しいモデルが選ばれる
 Step = Annotated[
     Union[
@@ -444,6 +479,7 @@ Step = Annotated[
         WaitForConditionStep, WaitForStableStep,
         BarrierStep, ComputeStep,
         GuardStep, BranchStep, RepeatStep,
+        PauseStep,
     ],
     Field(discriminator="type"),
 ]

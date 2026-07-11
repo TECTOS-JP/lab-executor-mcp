@@ -14,6 +14,75 @@
   <span class="resource">resource: {{ detail.job.resource_name }}</span>
 </div>
 
+{% if detail.pause %}
+<section class="control-section pause-section" id="pause-panel">
+  <h2>実行の確認待ち (paused)</h2>
+  <p class="pause-message">{{ detail.pause.message or "続行してよいですか?" }}</p>
+  {% if detail.pause.expose %}
+  <table class="pause-expose">
+    <thead><tr><th>値</th><th>現在値</th></tr></thead>
+    <tbody>
+      {% for k, v in detail.pause.expose.items() %}
+      <tr><td><code>{{ k }}</code></td><td>{{ v }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+  <p class="pause-deadline">応答期限: {{ detail.pause.timeout_at or "-" }}
+     (超過時は安全側動作)</p>
+  {% if control_available %}
+  <div class="control-buttons">
+    <button type="button" class="btn pause-continue"
+            data-action="continue">続行</button>
+    <button type="button" class="btn pause-abort"
+            data-action="abort">中止</button>
+  </div>
+  <p class="control-result" id="pause-result" hidden></p>
+  <script>
+    (function () {
+      var panel = document.getElementById("pause-panel");
+      if (!panel) return;
+      var result = document.getElementById("pause-result");
+      function post(action) {
+        if (action === "abort" &&
+            !window.confirm("この pause を中止 (abort) しますか? ジョブは failed で終了します。")) {
+          return;
+        }
+        result.hidden = false;
+        result.textContent = "応答送信中… (" + action + ")";
+        fetch("/api/control/jobs/{{ detail.job_id }}/pause-response", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: action }),
+        })
+          .then(function (r) { return r.json().then(function (b) {
+            return { status: r.status, body: b };
+          }); })
+          .then(function (o) {
+            if (o.status >= 200 && o.status < 300) {
+              result.textContent = "応答を受け付けました: " + (o.body.action || "?");
+            } else {
+              result.textContent = "エラー: " +
+                (o.body.detail || o.body.error || o.status);
+            }
+          })
+          .catch(function () { result.textContent = "通信エラー"; });
+      }
+      panel.querySelectorAll(".control-buttons .btn").forEach(function (b) {
+        b.addEventListener("click", function () { post(b.dataset.action); });
+      });
+    })();
+  </script>
+  {% else %}
+  <p class="control-note">
+    コントロールプレーンが無効のため、UI からは応答できません。
+    CLI <code>lab-executor job respond-pause {{ detail.job_id }} --action continue</code>
+    を使用してください。
+  </p>
+  {% endif %}
+</section>
+{% endif %}
+
 {% if control_available and not detail.is_terminal %}
 <section class="control-section" id="cancel-panel">
   <h2>ジョブ操作</h2>

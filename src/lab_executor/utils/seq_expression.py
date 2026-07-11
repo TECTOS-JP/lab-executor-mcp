@@ -334,5 +334,65 @@ def parse_deferred(value: Any) -> str | None:
             raise SeqExpressionError("空の ${} 式です")
         return inner
     raise SeqExpressionError(
-        f"文字列内への ${{...}} 埋め込みは未対応です (SP-4 予定): {value!r}"
+        f"文字列内への ${{...}} 埋め込みは未対応です (表示文字列 [pause の message 等] "
+        f"のみ v2.30.0 で対応。args への部分埋め込みは引き続き禁止): {value!r}"
     )
+
+
+# ============================================================
+# 表示文字列内の ${...} 補間 (SP-4)
+# ============================================================
+# 装置に届く args ではなく、pause の message 等「人間/AI への表示文字列」
+# 専用。args への部分埋め込みは引き続き parse_deferred が拒否する。
+
+
+def string_expr_parts(text: str) -> list[str]:
+    """表示文字列内の ``${expr}`` の式部分を出現順に列挙する (検証用)。
+
+    対応する ``}`` が無い・空の式は ``SeqExpressionError``。
+    """
+    out: list[str] = []
+    i = 0
+    while True:
+        start = text.find("${", i)
+        if start < 0:
+            break
+        end = text.find("}", start + 2)
+        if end < 0:
+            raise SeqExpressionError(
+                f"閉じられていない ${{...}} があります: {text!r}"
+            )
+        inner = text[start + 2:end].strip()
+        if not inner:
+            raise SeqExpressionError(f"空の ${{}} 式です: {text!r}")
+        out.append(inner)
+        i = end + 1
+    return out
+
+
+def interpolate_string(text: str, ctx: dict[str, dict]) -> str:
+    """表示文字列内の ``${expr}`` を評価値で置換する (SP-4、message 用)。
+
+    評価エラーの部分は **そのまま残す** (表示専用のため安全に fail-soft。
+    装置に届く値ではないので guard/deferred のような failed 化はしない)。
+    """
+    result: list[str] = []
+    i = 0
+    while True:
+        start = text.find("${", i)
+        if start < 0:
+            result.append(text[i:])
+            break
+        end = text.find("}", start + 2)
+        if end < 0:
+            result.append(text[i:])
+            break
+        result.append(text[i:start])
+        raw = text[start:end + 1]
+        inner = text[start + 2:end].strip()
+        try:
+            result.append(str(evaluate(inner, ctx)))
+        except SeqExpressionError:
+            result.append(raw)  # fail-soft: 未解決のまま表示
+        i = end + 1
+    return "".join(result)

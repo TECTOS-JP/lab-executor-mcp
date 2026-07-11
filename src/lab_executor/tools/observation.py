@@ -430,9 +430,17 @@ def register_tools(mcp: FastMCP, job_mgr: JobManager) -> None:
             _trs = []
         job_outcome = compute_job_outcome(rec.status.value, _trs)
 
+        # v2.30.0 (SP-4): 未解決 pause があれば phase="paused"
+        active_pause = None
+        try:
+            active_pause = job_mgr.store.get_active_pause(job_id)
+        except Exception:
+            active_pause = None
+
         phase = compute_current_phase(
             rec.status.value, last_evt, rec.last_step_summary, progress_type,
             job_outcome=job_outcome,
+            pause_active=active_pause is not None,
         )
 
         # current_activity
@@ -440,6 +448,15 @@ def register_tools(mcp: FastMCP, job_mgr: JobManager) -> None:
             "kind": phase,
             "description": rec.last_step_summary or "",
         }
+        # v2.30.0 (SP-4): pause 中は応答に必要な情報を追加 (additive field)
+        if active_pause is not None:
+            current_activity["pause"] = {
+                "message": active_pause.get("message"),
+                "expose": active_pause.get("expose"),
+                "requested_at": active_pause.get("requested_at"),
+                "timeout_at": active_pause.get("timeout_at"),
+                "step_path": active_pause.get("step_path"),
+            }
         # 直近 event payload から target_id / step_index を採用
         if events:
             ev = events[0]

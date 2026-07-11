@@ -268,6 +268,26 @@ def _dryrun_step_row(
             except SeqExpressionError as e:
                 row["error"] = str(e)
 
+    # SP-4: pause (dry-run では実行せず宣言内容のみ表示)
+    elif step_type == "pause":
+        from lab_executor.utils.seq_expression import interpolate_string
+        row["message"] = (
+            interpolate_string(getattr(st, "message", "") or "", ctx)
+            if has_test else (getattr(st, "message", "") or "")
+        )
+        row["timeout_s"] = getattr(st, "timeout_s", None)
+        row["on_timeout"] = getattr(st, "on_timeout", "safe_shutdown")
+        expose_rows: list[dict[str, Any]] = []
+        for expr in getattr(st, "expose", []) or []:
+            entry: dict[str, Any] = {"expr": expr}
+            if has_test:
+                try:
+                    entry["value"] = evaluate(expr, ctx)
+                except SeqExpressionError as e:
+                    entry["error"] = str(e)
+            expose_rows.append(entry)
+        row["expose"] = expose_rows
+
     # SP-3: branch — 全 case を展開表示。test_values があれば採択 case を併記
     elif step_type == "branch":
         cases_out: list[dict[str, Any]] = []
@@ -374,12 +394,15 @@ def job_detail_view(
     steps: list[dict[str, Any]],
     events: list[dict[str, Any]],
     target_runs: list[dict[str, Any]],
+    pause: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """ジョブ詳細の表示用 dict。
 
     - ``events`` は list_events の返り値 (新しい順)。timeline は
       normalize_event で正規化し、表示は **古い順** に並べ直す。
     - 終端ジョブなら build_run_summary を含める。
+    - ``pause`` (v2.30.0 SP-4): 未解決 pause レコード。あれば phase="paused" +
+      応答パネル用に detail["pause"] へ載せる。
     """
     status = job.get("status", "unknown")
     last_event_type = latest_event_kind(events)  # events[0].event_type
@@ -389,6 +412,7 @@ def job_detail_view(
         last_event_type,
         last_step_summary=job.get("last_step_summary"),
         job_outcome=outcome,
+        pause_active=pause is not None,
     )
 
     # timeline: normalize してから古い順 (timestamp / event_id 昇順) に。
@@ -428,4 +452,5 @@ def job_detail_view(
         "timeline": timeline,
         "target_runs": target_runs,
         "summary": summary,
+        "pause": pause,
     }

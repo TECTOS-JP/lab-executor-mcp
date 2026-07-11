@@ -14,6 +14,7 @@ import asyncio
 import logging
 import time
 import uuid
+from datetime import datetime, timedelta, timezone
 from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -32,7 +33,7 @@ from lab_executor.experiment_ir import (
     CommandStep, ComputeStep, Plan, WaitStep,
     WaitUntilStep, WaitForConditionStep, WaitForStableStep,
     VariableStore,
-    GuardStep, BranchStep, RepeatStep,
+    GuardStep, BranchStep, RepeatStep, PauseStep,
 )
 from lab_executor import seq_runtime
 from lab_executor.job.state_machine import (
@@ -2890,6 +2891,14 @@ class JobManager:
                         ),
                         safe_shutdown=_job_safe_shutdown,
                     )
+                elif isinstance(step, PauseStep):
+                    # v2.30.0 (SP-4): status=WAITING のまま応答を待つ
+                    # (JobStatus 8 状態は変更しない)
+                    self._safe_transition(job_id, JobStatus.WAITING)
+                    result = await self._run_pause_step(
+                        rec, session, runtime, step, idx, store,
+                    )
+                    self._safe_transition(job_id, JobStatus.RUNNING)
                 else:
                     result = {
                         "success": False,
@@ -3021,6 +3030,201 @@ class JobManager:
                 last_step_summary=f"unexpected: {e}",
                 result={"success": False, "error": "InternalError", "message": str(e)},
             )
+
+    # ============================================================
+    # v2.30.0 (SP-4): pause (人間 / AI の呼び出し)
+    # ============================================================
+
+    async def _run_pause_step(
+        self,
+        rec: JobRecord,
+        session,
+        runtime: "_JobRuntime",
+        step: PauseStep,
+        idx: int,
+        var_store: VariableStore,
+    ) -> dict:
+        """PauseStep を実行する (Job 経路専用)。
+
+        - message を ${...} 補間、expose の参照式を評価して pause レコードを作成
+        - timeline に ``pause_requested`` を記録
+        - ``_WAIT_SLICE_S`` 刻みで pause レコードの resolution をポーリング
+          (job cancel / job_timeout / pause timeout_s にも応答)
+        - continue: success / abort: failed (pause_aborted) /
+          timeout: on_timeout に従い failed (pause_timeout、safe_shutdown 可)
+        """
+        from lab_executor.utils.seq_expression import (
+            SeqExpressionError, evaluate, interpolate_string,
+        )
+
+        job_id = rec.job_id
+        ctx = var_store.as_ctx()
+        message = interpolate_string(step.message, ctx)
+        expose_vals: dict[str, Any] = {}
+        for expr in step.expose:
+            try:
+                expose_vals[expr] = evaluate(expr, ctx)
+            except SeqExpressionError as e:
+                # 表示専用のため fail-soft (装置に届く値ではない)
+                expose_vals[expr] = f"<error: {e}>"
+
+        step_path = f"steps[{idx}]"
+        now = datetime.now(timezone.utc)
+        timeout_at = (
+            now + timedelta(seconds=step.timeout_s)
+        ).isoformat(timespec="seconds")
+
+        pause_id = self._store.create_pause(
+            job_id,
+            step_path=step_path,
+            message=message,
+            expose=expose_vals,
+            timeout_at=timeout_at,
+        )
+        self._safe_record_event(
+            job_id, "pause_requested",
+            step_index=idx,
+            payload={
+                "message": message,
+                "expose": expose_vals,
+                "timeout_s": step.timeout_s,
+                "timeout_at": timeout_at,
+                "on_timeout": step.on_timeout,
+                "step_path": step_path,
+            },
+        )
+        # TODO(M-1 通知エンジン): 実装後ここが通知フックの接続点になる
+        # (pause_requested を notification engine へ publish する)。
+        # 現状は timeline イベント + UI 表示 + control.json 経由の監視で足りる。
+
+        base = {
+            "step_type": "pause", "message": message,
+            "expose": expose_vals, "on_timeout": step.on_timeout,
+        }
+        deadline = time.monotonic() + float(step.timeout_s)
+
+        while True:
+            # job 全体の timeout (queued 起点)
+            if runtime.is_timed_out():
+                self._store.resolve_pause(
+                    job_id, "cancelled", responder="job_timeout",
+                )
+                return {
+                    **base, "success": False, "error": "timeout",
+                    "interrupted_by_timeout": True,
+                    "message": "pause interrupted by job_timeout_s",
+                }
+            # job cancel
+            if runtime.cancel_mode is not None:
+                self._store.resolve_pause(
+                    job_id, "cancelled", responder="job_cancel",
+                )
+                return {
+                    **base, "success": False, "error": "cancelled",
+                    "interrupted_by_cancel": True,
+                    "message": "pause interrupted by cancel request",
+                }
+            # 応答チェック
+            row = self._store.get_pause_by_id(pause_id)
+            resolution = (row or {}).get("resolution")
+            if resolution == "continue":
+                self._safe_record_event(
+                    job_id, "pause_resolved",
+                    step_index=idx,
+                    payload={"action": "continue",
+                             "responder": (row or {}).get("responder"),
+                             "step_path": step_path},
+                )
+                return {
+                    **base, "success": True, "resolution": "continue",
+                    "responder": (row or {}).get("responder"),
+                }
+            if resolution == "abort":
+                self._safe_record_event(
+                    job_id, "pause_resolved",
+                    step_index=idx,
+                    payload={"action": "abort",
+                             "responder": (row or {}).get("responder"),
+                             "step_path": step_path},
+                )
+                return {
+                    **base, "success": False, "error": "pause_aborted",
+                    "resolution": "abort",
+                    "responder": (row or {}).get("responder"),
+                    "message": "pause で中止が選択されました",
+                }
+            # pause 自体の timeout_s
+            if time.monotonic() >= deadline:
+                self._store.resolve_pause(
+                    job_id, "timeout", responder="pause_timeout",
+                )
+                shutdown = None
+                if step.on_timeout == "safe_shutdown":
+                    shutdown = await self._best_effort_safe_shutdown(session)
+                self._safe_record_event(
+                    job_id, "pause_timeout",
+                    step_index=idx,
+                    payload={"on_timeout": step.on_timeout,
+                             "timeout_s": step.timeout_s,
+                             "step_path": step_path,
+                             "safe_shutdown_attempted": bool(
+                                 shutdown and shutdown.get("attempted")
+                             )},
+                )
+                return {
+                    **base, "success": False, "error": "pause_timeout",
+                    "resolution": "timeout",
+                    "message": (
+                        f"pause が {step.timeout_s} 秒以内に応答されませんでした "
+                        f"(on_timeout={step.on_timeout})"
+                    ),
+                    "safe_shutdown": shutdown,
+                }
+            await asyncio.sleep(_WAIT_SLICE_S)
+
+    def respond_pause(
+        self,
+        job_id: str,
+        action: str,
+        *,
+        responder: str = "",
+    ) -> dict:
+        """pause 要求への応答 (control plane / CLI から呼ばれる)。
+
+        action: "continue" | "abort"。未解決 pause が無い / job 不在はエラー dict。
+        """
+        if action not in ("continue", "abort"):
+            return {
+                "ok": False, "error": "invalid_action",
+                "detail": f"action は continue / abort のいずれか: {action!r}",
+            }
+        rec = self._store.get(job_id)
+        if rec is None:
+            return {
+                "ok": False, "error": "not_found",
+                "detail": f"job not found: {job_id}",
+            }
+        active = self._store.get_active_pause(job_id)
+        if active is None:
+            return {
+                "ok": False, "error": "no_active_pause",
+                "detail": f"job {job_id} に未解決の pause がありません",
+            }
+        ok = self._store.resolve_pause(job_id, action, responder=responder)
+        if not ok:
+            # 競合 (別応答が先に解決した)
+            return {
+                "ok": False, "error": "no_active_pause",
+                "detail": "pause は既に解決されています",
+            }
+        return {
+            "ok": True,
+            "job_id": job_id,
+            "action": action,
+            "responder": responder,
+            "step_path": active["step_path"],
+            "message": active["message"],
+        }
 
     async def _run_wait_with_cancel_check(
         self,
@@ -3375,4 +3579,6 @@ class JobManager:
             if step.count is not None:
                 return f"repeat count={step.count}"
             return f"repeat while [{step.while_expr}] max={step.max_iterations}"
+        if isinstance(step, PauseStep):
+            return f"pause (timeout={step.timeout_s}s, on_timeout={step.on_timeout})"
         return f"step type={getattr(step, 'type', '?')}"

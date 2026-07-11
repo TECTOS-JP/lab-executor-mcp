@@ -257,6 +257,9 @@ class RecipeStep(BaseModel):
     branch: list[Any] | None = None          # [{when: expr, steps: [...]}, ..., {else:, steps: [...]}]
     repeat: dict[str, Any] | None = None     # {count | while + max_iterations, steps: [...]}
     guard: dict[str, Any] | None = None      # {expr, on_fail?, message?}
+    # v2.30.0 (SP-4): pause (人間/AI の呼び出し)。
+    # {message?, timeout_s?, on_timeout?, expose?}。message は ${...} 補間可。
+    pause: dict[str, Any] | None = None
     description: str = ""
     # v0.6.0: instrument logical ref ("$psu" / alias / resource)
     # map_recipe で各 target ごとに違う instrument を指す場合に使用
@@ -285,19 +288,20 @@ class RecipeStep(BaseModel):
             "branch":             self.branch is not None,
             "repeat":             self.repeat is not None,
             "guard":              self.guard is not None,
+            "pause":              self.pause is not None,
         }
         active = [k for k, v in flags.items() if v]
         if len(active) > 1:
             raise ValueError(
                 f"RecipeStep には command / wait / wait_until / wait_for_condition / "
-                f"wait_for_stable / barrier / compute / branch / repeat / guard のうち "
-                f"1 つだけを指定してください (検出: {active})"
+                f"wait_for_stable / barrier / compute / branch / repeat / guard / pause "
+                f"のうち 1 つだけを指定してください (検出: {active})"
             )
         if not active:
             raise ValueError(
                 "RecipeStep には command / wait / wait_until / wait_for_condition / "
-                "wait_for_stable / barrier / compute / branch / repeat / guard の"
-                "いずれかが必須です"
+                "wait_for_stable / barrier / compute / branch / repeat / guard / pause "
+                "のいずれかが必須です"
             )
 
         if flags["compute"]:
@@ -360,12 +364,39 @@ class RecipeStep(BaseModel):
             of = gd.get("on_fail", "abort")
             if of == "pause":
                 raise ValueError(
-                    "guard.on_fail=pause は SP-4 で対応予定です "
-                    "(abort / safe_shutdown / warn を使用してください)"
+                    "guard.on_fail=pause は未対応です (pause ステップを guard の"
+                    "後に置くか、abort / safe_shutdown / warn を使用してください)"
                 )
             if of not in ("abort", "safe_shutdown", "warn"):
                 raise ValueError(
                     f"guard.on_fail は abort / safe_shutdown / warn のいずれか: {of!r}"
+                )
+
+        # v2.30.0 (SP-4): pause の構造チェック (式の検証は recipe_to_plan)。
+        if flags["pause"]:
+            ps = self.pause
+            if not isinstance(ps, dict):
+                raise ValueError("pause は mapping である必要があります")
+            ot = ps.get("on_timeout", "safe_shutdown")
+            if ot not in ("abort", "safe_shutdown"):
+                raise ValueError(
+                    f"pause.on_timeout は abort / safe_shutdown のいずれか: {ot!r}"
+                )
+            ts = ps.get("timeout_s", 3600.0)
+            if not isinstance(ts, str):
+                try:
+                    if float(ts) <= 0:
+                        raise ValueError(
+                            "pause.timeout_s は正の値である必要があります"
+                        )
+                except (TypeError, ValueError) as e:
+                    raise ValueError(f"pause.timeout_s が不正です: {e}")
+            exp = ps.get("expose", [])
+            if not isinstance(exp, list) or any(
+                not isinstance(x, str) or not x.strip() for x in exp
+            ):
+                raise ValueError(
+                    "pause.expose は参照式 (文字列) のリストである必要があります"
                 )
 
         if flags["wait"]:
@@ -431,6 +462,7 @@ class RecipeStep(BaseModel):
         if self.branch is not None: return "branch"
         if self.repeat is not None: return "repeat"
         if self.guard is not None: return "guard"
+        if self.pause is not None: return "pause"
         return "command"
 
 

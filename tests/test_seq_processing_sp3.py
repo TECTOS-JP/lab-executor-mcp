@@ -352,7 +352,9 @@ def test_guard_on_fail_pause_rejected():
             {"guard": {"expr": "steps.x < 1", "on_fail": "pause"}},
         ],
     }
-    with pytest.raises(Exception, match="SP-4"):
+    # v2.30.0 (SP-4): スタンドアロン pause ステップは実装されたが、
+    # guard.on_fail=pause は引き続き未対応 (代替手順を案内するメッセージに変更)。
+    with pytest.raises(Exception, match="on_fail=pause"):
         InstrumentDefinition(**yaml_doc)
 
 

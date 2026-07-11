@@ -400,3 +400,17 @@ commands:
 - 多重 resource lock は **canonical sorted 順** で取得 (deadlock 回避)
 - 単位変換は **しない** (`MEAS:TEMP?` が "25.3" を返したらそのまま 25.3 として評価)
 - timeout は 3 階層 (`command_timeout_s < timeout_s < job_timeout_s`)、混同しない
+
+## pause (v2.30.0 / SP-4)
+
+レシピの `pause` ステップは Job を**中断せず** (JobStatus は WAITING のまま)、
+`job_pauses` テーブルに未解決レコードを作って応答を待つ。
+
+- observation 層は未解決 pause を検出すると `current_phase="paused"` を返す
+  (**JobStatus の 8 状態は不変** — v1 stability policy の契約を守るための設計)
+- 応答経路: ①control plane `POST /control/jobs/{job_id}/pause-response`
+  (`{action: continue|abort, responder}`、token 認証 + audit 記録)
+  ②UI ジョブ詳細の「続行 / 中止」ボタン (①のプロキシ)
+  ③CLI `lab-executor job respond-pause <job_id> --action continue|abort`
+- `timeout_s` 経過で無応答なら `on_timeout` (既定 safe_shutdown) に従う
+- 待機中も cancel_job は従来どおり機能する (200ms slice でチェック)

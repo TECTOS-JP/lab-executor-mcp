@@ -239,6 +239,85 @@ def create_control_app(
         )
         return JSONResponse(data)
 
+    async def pause_response(request: Request) -> JSONResponse:
+        """v2.30.0 (SP-4): pause への「続行 / 中止」応答。
+
+        token 認証・audit 記録は cancel と同じ流儀。応答は
+        ``JobManager.respond_pause`` (job_pauses の resolution 更新) 経由。
+        """
+        if not _token_ok(request):
+            return _unauthorized()
+        job_id = request.path_params["job_id"]
+        body = await _read_json(request)
+        action = body.get("action", "")
+        if action not in ("continue", "abort"):
+            return JSONResponse(
+                {
+                    "error": "invalid_action",
+                    "detail": f"不正な action: {action!r}",
+                    "valid": ["continue", "abort"],
+                },
+                status_code=422,
+            )
+        responder = body.get("responder") or "web-ui"
+        audit.record_event(
+            "job_pause_response_requested",
+            severity="warning" if action == "abort" else "info",
+            owner=responder,
+            client_id="control-plane",
+            tool_name="control.pause_response",
+            job_id=job_id,
+            request={"action": action},
+        )
+        try:
+            result = job_mgr.respond_pause(
+                job_id, action, responder=responder,
+            )
+        except Exception as exc:  # noqa: BLE001
+            audit.record_event(
+                "job_pause_response_failed",
+                severity="error",
+                status="error",
+                owner=responder,
+                client_id="control-plane",
+                tool_name="control.pause_response",
+                job_id=job_id,
+                error_class="internal",
+                message=str(exc),
+            )
+            return JSONResponse(
+                {"error": "pause_response_failed", "detail": str(exc)},
+                status_code=500,
+            )
+        if not result.get("ok"):
+            err = result.get("error", "pause_response_failed")
+            status_code = 404 if err in ("not_found", "no_active_pause") else 422
+            audit.record_event(
+                "job_pause_response_failed",
+                severity="warning",
+                status="error",
+                owner=responder,
+                client_id="control-plane",
+                tool_name="control.pause_response",
+                job_id=job_id,
+                error_class=err,
+                message=result.get("detail"),
+            )
+            return JSONResponse(
+                {"error": err, "detail": result.get("detail")},
+                status_code=status_code,
+            )
+        audit.record_event(
+            "job_pause_responded",
+            severity="warning" if action == "abort" else "info",
+            owner=responder,
+            client_id="control-plane",
+            tool_name="control.pause_response",
+            job_id=job_id,
+            response=result,
+        )
+        return JSONResponse(result)
+
     async def start_recipe(request: Request) -> JSONResponse:
         if not _token_ok(request):
             return _unauthorized()
@@ -338,6 +417,10 @@ def create_control_app(
         Route("/control/health", health, methods=["GET"]),
         Route(
             "/control/jobs/{job_id}/cancel", cancel_job, methods=["POST"]
+        ),
+        Route(
+            "/control/jobs/{job_id}/pause-response",
+            pause_response, methods=["POST"],
         ),
         Route(
             "/control/jobs/start-recipe", start_recipe, methods=["POST"]

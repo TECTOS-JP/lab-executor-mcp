@@ -88,6 +88,27 @@ class ControlClient:
             },
         )
 
+    def pause_response(
+        self,
+        job_id: str,
+        action: str,
+        *,
+        owner: str = "web-ui",
+    ) -> tuple[int, dict]:
+        """v2.30.0 (SP-4): pause への続行/中止応答を転送する。"""
+        info = self._load()
+        if info is None:
+            return 503, {
+                "error": "control_unavailable",
+                "detail": "control.json が見つかりません",
+            }
+        return self._request(
+            "POST",
+            info,
+            f"/control/jobs/{job_id}/pause-response",
+            {"action": action, "responder": owner},
+        )
+
     def start_recipe(
         self,
         resource_name: str,

@@ -19,6 +19,7 @@ from lab_executor.experiment_ir.step import (
     BranchCase,
     BranchStep,
     RepeatStep,
+    PauseStep,
     Step,
 )
 from lab_executor.experiment_ir.plan import Plan
@@ -36,6 +37,7 @@ __all__ = [
     "BranchCase",
     "BranchStep",
     "RepeatStep",
+    "PauseStep",
     "Step",
     "Plan",
     "VariableStore",

@@ -104,6 +104,7 @@ PHASE_ENUM: tuple[str, ...] = (
     "starting",
     "running_step",
     "waiting",
+    "paused",       # v2.30.0 (SP-4): pause 応答待ち (status=WAITING のまま)
     "polling",
     "waiting_for_stable",
     "barrier_wait",
@@ -160,12 +161,20 @@ def compute_current_phase(
     last_step_summary: str | None = None,
     progress_type: str | None = None,
     job_outcome: str | None = None,
+    pause_active: bool = False,
 ) -> str:
     """Job 状態 + 最終 event + 進捗から `current_phase` を決定
 
     v0.8.2.1: job_outcome="partial_failure" の場合 completed だが phase は
     "partial_failure" として返す (人間/AI への注意喚起)。
+
+    v2.30.0 (SP-4): ``pause_active=True`` (job_pauses に未解決レコードあり) の
+    場合、非終端の Job は phase="paused" を返す。JobStatus の 8 状態は不変
+    (state machine 契約の外の observation 層拡張 — PHASE_ENUM 拡張の前例に従う)。
     """
+    # v2.30.0 (SP-4): pause 応答待ち (非終端のみ)
+    if pause_active and job_status in ("waiting", "running"):
+        return "paused"
     # 終端状態
     if job_status == "completed":
         if job_outcome == "partial_failure":
