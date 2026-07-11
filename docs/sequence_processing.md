@@ -1,9 +1,10 @@
-# シーケンス処理拡張 リファレンス (SP-1 〜 SP-4)
+# シーケンス処理拡張 リファレンス (SP-1 〜 SP-5)
 
-v2.28.0 (SP-1/2)・v2.29.0 (SP-3)・v2.30.0 (SP-4) で導入。手動作成シーケンス
-(UI で作成 → 投入して放置) の中に「その場の判断」を事前定義するための機構。
-仕様正本は `sequence_processing_spec.html` (§3 変数モデル・§4 式言語・
-§5.1-5.6・§6)。本書はその **SP-1 〜 SP-4 段階の実装版**リファレンスである。
+v2.28.0 (SP-1/2)・v2.29.0 (SP-3)・v2.30.0 (SP-4)・v2.31.0 (SP-5) で導入。
+手動作成シーケンス (UI で作成 → 投入して放置) の中に「その場の判断」を
+事前定義するための機構。仕様正本は `sequence_processing_spec.html`
+(§3 変数モデル・§4 式言語・§5.1-5.6・§6)。本書はその **SP-1 〜 SP-5
+段階の実装版**リファレンスである。
 
 対象範囲 (この版で実装):
 
@@ -11,9 +12,10 @@ v2.28.0 (SP-1/2)・v2.29.0 (SP-3)・v2.30.0 (SP-4) で導入。手動作成シ�
 - SP-2: `${...}` 実行時引数解決 / 範囲宣言必須 / 実行時範囲執行 / dry-run 拡張
 - SP-3: branch (条件分岐) / repeat (反復) / guard (範囲検証と安全動作)
 - SP-4: pause (人間 / AI の呼び出し。message の `${...}` 補間を含む)
+- SP-5: array 型 / repeat collect / 式言語の np.* 名前空間 (デナイリスト付き)
 
-未実装 (後続 SP): array / NumPy / repeat collect (SP-5)、py / dll (SP-6)、
-サブシーケンス (SP-7)、args への `${...}` 部分埋め込み。
+未実装 (後続 SP): py / dll (SP-6)、サブシーケンス (SP-7)、
+args への `${...}` 部分埋め込み、ndarray 本体の資産保存 (npy)。
 
 ---
 
@@ -26,9 +28,10 @@ v2.28.0 (SP-1/2)・v2.29.0 (SP-3)・v2.30.0 (SP-4) で導入。手動作成シ�
 | `vars.*` | compute で演算した派生値 | 実行時 | SP-1 |
 | `env.*` | 実行コンテキスト (`job_id` / `started_at`) 読み取り専用 | 実行時 | SP-1 |
 
-- **型**: float / int / bool / str の 4 型 (array は SP-5)。それ以外の型を代入
-  しようとすると `TypeError`。
-- **命名**: `[a-z][a-z0-9_]*`。予約語 (`params/steps/vars/env/value`) は不可。
+- **型**: float / int / bool / str / **array (np.ndarray、v2.31.0 SP-5)** の
+  5 型。それ以外の型を代入しようとすると `TypeError`。array は要素数上限
+  `ARRAY_MAX_ELEMENTS` (既定 10^7) に従う (§14)。
+- **命名**: `[a-z][a-z0-9_]*`。予約語 (`params/steps/vars/env/value/np`) は不可。
 - **スコープ**: 1 Job (= 1 レシピ実行) 内。ステップ順に前方参照のみ可
   (宣言前の参照はコンパイル時エラー)。
 - **記録**: すべての代入を timeline イベント `var_assigned` に記録
@@ -375,3 +378,77 @@ capture は同名変数への上書きになる (最後の値のみ残る)。
 - M-1 通知エンジンは未実装のため、通知は timeline イベント + UI 表示 +
   control.json 経由の既存監視で行う (通知フックの将来接続点は
   `JobManager._run_pause_step` の TODO(M-1) コメント)。
+
+---
+
+## 14. array 型と repeat collect (§3 / §5.4、v2.31.0 SP-5)
+
+```yaml
+- repeat:
+    count: "$n_points"
+    collect: { v_point: "iv_voltages" }     # vars.iv_voltages が array になる
+    steps:
+      - { command: "measure_voltage", result_as: "v_point" }
+- compute: { set: "v_mean",  expr: "np.mean(vars.iv_voltages)" }
+- compute: { set: "v_noise", expr: "np.std(vars.iv_voltages)" }
+- guard:   { expr: "vars.v_noise / abs(vars.v_mean) < 0.05", on_fail: "warn" }
+```
+
+### array 型 (5 番目の型)
+
+- 変数の型は float / int / bool / str / **array (np.ndarray)** の 5 型。
+- **要素数上限** `ARRAY_MAX_ELEMENTS` (既定 10^7)。代入時と式評価の返り値の
+  両方で執行 (メモリ暴走防止、spec §3)。
+- NumPy スカラ (np.float64 等) / 0 次元 ndarray は Python スカラへ自動昇格。
+- **記録規約**: `var_assigned` イベントと result の `variables` スナップショット
+  には ndarray 本体を入れず、**要約形** を記録する:
+  `{"__type__": "array", "dtype", "shape", "size", "head" (先頭5点),
+  "mean", "min", "max"}`。式評価 (`as_ctx()`) は本体をそのまま使う。
+- **ndarray 本体の資産へのフル保存 (npy) は SP-6 以降で検討 — SP-5 の
+  スコープ外** (timeline / result には要約のみが残る)。
+
+### repeat collect
+
+- `collect: {<反復内変数>: "<array 変数名>"}` (複数可)。各反復の完了時に
+  source (body 内の result_as / compute set) の値を蓄積し、repeat 終了時に
+  vars.* へ float ndarray として代入する。
+- 要素は**数値のみ**。bool / str が混入するとステップ failed
+  (`error="collect_failed"`)。
+- while 型でも使用可。**0 回実行なら空配列** (collect の array は常に定義される
+  ため、repeat 後の参照はコンパイル検証を通る)。
+- source が body 内で定義されない名前の場合はコンパイルエラー。
+- 蓄積結果は step result の `collected` (要約形) にも載る。
+
+---
+
+## 15. 式言語の np 名前空間 (§4、v2.31.0 SP-5)
+
+- `np.` 配下 **1〜2 段** の属性参照と関数呼び出しを許可:
+  `np.mean(vars.vs)` / `np.polyfit(vars.x, vars.y, 1)` / `np.interp(...)` /
+  `np.std` / `np.fft.rfft` などサブモジュール 1 段を含む。`np.pi` 等の定数も可。
+- **デナイリスト** (spec §4 — I/O と任意コード実行は式から不可):
+  - I/O 系: `load, save, savez, savez_compressed, loadtxt, savetxt,
+    genfromtxt, fromfile, tofile, memmap, DataSource, lib` (lib.npyio 系を
+    丸ごと遮断)
+  - 実行系 (コールバック受け取り): `vectorize, frompyfunc, apply_along_axis,
+    apply_over_axes, piecewise, fromfunction, fromiter`
+  - dunder (`__` 始まり) は全面禁止。3 段以上の属性も禁止
+- **array リテラルは作れない** (list リテラルは従来どおり禁止)。値は collect /
+  np 関数の返りから来る。式の返り値が ndarray の場合は変数へ代入できる
+  (返り値にも要素数上限・NaN/inf 検査 [配列要素含む] を適用)。
+- キーワード引数は不可 (位置引数のみ)。
+
+### 安全との接続
+
+- **deferred**: `${...}` の解決値が ndarray の場合は「実行時引数は数値である
+  必要があります」の明示エラー — **配列を装置引数に注入させない**。
+- **条件式**: guard / branch when / repeat while の結果が ndarray (要素 2 以上)
+  の場合は「配列の真偽値は曖昧です。np.all(...) / np.any(...) 等で集約して
+  ください」の明確なエラーで failed になる。
+
+### dry-run
+
+- array のテスト値は JSON では **list で与える**:
+  `test_values: {"vars.iv_voltages": [1.0, 2.0, 3.0]}` → ndarray 化して
+  np 式を評価する。compute の ndarray 結果は要約形で表示される。
+- repeat 行に `collect` 宣言が表示される。

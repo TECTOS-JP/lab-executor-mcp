@@ -396,7 +396,7 @@ class BranchStep(BaseModel):
 
 
 class RepeatStep(BaseModel):
-    """反復 (sequence_processing_spec §5.4、collect は SP-5)。
+    """反復 (sequence_processing_spec §5.4)。
 
     - count 型: ``count`` 回 body を実行 (コンパイル時解決済みの int)
     - while 型: ``while_expr`` が真の間 body を実行。``max_iterations`` 必須
@@ -405,12 +405,18 @@ class RepeatStep(BaseModel):
       (後続 guard で扱えるようにする)
 
     body 内では ``env.loop_index`` (0 始まり) を参照できる。
+
+    v2.31.0 (SP-5): ``collect`` — ``{<反復内変数>: "<array 変数名>"}``。
+    各反復の capture / compute 値を蓄積し、repeat 終了時に vars.* へ
+    ndarray として代入する (要素は数値のみ。while 型で 0 回なら空配列)。
     """
     type: Literal["repeat"] = "repeat"
     count: int | None = None
     while_expr: str | None = None
     max_iterations: int | None = None
     body: list["Step"] = Field(default_factory=list)
+    # SP-5: {反復内変数名: 蓄積先 array 変数名}
+    collect: dict[str, str] = Field(default_factory=dict)
     description: str = ""
 
     @model_validator(mode="after")

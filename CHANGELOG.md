@@ -1,5 +1,69 @@
 # 変更履歴
 
+## v2.31.0 — シーケンス処理拡張 SP-5: array 型 + repeat collect + NumPy 名前空間
+
+合言葉: **「測ってから配列解析 — I-V 曲線の標準経路」**
+
+I-V 曲線のような「測ってから配列解析」の標準経路を導入する
+(sequence_processing_spec §3 array 型・collect / §4 np.* 名前空間・デナイリスト)。
+
+### 依存
+
+- **numpy を必須依存に追加** (`numpy>=1.24`)。計測ドメインでは事実上常在の
+  ライブラリであり、optional extra にすると「collect を書いたら実行環境で
+  ImportError」という最悪の失敗様式になるため必須とした (最終報告に明記済みの判断)。
+
+### 追加
+
+- **array 型 (spec §3)** — `VariableStore` の 5 番目の型として np.ndarray を許可。
+  **要素数上限** `ARRAY_MAX_ELEMENTS` (既定 10^7、メモリ暴走防止)。NumPy スカラ /
+  0 次元 ndarray は Python スカラへ自動昇格。
+  - **記録規約**: `var_assigned` イベントと result の `variables` スナップショット
+    には **ndarray 本体を入れず**、要約形 (`__type__: array` / dtype / shape /
+    size / 先頭 5 点 / mean / min / max) を記録する (timeline / result JSON の
+    肥大防止)。式評価用の `as_ctx()` は本体を返す。**ndarray 本体の資産への
+    フル保存 (npy) は SP-6 以降で検討 — 今回はスコープ外** (docs に明記)。
+- **repeat collect (spec §5.4)** — `collect: {<反復内変数>: "<array 変数名>"}`
+  (複数可)。各反復の capture / compute 値を蓄積し、repeat 終了時に vars.* へ
+  ndarray として代入する。
+  - 要素は**数値のみ** (bool / str 混入は `collect_failed` でステップ failed)
+  - while 型でも可 (0 回実行なら**空配列** — collect の array は常に定義される)
+  - source は body 内で定義される名前であることをコンパイル時検証
+  - SP-3 で明示拒否していた validator を解除
+- **式言語の np 名前空間 (spec §4)** — `np.` 配下 **1〜2 段** の属性 (サブモジュール
+  `np.fft.rfft` 等を含む) と呼び出しを解禁 (`np.mean(vars.vs)` /
+  `np.polyfit(vars.x, vars.y, 1)` / `np.pi` 等)。
+  - **デナイリスト**: I/O 系 (load / save / savez / savez_compressed / loadtxt /
+    savetxt / genfromtxt / fromfile / tofile / memmap / DataSource / lib
+    [lib.npyio 系を丸ごと遮断]) と実行系 (vectorize / frompyfunc /
+    apply_along_axis / apply_over_axes / piecewise / fromfunction / fromiter)。
+    dunder は全面禁止。3 段以上の属性も禁止
+  - array リテラルは作れない (list リテラルは従来どおり禁止 — 値は collect /
+    np 関数の返りから来る)。式の返り値が ndarray の場合も許可 (変数へ代入可)。
+    返り値にも要素数上限と NaN/inf 検査 (配列要素含む) を適用
+
+### 安全との接続
+
+- **ndarray の deferred 拒否** — `${...}` の解決値が ndarray の場合、SP-3 で
+  導入済みの「実行時引数は数値である必要があります」の明示エラーに乗る
+  (**配列を装置引数に注入させない**)。
+- **条件式の曖昧真偽値** — guard / branch when / repeat while で式の結果が
+  ndarray (要素数 2 以上) の場合、`SeqExpressionError`「配列の真偽値は曖昧です。
+  np.all(...) / np.any(...) 等で集約してください」で明確に failed にする。
+
+### dry-run
+
+- array のテスト値は JSON では **list で与える** (`test_values:
+  {"vars.vs": [1.0, 2.0, 3.0]}`) → ndarray 化して np 式を評価。compute の
+  ndarray 結果は要約形で表示 (応答 JSON に ndarray を漏らさない)。repeat 行に
+  collect 宣言を表示。
+
+### 互換性
+
+- 全て追加的。スカラのみの既存レシピの挙動・記録形式は不変。MCP ツール面 50 個
+  不変。`utils/expression.py` / `condition.py` / `tools/export.py` は変更して
+  いない。
+
 ## v2.30.0 — シーケンス処理拡張 SP-4: pause — 人間 / AI の呼び出し
 
 合言葉: **「監視は不要、呼ばれたときだけ人が見る」**

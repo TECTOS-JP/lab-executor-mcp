@@ -15,19 +15,33 @@ compute / ${...} 実行時解決など **新機能だけ** が使う。
 - 論理 (短絡): ``and or not``
 - 三項: ``A if cond else B``
 - 関数: abs, min, max, round, floor, ceil, sqrt, log10, log, exp, clamp, len
+- NumPy 名前空間 (v2.31.0 SP-5): ``np.*`` として NumPy 関数を利用可
+  (例 ``np.mean(vars.xs)`` / ``np.polyfit(vars.x, vars.y, 1)`` /
+  ``np.fft.rfft(...)``)。属性は ``np.`` 配下 1〜2 段のみ。
+  **デナイリスト** (spec §4): ファイル/ネットワーク I/O 系 (load / save /
+  savez / loadtxt / savetxt / genfromtxt / fromfile / tofile / memmap /
+  DataSource / lib.npyio 系) と実行系 (vectorize / frompyfunc /
+  apply_along_axis / piecewise 等のコールバック受け取り) は式からは不可。
+  dunder (``__`` 始まり) アクセスは全面禁止。
 
 拒否:
-- 2 段以上の属性チェーン / dunder (``__``) アクセス
+- np 以外の 2 段以上の属性チェーン / dunder (``__``) アクセス
 - ホワイトリスト外の関数呼び出し
 - 添字・内包・ラムダ・代入・import 等、未許可の AST ノード全般
 
 数値健全性:
-- ゼロ除算・NaN/inf 生成・型不整合 (str と数値の演算) は ``SeqExpressionError``
+- ゼロ除算・NaN/inf 生成 (配列要素含む)・型不整合 (str と数値の演算) は
+  ``SeqExpressionError``
+- ndarray の真偽値 (曖昧) を条件に使うと ``SeqExpressionError``
+- 0 次元 ndarray / NumPy スカラは Python スカラへ自動変換 (spec §3)
+- 式の返す ndarray は要素数上限 ``ARRAY_MAX_ELEMENTS`` (既定 10^7) に従う
 """
 from __future__ import annotations
 import ast
 import math
 from typing import Any
+
+import numpy as np
 
 
 class SeqExpressionError(ValueError):
@@ -42,6 +56,40 @@ _NAMESPACES = ("params", "steps", "vars", "env")
 
 # 裸名フォールバックの探索順 (spec: params -> vars -> steps)
 _BARE_LOOKUP_ORDER = ("params", "vars", "steps", "env")
+
+# v2.31.0 (SP-5): array の要素数上限 (spec §3、メモリ暴走防止)。
+# VariableStore の代入時と式評価の返り値の両方で執行する。
+ARRAY_MAX_ELEMENTS = 10_000_000
+
+# v2.31.0 (SP-5): np.* のデナイリスト (spec §4)。
+# I/O 系と任意コード実行系 (コールバック受け取り)。属性チェーンの
+# **どの部分にも** 現れてはならない ("lib" は lib.npyio 系を丸ごと遮断)。
+NP_DENYLIST = frozenset({
+    # ファイル / ネットワーク I/O
+    "load", "save", "savez", "savez_compressed",
+    "loadtxt", "savetxt", "genfromtxt", "fromfile", "tofile",
+    "memmap", "DataSource", "lib", "npyio",
+    # 実行系 (任意関数・コールバックを受け取る)
+    "vectorize", "frompyfunc", "apply_along_axis", "apply_over_axes",
+    "piecewise", "fromfunction", "fromiter",
+})
+
+
+def _np_chain(node: ast.AST) -> list[str] | None:
+    """Attribute ノードが ``np.`` 起点のチェーンなら属性名リストを返す。
+
+    例: ``np.mean`` -> ["mean"], ``np.fft.rfft`` -> ["fft", "rfft"]。
+    np 起点でなければ None。
+    """
+    parts: list[str] = []
+    cur = node
+    while isinstance(cur, ast.Attribute):
+        parts.append(cur.attr)
+        cur = cur.value
+    if isinstance(cur, ast.Name) and cur.id == "np":
+        parts.reverse()
+        return parts
+    return None
 
 _ALLOWED_NODES = (
     ast.Expression,
@@ -97,15 +145,38 @@ def check_expr(expr: str) -> ast.Expression:
                 f"安全でないノードを検出: {type(node).__name__} (式: {expr!r})"
             )
         if isinstance(node, ast.Attribute):
-            if not isinstance(node.value, ast.Name) or node.value.id not in _NAMESPACES:
-                raise SeqExpressionError(
-                    "属性アクセスは params/steps/vars/env の 1 段のみ許可されます "
-                    f"(式: {expr!r})"
-                )
             if node.attr.startswith("__"):
                 raise SeqExpressionError(f"dunder 属性アクセスは禁止です (式: {expr!r})")
+            np_parts = _np_chain(node)
+            if np_parts is not None:
+                # v2.31.0 (SP-5): np.* は 1〜2 段 + デナイリスト
+                if len(np_parts) > 2:
+                    raise SeqExpressionError(
+                        f"np.* の属性は 2 段までです (式: {expr!r})"
+                    )
+                denied = [p for p in np_parts if p in NP_DENYLIST]
+                if denied:
+                    raise SeqExpressionError(
+                        f"np.{'.'.join(np_parts)} は式から使用できません "
+                        f"(デナイリスト: I/O / 任意コード実行系。spec §4) "
+                        f"(式: {expr!r})"
+                    )
+            elif isinstance(node.value, ast.Name) and node.value.id in _NAMESPACES:
+                pass  # params/steps/vars/env の 1 段 (従来どおり)
+            else:
+                raise SeqExpressionError(
+                    "属性アクセスは params/steps/vars/env の 1 段、"
+                    f"または np.* (1〜2 段) のみ許可されます (式: {expr!r})"
+                )
         if isinstance(node, ast.Call):
-            if not isinstance(node.func, ast.Name) or node.func.id not in _FUNCS:
+            is_builtin = (
+                isinstance(node.func, ast.Name) and node.func.id in _FUNCS
+            )
+            is_np = (
+                isinstance(node.func, ast.Attribute)
+                and _np_chain(node.func) is not None
+            )
+            if not (is_builtin or is_np):
                 raise SeqExpressionError(
                     f"許可されていない関数呼び出しです (式: {expr!r})"
                 )
@@ -116,16 +187,56 @@ def evaluate(expr: str, ctx: dict[str, dict]) -> Any:
     """式を値モードで評価する。
 
     ``ctx`` = ``{"params": {...}, "steps": {...}, "vars": {...}, "env": {...}}``。
+
+    v2.31.0 (SP-5): 返り値が NumPy スカラ / 0 次元 ndarray の場合は Python
+    スカラへ自動変換する。ndarray は要素数上限と NaN/inf を検査して返す。
     """
     tree = check_expr(expr)
     result = _eval_node(tree.body, ctx, expr)
+    result = _normalize_result(result, expr)
     _check_finite(result, expr)
     return result
 
 
+def _normalize_result(value: Any, expr: str) -> Any:
+    """NumPy 値の正規化 (SP-5)。
+
+    - np.generic (np.float64 等) / 0 次元 ndarray -> Python スカラ
+    - ndarray: 要素数上限を執行。モジュール・関数等の非値はエラー
+    """
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, np.ndarray):
+        if value.ndim == 0:
+            return value.item()
+        if value.size > ARRAY_MAX_ELEMENTS:
+            raise SeqExpressionError(
+                f"配列の要素数 ({value.size}) が上限 ({ARRAY_MAX_ELEMENTS}) を"
+                f"超えています (式: {expr!r})"
+            )
+        return value
+    if isinstance(value, (int, float, bool, str)) or value is None:
+        return value
+    # tuple 返し (np.polyfit(full=True) 等) やモジュール参照は不可
+    raise SeqExpressionError(
+        f"式の結果がサポートされない型です: {type(value).__name__} (式: {expr!r})"
+    )
+
+
 def evaluate_condition(expr: str, ctx: dict[str, dict]) -> bool:
-    """式を条件モードで評価する (結果を bool 強制)。"""
-    return bool(evaluate(expr, ctx))
+    """式を条件モードで評価する (結果を bool 強制)。
+
+    v2.31.0 (SP-5): ndarray の真偽値 (曖昧) は ``SeqExpressionError`` に変換する
+    (guard / branch / repeat while が明確なエラーで failed になるように)。
+    """
+    v = evaluate(expr, ctx)
+    try:
+        return bool(v)
+    except ValueError:
+        raise SeqExpressionError(
+            f"条件式の結果が配列で真偽値が曖昧です。np.all(...) / np.any(...) "
+            f"等で集約してください (式: {expr!r})"
+        )
 
 
 def referenced_names(expr: str) -> set[str]:
@@ -142,13 +253,15 @@ def referenced_names(expr: str) -> set[str]:
     out: set[str] = set()
 
     def visit(node: ast.AST) -> None:
-        if (
-            isinstance(node, ast.Attribute)
-            and isinstance(node.value, ast.Name)
-            and node.value.id in _NAMESPACES
-        ):
-            out.add(f"{node.value.id}.{node.attr}")
-            return  # 名前空間 Name 本体には降りない
+        if isinstance(node, ast.Attribute):
+            if _np_chain(node) is not None:
+                return  # np.* チェーンは変数参照ではない (SP-5)
+            if (
+                isinstance(node.value, ast.Name)
+                and node.value.id in _NAMESPACES
+            ):
+                out.add(f"{node.value.id}.{node.attr}")
+                return  # 名前空間 Name 本体には降りない
         if isinstance(node, ast.Call):
             for a in node.args:
                 visit(a)
@@ -156,7 +269,11 @@ def referenced_names(expr: str) -> set[str]:
                 visit(kw.value)
             return
         if isinstance(node, ast.Name):
-            if node.id not in _NAMESPACES and node.id not in _FUNCS:
+            if (
+                node.id not in _NAMESPACES
+                and node.id not in _FUNCS
+                and node.id != "np"
+            ):
                 out.add(node.id)
             return
         for child in ast.iter_child_nodes(node):
@@ -174,6 +291,40 @@ def referenced_names(expr: str) -> set[str]:
 def _check_finite(value: Any, expr: str) -> None:
     if isinstance(value, float) and (math.isnan(value) or math.isinf(value)):
         raise SeqExpressionError(f"NaN / inf が生成されました (式: {expr!r})")
+    # v2.31.0 (SP-5): NumPy スカラ / float 系 ndarray も NaN/inf を検査
+    if isinstance(value, np.generic):
+        v = value.item()
+        if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+            raise SeqExpressionError(f"NaN / inf が生成されました (式: {expr!r})")
+    if isinstance(value, np.ndarray) and value.dtype.kind in "fc" and value.size:
+        if not np.isfinite(value).all():
+            raise SeqExpressionError(
+                f"配列に NaN / inf が含まれています (式: {expr!r})"
+            )
+
+
+def _truthy(value: Any, expr: str) -> bool:
+    """真偽値化 (ndarray の曖昧真偽値を SeqExpressionError に変換)。"""
+    try:
+        return bool(value)
+    except ValueError:
+        raise SeqExpressionError(
+            f"配列の真偽値は曖昧です。np.all(...) / np.any(...) 等で"
+            f"集約してください (式: {expr!r})"
+        )
+
+
+def _resolve_np(parts: list[str], expr: str) -> Any:
+    """np.* チェーンを実体に解決する (check_expr 通過後に呼ばれる)。"""
+    obj: Any = np
+    for p in parts:
+        try:
+            obj = getattr(obj, p)
+        except AttributeError:
+            raise SeqExpressionError(
+                f"np.{'.'.join(parts)} は存在しません (式: {expr!r})"
+            )
+    return obj
 
 
 def _eval_node(node: ast.AST, ctx: dict, expr: str) -> Any:
@@ -183,6 +334,10 @@ def _eval_node(node: ast.AST, ctx: dict, expr: str) -> Any:
         raise SeqExpressionError(f"サポートされないリテラル: {node.value!r}")
 
     if isinstance(node, ast.Attribute):
+        np_parts = _np_chain(node)
+        if np_parts is not None:
+            # v2.31.0 (SP-5): np.mean 等の関数・np.pi 等の定数参照
+            return _resolve_np(np_parts, expr)
         ns = node.value.id  # type: ignore[attr-defined]
         key = node.attr
         table = ctx.get(ns)
@@ -202,14 +357,14 @@ def _eval_node(node: ast.AST, ctx: dict, expr: str) -> Any:
             r: Any = True
             for v in node.values:
                 r = _eval_node(v, ctx, expr)
-                if not r:
+                if not _truthy(r, expr):
                     return r
             return r
         if isinstance(node.op, ast.Or):
             r = False
             for v in node.values:
                 r = _eval_node(v, ctx, expr)
-                if r:
+                if _truthy(r, expr):
                     return r
             return r
 
@@ -217,7 +372,7 @@ def _eval_node(node: ast.AST, ctx: dict, expr: str) -> Any:
         cond = _eval_node(node.test, ctx, expr)
         return (
             _eval_node(node.body, ctx, expr)
-            if cond else _eval_node(node.orelse, ctx, expr)
+            if _truthy(cond, expr) else _eval_node(node.orelse, ctx, expr)
         )
 
     if isinstance(node, ast.UnaryOp):
@@ -227,7 +382,7 @@ def _eval_node(node: ast.AST, ctx: dict, expr: str) -> Any:
         if isinstance(node.op, ast.UAdd):
             return +operand
         if isinstance(node.op, ast.Not):
-            return not operand
+            return not _truthy(operand, expr)
 
     if isinstance(node, ast.BinOp):
         left = _eval_node(node.left, ctx, expr)
@@ -287,12 +442,24 @@ def _eval_node(node: ast.AST, ctx: dict, expr: str) -> Any:
                 raise SeqExpressionError(
                     f"型不整合の比較です: {e} (式: {expr!r})"
                 )
-            result = result and ok
+            result = _truthy(result, expr) and ok
             left = right
         return result
 
     if isinstance(node, ast.Call):
-        func = _FUNCS[node.func.id]  # type: ignore[attr-defined]
+        if isinstance(node.func, ast.Attribute):
+            # v2.31.0 (SP-5): np.* 関数呼び出し (check_expr 検証済み)
+            parts = _np_chain(node.func) or []
+            func = _resolve_np(parts, expr)
+            func_label = f"np.{'.'.join(parts)}"
+            if not callable(func):
+                raise SeqExpressionError(
+                    f"{func_label} は呼び出し可能ではありません (式: {expr!r})"
+                )
+        else:
+            func = _FUNCS[node.func.id]  # type: ignore[attr-defined]
+            func_label = node.func.id  # type: ignore[attr-defined]
+        # キーワード引数は不許可 (ast.keyword はホワイトリスト外)。位置引数のみ。
         args = [_eval_node(a, ctx, expr) for a in node.args]
         try:
             r = func(*args)
@@ -302,7 +469,7 @@ def _eval_node(node: ast.AST, ctx: dict, expr: str) -> Any:
             raise SeqExpressionError(f"ゼロ除算です (式: {expr!r})")
         except (TypeError, ValueError) as e:
             raise SeqExpressionError(
-                f"関数 {node.func.id} の呼び出しエラー: {e} (式: {expr!r})"  # type: ignore[attr-defined]
+                f"関数 {func_label} の呼び出しエラー: {e} (式: {expr!r})"
             )
         _check_finite(r, expr)
         return r

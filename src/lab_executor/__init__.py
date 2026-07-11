@@ -14,4 +14,4 @@ VISA tools / hardware resource discovery。
 詳細: docs/v2_migration.md / README.md
 """
 
-__version__ = "2.30.0"
+__version__ = "2.31.0"

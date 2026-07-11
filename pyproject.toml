@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "lab-executor-mcp"
-version = "2.30.0"
+version = "2.31.0"
 description = "Backend-independent experiment execution runtime for AI agents (split from visa-mcp v1.11)"
 readme = "README.md"
 license = { text = "MIT" }
@@ -29,6 +29,9 @@ dependencies = [
     "fastmcp>=2.0",
     "pydantic>=2.0",
     "pyyaml",
+    # v2.31.0 (SP-5): array 型 / repeat collect / 式言語の np.* 名前空間。
+    # 計測ドメインでは事実上常在のため extra にせず必須依存とする。
+    "numpy>=1.24",
 ]
 
 [project.optional-dependencies]

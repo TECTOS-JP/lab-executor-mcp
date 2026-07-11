@@ -16,12 +16,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
+import numpy as np
+
 from .experiment_ir import (
     BranchStep, CommandStep, ComputeStep, GuardStep, RepeatStep,
     VariableStore, VariableStoreError, WaitStep,
 )
 from .step_executor import execute_command_step
-from .utils.seq_expression import SeqExpressionError, evaluate
+from .utils.seq_expression import SeqExpressionError, evaluate, evaluate_condition
 
 # emit_event(event_type, payload) -- timeline へ流す (None なら記録しない)
 EmitEvent = Callable[[str, dict], None]
@@ -340,7 +342,9 @@ async def process_guard_step(
         "on_fail": step.on_fail,
     }
     try:
-        passed = bool(evaluate(step.expr, store.as_ctx()))
+        # v2.31.0 (SP-5): evaluate_condition は ndarray の曖昧真偽値を
+        # SeqExpressionError に変換する (np.all/np.any での集約を促す)
+        passed = evaluate_condition(step.expr, store.as_ctx())
     except SeqExpressionError as e:
         return {
             **base, "success": False, "error": "guard_error",
@@ -394,12 +398,21 @@ async def process_branch_step(
         else:
             try:
                 val = evaluate(case.when, store.as_ctx())
-                taken = bool(val)
+                try:
+                    taken = bool(val)
+                except ValueError:
+                    # v2.31.0 (SP-5): ndarray の曖昧真偽値を明確なエラーに
+                    raise SeqExpressionError(
+                        "条件式の結果が配列で真偽値が曖昧です。"
+                        "np.all(...) / np.any(...) 等で集約してください"
+                    )
             except SeqExpressionError as e:
                 return {
                     **base, "success": False, "error": "branch_error",
                     "message": f"branch 条件の評価エラー (case[{ci}]): {e}",
                 }
+        if isinstance(val, np.ndarray):
+            val = None  # イベント payload に ndarray を載せない (要約は不要)
         if not taken:
             continue
 
@@ -451,16 +464,51 @@ async def process_repeat_step(
     - ``count_completed``: count 回完了
     - ``condition_false``: while 条件が偽になった
     - ``max_iterations``: 上限到達 (**failed にはしない** — 後続 guard で扱う)
+
+    v2.31.0 (SP-5): ``collect`` — 各反復の capture / compute 値を蓄積し、
+    repeat 終了時に vars.* へ ndarray として代入する (要素は数値のみ。
+    0 回実行なら空配列)。
     """
     base = {"step_type": "repeat"}
     all_results: list[dict] = []
     prev_loop = store.get_env("loop_index", _ENV_MISSING)
+    # SP-5: collect の蓄積バケツ (target -> [値, ...])
+    buckets: dict[str, list[float]] = {t: [] for t in step.collect.values()}
 
     def _restore_env() -> None:
         if prev_loop is _ENV_MISSING:
             store.del_env("loop_index")
         else:
             store.set_env("loop_index", prev_loop)
+
+    def _gather_collect(i: int) -> dict | None:
+        """反復 i の collect 値を蓄積する。エラーなら failed 用 dict を返す。"""
+        if not step.collect:
+            return None
+        ctx = store.as_ctx()
+        for src, target in step.collect.items():
+            if src in ctx["steps"]:
+                val = ctx["steps"][src]
+            elif src in ctx["vars"]:
+                val = ctx["vars"][src]
+            else:
+                return {
+                    "error": "collect_failed",
+                    "message": (
+                        f"repeat.collect の '{src}' が反復 {i} で代入されません"
+                        "でした (branch で代入経路が飛ばされた可能性)"
+                    ),
+                }
+            if isinstance(val, bool) or not isinstance(val, (int, float)):
+                return {
+                    "error": "collect_failed",
+                    "message": (
+                        f"repeat.collect の '{src}' は数値である必要があります: "
+                        f"{type(val).__name__} (反復 {i})"
+                    ),
+                }
+            buckets[target].append(float(val))
+        return None
 
     async def _run_iteration(i: int) -> tuple[bool, list[dict]]:
         store.set_env("loop_index", i)
@@ -482,6 +530,13 @@ async def process_repeat_step(
                         **base, "iterations": iterations,
                         "steps_executed": all_results, "success": False,
                     }, results)
+                err = _gather_collect(i)
+                if err is not None:
+                    return {
+                        **base, "iterations": iterations,
+                        "steps_executed": all_results, "success": False,
+                        **err,
+                    }
                 iterations += 1
             reason = "count_completed"
         else:
@@ -492,7 +547,10 @@ async def process_repeat_step(
                     reason = "max_iterations"
                     break
                 try:
-                    cond = bool(evaluate(step.while_expr or "", store.as_ctx()))
+                    # v2.31.0 (SP-5): evaluate_condition (ndarray 曖昧真偽値の変換)
+                    cond = evaluate_condition(
+                        step.while_expr or "", store.as_ctx(),
+                    )
                 except SeqExpressionError as e:
                     return {
                         **base, "iterations": iterations,
@@ -510,17 +568,47 @@ async def process_repeat_step(
                         **base, "iterations": iterations,
                         "steps_executed": all_results, "success": False,
                     }, results)
+                err = _gather_collect(i)
+                if err is not None:
+                    return {
+                        **base, "iterations": iterations,
+                        "steps_executed": all_results, "success": False,
+                        **err,
+                    }
                 iterations += 1
                 i += 1
     finally:
         _restore_env()
+
+    # SP-5: collect の array を vars.* へ代入 (0 回実行なら空配列)
+    collected: dict[str, Any] = {}
+    for src, target in step.collect.items():
+        arr = np.asarray(buckets[target], dtype=float)
+        try:
+            store.set_var(
+                target, arr,
+                source_step_path=source_step_path,
+                expr=f"collect({src})",
+            )
+        except (VariableStoreError, TypeError) as e:
+            return {
+                **base, "iterations": iterations,
+                "steps_executed": all_results, "success": False,
+                "error": "collect_failed", "message": str(e),
+            }
+        if emit_event:
+            emit_event("var_assigned", store.events[-1])
+        collected[target] = store.events[-1]["value"]  # 要約形 (JSON 安全)
 
     if emit_event:
         emit_event("repeat_ended", {
             "reason": reason, "iterations": iterations,
             "step_path": source_step_path,
         })
-    return {
+    out = {
         **base, "iterations": iterations, "ended": reason,
         "steps_executed": all_results, "success": True,
     }
+    if collected:
+        out["collected"] = collected
+    return out

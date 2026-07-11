@@ -177,6 +177,13 @@ def _seed_ctx_from_test_values(
         "steps": {}, "vars": {}, "env": {},
     }
     for key, val in (test_values or {}).items():
+        # v2.31.0 (SP-5): array のテスト値は JSON では list で与える → ndarray 化
+        if isinstance(val, list):
+            import numpy as _np
+            try:
+                val = _np.asarray(val, dtype=float)
+            except (TypeError, ValueError):
+                pass  # 数値化できない list はそのまま (式評価時にエラーになる)
         if "." in key:
             ns, name = key.split(".", 1)
             if ns in ctx:
@@ -232,11 +239,18 @@ def _dryrun_step_row(
             if has_test:
                 try:
                     val = evaluate(spec["expr"], ctx)
-                    entry["resolved"] = val
-                    entry["in_range"] = (
-                        (spec.get("min") is None or val >= spec["min"])
-                        and (spec.get("max") is None or val <= spec["max"])
-                    )
+                    import numpy as _np
+                    if isinstance(val, _np.ndarray):
+                        # v2.31.0 (SP-5): 配列は装置引数に注入できない
+                        entry["error"] = (
+                            "実行時引数は数値である必要があります (array)"
+                        )
+                    else:
+                        entry["resolved"] = val
+                        entry["in_range"] = (
+                            (spec.get("min") is None or val >= spec["min"])
+                            and (spec.get("max") is None or val <= spec["max"])
+                        )
                 except SeqExpressionError as e:
                     entry["error"] = str(e)
             else:
@@ -252,8 +266,14 @@ def _dryrun_step_row(
         if has_test:
             try:
                 val = evaluate(st.expr, ctx)
-                row["value"] = val
                 ctx["vars"][st.set] = val
+                # v2.31.0 (SP-5): ndarray は要約形で表示 (JSON 安全)
+                import numpy as _np
+                if isinstance(val, _np.ndarray):
+                    from lab_executor.experiment_ir.context import summarize_array
+                    row["value"] = summarize_array(val)
+                else:
+                    row["value"] = val
             except SeqExpressionError as e:
                 row["error"] = str(e)
 
@@ -264,7 +284,9 @@ def _dryrun_step_row(
         row["message"] = getattr(st, "message", "") or ""
         if has_test:
             try:
-                row["passed"] = bool(evaluate(st.expr, ctx))
+                # v2.31.0 (SP-5): evaluate_condition (ndarray 曖昧真偽値の変換)
+                from lab_executor.utils.seq_expression import evaluate_condition
+                row["passed"] = evaluate_condition(st.expr, ctx)
             except SeqExpressionError as e:
                 row["error"] = str(e)
 
@@ -305,8 +327,18 @@ def _dryrun_step_row(
                 else:
                     try:
                         val = evaluate(case.when, ctx)
-                        centry["when_value"] = val
-                        if bool(val):
+                        try:
+                            truth = bool(val)
+                        except ValueError:
+                            # v2.31.0 (SP-5): ndarray の曖昧真偽値
+                            raise SeqExpressionError(
+                                "条件式の結果が配列で真偽値が曖昧です "
+                                "(np.all / np.any で集約してください)"
+                            )
+                        import numpy as _np
+                        if not isinstance(val, _np.ndarray):
+                            centry["when_value"] = val
+                        if truth:
                             centry["taken"] = True
                             taken_index = ci
                         else:
@@ -333,6 +365,10 @@ def _dryrun_step_row(
         row["count"] = count
         row["while"] = getattr(st, "while_expr", None)
         row["max_iterations"] = getattr(st, "max_iterations", None)
+        # v2.31.0 (SP-5): collect 宣言の表示
+        _collect = dict(getattr(st, "collect", {}) or {})
+        if _collect:
+            row["collect"] = _collect
         body = list(getattr(st, "body", []) or [])
         if count is not None and count <= DRYRUN_REPEAT_EXPAND_MAX:
             iters: list[dict[str, Any]] = []

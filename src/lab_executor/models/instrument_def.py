@@ -350,8 +350,24 @@ class RecipeStep(BaseModel):
                 raise ValueError(
                     "repeat: while 使用時は max_iterations が必須です (無限ループ禁止)"
                 )
+            # v2.31.0 (SP-5): collect の構造チェック (名前規則・定義位置の検証は
+            # recipe_to_plan で行う)。
             if "collect" in rp:
-                raise ValueError("repeat.collect は SP-5 で対応予定です (未対応)")
+                col = rp["collect"]
+                if not isinstance(col, dict) or not col:
+                    raise ValueError(
+                        "repeat.collect は {反復内変数: array変数名} の "
+                        "mapping である必要があります"
+                    )
+                for k, v in col.items():
+                    if not isinstance(k, str) or not k.strip():
+                        raise ValueError(
+                            f"repeat.collect のキー (反復内変数名) が不正です: {k!r}"
+                        )
+                    if not isinstance(v, str) or not v.strip():
+                        raise ValueError(
+                            f"repeat.collect の値 (array 変数名) が不正です: {v!r}"
+                        )
             if not isinstance(rp.get("steps"), list) or not rp["steps"]:
                 raise ValueError("repeat: steps (非空リスト) が必須です")
 

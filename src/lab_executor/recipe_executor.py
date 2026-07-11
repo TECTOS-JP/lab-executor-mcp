@@ -541,6 +541,27 @@ class _StepConverter:
     ) -> tuple[RepeatStep, int]:
         rp = rs.repeat or {}
         body_env = set(env_names) | {"loop_index"}
+        collect: dict[str, str] = {
+            str(k): str(v) for k, v in (rp.get("collect") or {}).items()
+        }
+
+        def _validate_collect(body_new_steps: set[str], body_new_vars: set[str]) -> None:
+            """collect の検証 (SP-5): source は body 内で定義される名前、
+            target は命名規則を満たす array 変数名。"""
+            from .experiment_ir.context import VariableStoreError, validate_var_name
+            body_defined = body_new_steps | body_new_vars
+            for src, target in collect.items():
+                if src not in body_defined:
+                    raise SeqExpressionError(
+                        f"{spath}: repeat.collect の '{src}' は repeat body 内で"
+                        "定義されません (result_as / compute set が必要)"
+                    )
+                try:
+                    validate_var_name(target)
+                except VariableStoreError as e:
+                    raise SeqExpressionError(
+                        f"{spath}: repeat.collect の array 変数名が不正です: {e}"
+                    )
 
         if rp.get("count") is not None:
             # count はコンパイル時解決 ($param 可)
@@ -558,6 +579,8 @@ class _StepConverter:
                     "超えています"
                 )
             # count >= 1 が保証されるため body 内の定義は分岐後スコープへ伝播する
+            pre_steps = set(defined_steps)
+            pre_vars = set(defined_vars)
             body_steps, est = self.convert(
                 rp["steps"],
                 defined_steps=defined_steps, defined_vars=defined_vars,
@@ -565,7 +588,15 @@ class _StepConverter:
                 branch_depth=branch_depth, nested=True,
                 path=f"{spath}/repeat/steps",
             )
-            step = RepeatStep(count=count, body=body_steps, description=rs.description)
+            _validate_collect(
+                defined_steps - pre_steps, defined_vars - pre_vars,
+            )
+            # collect の array 変数は repeat 終了時に必ず定義される
+            defined_vars.update(collect.values())
+            step = RepeatStep(
+                count=count, body=body_steps, collect=collect,
+                description=rs.description,
+            )
             return step, 1 + count * est
 
         # while 型
@@ -600,9 +631,12 @@ class _StepConverter:
             branch_depth=branch_depth, nested=True,
             path=f"{spath}/repeat/steps",
         )
+        _validate_collect(ds - defined_steps, dv - defined_vars)
+        # collect の array は 0 回実行でも空配列として定義される (spec §3/§5.4)
+        defined_vars.update(collect.values())
         step = RepeatStep(
             while_expr=while_expr, max_iterations=max_it,
-            body=body_steps, description=rs.description,
+            body=body_steps, collect=collect, description=rs.description,
         )
         return step, 1 + max_it * est
 
