@@ -24,7 +24,11 @@ from .experiment_ir import (
     WaitUntilStep, WaitForConditionStep, WaitForStableStep,
     BarrierStep, VariableStore,
     GuardStep, BranchCase, BranchStep, RepeatStep, PauseStep,
+    PyStep, DllStep,
 )
+
+if TYPE_CHECKING:
+    from .code_policy import CodePolicy
 from .models.instrument_def import InstrumentDefinition, RecipeDefinition, RecipeStep
 from .step_executor import execute_command_step, execute_wait_step
 from .utils.expression import resolve_arg, ExpressionError
@@ -162,6 +166,7 @@ def recipe_to_plan(
     *,
     primary_resource: str | None = None,
     definition: InstrumentDefinition | None = None,
+    policy: "CodePolicy | None" = None,
 ) -> Plan:
     """
     YAML の RecipeDefinition + 変数辞書 → IR Plan に変換する。
@@ -179,6 +184,11 @@ def recipe_to_plan(
     v2.29.0 (SP-3): branch / repeat / guard をネスト構造を保った IR
     (BranchStep.cases[].steps / RepeatStep.body が Step のリスト) に変換する。
     ネスト内では全経路定義検証・branch 深さ上限・展開見積り上限を執行する。
+
+    v2.32.0 (SP-6): py / dll ステップはコンパイル時に path 解決・sha256 計算・
+    **ポリシーゲート** (code_policy) 検証を行う。``policy`` 省略時は
+    ``load_policy()`` (env ``LAB_EXECUTOR_POLICY_DIR`` の ``_policy.yaml``、
+    無ければ既定ポリシー) を使う。
     """
     aux_resources: set[str] = set()
 
@@ -188,6 +198,7 @@ def recipe_to_plan(
     conv = _StepConverter(
         recipe=recipe, variables=variables, definition=definition,
         aux_resources=aux_resources, param_names=param_names,
+        policy=policy,
     )
     plan_steps, estimate = conv.convert(
         recipe.steps,
@@ -241,12 +252,22 @@ class _StepConverter:
         definition: InstrumentDefinition | None,
         aux_resources: set[str],
         param_names: set[str],
+        policy: "CodePolicy | None" = None,
     ):
         self.recipe = recipe
         self.variables = variables
         self.definition = definition
         self.aux_resources = aux_resources
         self.param_names = param_names
+        self._policy = policy   # None なら初回使用時に load_policy()
+
+    @property
+    def policy(self) -> "CodePolicy":
+        """コード実行ポリシー (py/dll ステップがあるときだけ遅延ロード)。"""
+        if self._policy is None:
+            from .code_policy import load_policy
+            self._policy = load_policy()
+        return self._policy
 
     def convert(
         self,
@@ -287,6 +308,34 @@ class _StepConverter:
                 out.append(self._convert_pause(
                     rs, defined_steps, defined_vars, env_names, spath,
                 ))
+                estimate += 1
+            elif st == "py":
+                step = self._convert_py(
+                    rs, defined_steps, defined_vars, env_names, spath,
+                )
+                if nested and step.on_error == "pause":
+                    raise SeqExpressionError(
+                        f"{spath}: branch / repeat 内の py は on_error=pause を"
+                        "指定できません (abort / safe_shutdown を使用)"
+                    )
+                out.append(step)
+                for name in step.outputs:
+                    defined_vars.add(name)
+                estimate += 1
+            elif st == "dll":
+                step = self._convert_dll(
+                    rs, defined_steps, defined_vars, env_names, spath,
+                )
+                if nested and step.on_error == "pause":
+                    raise SeqExpressionError(
+                        f"{spath}: branch / repeat 内の dll は on_error=pause を"
+                        "指定できません (abort / safe_shutdown を使用)"
+                    )
+                out.append(step)
+                if step.result_as:
+                    defined_steps.add(step.result_as)
+                for name in step.out_args.values():
+                    defined_vars.add(name)
                 estimate += 1
             elif st == "branch":
                 step, est = self._convert_branch(
@@ -479,6 +528,149 @@ class _StepConverter:
             timeout_s=timeout_s,
             on_timeout=ps.get("on_timeout", "safe_shutdown"),
             expose=expose,
+            description=rs.description,
+        )
+
+    def _convert_py(
+        self, rs: RecipeStep,
+        defined_steps: set[str], defined_vars: set[str],
+        env_names: set[str], spath: str,
+    ) -> PyStep:
+        """py の変換 (v2.32.0 SP-6): path 解決 + sha256 + ポリシーゲート。"""
+        from .code_policy import (
+            CodePolicyError, check_python, resolve_py_file,
+            sha256_file, sha256_text,
+        )
+        from .experiment_ir.context import VariableStoreError, validate_var_name
+
+        ps = rs.py or {}
+        # inputs の参照式をコンパイル時検証
+        inputs = {str(k): str(v) for k, v in (ps.get("inputs") or {}).items()}
+        for local, expr in inputs.items():
+            _validate_expr_refs(
+                expr,
+                defined_steps=defined_steps, defined_vars=defined_vars,
+                param_names=self.param_names, env_names=env_names,
+                context=f"{spath} py.inputs[{local}]",
+            )
+        outputs = [str(x) for x in (ps.get("outputs") or [])]
+        for name in outputs:
+            try:
+                validate_var_name(name)
+            except VariableStoreError as e:
+                raise SeqExpressionError(f"{spath}: py.outputs が不正です: {e}")
+
+        file_ref = ps.get("file")
+        code = ps.get("code")
+        resolved_path = ""
+        try:
+            if file_ref:
+                p = resolve_py_file(self.policy, str(file_ref))
+                resolved_path = str(p)
+                digest = sha256_file(p)
+                check_python(self.policy, file_path=p, sha256=digest)
+            else:
+                digest = sha256_text(str(code))
+                check_python(self.policy, file_path=None, sha256=digest)
+        except CodePolicyError as e:
+            raise SeqExpressionError(f"{spath}: {e}")
+
+        try:
+            timeout_s = float(ps.get("timeout_s", 60.0))
+        except (TypeError, ValueError) as e:
+            raise SeqExpressionError(f"{spath}: py.timeout_s が不正です: {e}")
+
+        return PyStep(
+            file=str(file_ref) if file_ref else None,
+            code=str(code) if code is not None else None,
+            resolved_path=resolved_path,
+            sha256=digest,
+            inputs=inputs,
+            outputs=outputs,
+            timeout_s=timeout_s,
+            on_error=ps.get("on_error", "abort"),
+            description=rs.description,
+        )
+
+    def _convert_dll(
+        self, rs: RecipeStep,
+        defined_steps: set[str], defined_vars: set[str],
+        env_names: set[str], spath: str,
+    ) -> DllStep:
+        """dll の変換 (v2.32.0 SP-6): path 検証 + sha256 + ポリシーゲート。"""
+        from .code_policy import CodePolicyError, check_dll, sha256_file
+        from .experiment_ir.context import VariableStoreError, validate_var_name
+
+        dl = rs.dll or {}
+        from pathlib import Path as _Path
+        dll_path = _Path(str(dl["path"])).resolve()
+        if not dll_path.exists():
+            raise SeqExpressionError(f"{spath}: dll.path が存在しません: {dll_path}")
+        digest = sha256_file(dll_path)
+        try:
+            check_dll(self.policy, path=dll_path, sha256=digest)
+        except CodePolicyError as e:
+            raise SeqExpressionError(f"{spath}: {e}")
+
+        # args: 数値はそのまま、文字列は参照式 (${...} / 裸のどちらも可) として検証
+        raw_args = list(dl.get("args") or [])
+        norm_args: list[Any] = []
+        for i, a in enumerate(raw_args):
+            if isinstance(a, str):
+                expr = parse_deferred(a)
+                if expr is None:
+                    expr = a
+                _validate_expr_refs(
+                    expr,
+                    defined_steps=defined_steps, defined_vars=defined_vars,
+                    param_names=self.param_names, env_names=env_names,
+                    context=f"{spath} dll.args[{i}]",
+                )
+                norm_args.append(expr)   # 実行時に evaluate される式として保持
+            else:
+                norm_args.append(a)
+
+        out_args: dict[str, str] = {}
+        for k, v in (dl.get("out_args") or {}).items():
+            try:
+                idx = int(k)
+            except (TypeError, ValueError):
+                raise SeqExpressionError(
+                    f"{spath}: dll.out_args のキーは引数位置 (整数) が必要です: {k!r}"
+                )
+            if not (0 <= idx < len(raw_args)):
+                raise SeqExpressionError(
+                    f"{spath}: dll.out_args のインデックス {idx} が args の範囲外です"
+                )
+            try:
+                validate_var_name(str(v))
+            except VariableStoreError as e:
+                raise SeqExpressionError(f"{spath}: dll.out_args が不正です: {e}")
+            out_args[str(idx)] = str(v)
+
+        result_as = dl.get("result_as")
+        if result_as:
+            try:
+                validate_var_name(str(result_as))
+            except VariableStoreError as e:
+                raise SeqExpressionError(f"{spath}: dll.result_as が不正です: {e}")
+
+        try:
+            timeout_s = float(dl.get("timeout_s", 30.0))
+        except (TypeError, ValueError) as e:
+            raise SeqExpressionError(f"{spath}: dll.timeout_s が不正です: {e}")
+
+        return DllStep(
+            path=str(dll_path),
+            function=str(dl["function"]),
+            argtypes=[str(t) for t in (dl.get("argtypes") or [])],
+            restype=str(dl.get("restype") or "void"),
+            args=norm_args,
+            out_args=out_args,
+            result_as=str(result_as) if result_as else None,
+            sha256=digest,
+            timeout_s=timeout_s,
+            on_error=dl.get("on_error", "abort"),
             description=rs.description,
         )
 
@@ -708,9 +900,13 @@ async def execute_plan(
     # barrier は Map Job 内の target 間同期なので、単一 target の execute_recipe では
     # 永遠に成立しない (1 つの target だけが arrive して全 target 揃わない)。
     # v2.30.0 (SP-4): pause も同様 (応答待ちの pause レコード管理は Job 経路のみ)。
+    # v2.32.0 (SP-6): py / dll の on_error=pause も pause 機構が必要なため Job 経路のみ。
     for s in plan.steps:
-        if isinstance(s, (WaitUntilStep, WaitForConditionStep, WaitForStableStep,
-                          BarrierStep, PauseStep)):
+        if (
+            isinstance(s, (WaitUntilStep, WaitForConditionStep, WaitForStableStep,
+                           BarrierStep, PauseStep))
+            or (isinstance(s, (PyStep, DllStep)) and s.on_error == "pause")
+        ):
             is_barrier = isinstance(s, BarrierStep)
             return {
                 "success": False,
@@ -791,6 +987,18 @@ async def execute_plan(
         elif isinstance(step, RepeatStep):
             result = await seq_runtime.process_repeat_step(
                 step, store, nested_execs,
+                source_step_path=f"steps[{idx}]",
+                safe_shutdown=_safe_shutdown,
+            )
+        elif isinstance(step, PyStep):
+            result = await seq_runtime.process_py_step(
+                step, store,
+                source_step_path=f"steps[{idx}]",
+                safe_shutdown=_safe_shutdown,
+            )
+        elif isinstance(step, DllStep):
+            result = await seq_runtime.process_dll_step(
+                step, store,
                 source_step_path=f"steps[{idx}]",
                 safe_shutdown=_safe_shutdown,
             )

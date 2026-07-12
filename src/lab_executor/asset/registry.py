@@ -241,6 +241,26 @@ def publish_asset(
         "producer": producer,
     }
 
+    # v2.32.0 (SP-6): contains_code 資産の注意表示 (spec §6.1 の共有ゲート表示)。
+    # **拒否はしない** (L3 まで許容の既存ゲートは不変 — L3 = 再解析用途では
+    # py コードはむしろ解析手順の完全な記録として価値になる)。
+    notices: list[str] = []
+    contains_code = manifest.get("contains_code")
+    if isinstance(contains_code, dict) and (
+        contains_code.get("python") or contains_code.get("dll")
+    ):
+        entry["contains_code"] = {
+            "python": bool(contains_code.get("python")),
+            "dll": bool(contains_code.get("dll")),
+        }
+        if visibility == "external":
+            notices.append(
+                "この資産はコード (py/dll ステップ) を含みます。受け手は"
+                "コードを検分の上、自己のポリシー (code_execution) で実行"
+                "可否を判断してください (既定では外部資産のコードは実行"
+                "されません)"
+            )
+
     if existing_idx is not None:
         assets[existing_idx] = entry
     else:
@@ -248,13 +268,18 @@ def publish_asset(
     index["assets"] = assets
     _save_index(d, index)
 
-    return {
+    out: dict[str, Any] = {
         "published": True,
         "id": asset_id,
         "level_verified": level_verified,
         "registry": str(d),
         "path": str(dest),
     }
+    if entry.get("contains_code"):
+        out["contains_code"] = entry["contains_code"]
+    if notices:
+        out["notices"] = notices
+    return out
 
 
 def catalog(

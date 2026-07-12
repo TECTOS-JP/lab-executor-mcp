@@ -260,6 +260,12 @@ class RecipeStep(BaseModel):
     # v2.30.0 (SP-4): pause (人間/AI の呼び出し)。
     # {message?, timeout_s?, on_timeout?, expose?}。message は ${...} 補間可。
     pause: dict[str, Any] | None = None
+    # v2.32.0 (SP-6): py / dll (コード実行。ポリシーゲート + 来歴記録の管理下)。
+    # py:  {file: | code:, inputs?, outputs?, timeout_s?, on_error?}
+    # dll: {path, function, argtypes, restype, args?, out_args?, result_as?,
+    #       timeout_s?, on_error?}
+    py: dict[str, Any] | None = None
+    dll: dict[str, Any] | None = None
     description: str = ""
     # v0.6.0: instrument logical ref ("$psu" / alias / resource)
     # map_recipe で各 target ごとに違う instrument を指す場合に使用
@@ -289,20 +295,67 @@ class RecipeStep(BaseModel):
             "repeat":             self.repeat is not None,
             "guard":              self.guard is not None,
             "pause":              self.pause is not None,
+            "py":                 self.py is not None,
+            "dll":                self.dll is not None,
         }
         active = [k for k, v in flags.items() if v]
         if len(active) > 1:
             raise ValueError(
                 f"RecipeStep には command / wait / wait_until / wait_for_condition / "
-                f"wait_for_stable / barrier / compute / branch / repeat / guard / pause "
-                f"のうち 1 つだけを指定してください (検出: {active})"
+                f"wait_for_stable / barrier / compute / branch / repeat / guard / pause / "
+                f"py / dll のうち 1 つだけを指定してください (検出: {active})"
             )
         if not active:
             raise ValueError(
                 "RecipeStep には command / wait / wait_until / wait_for_condition / "
-                "wait_for_stable / barrier / compute / branch / repeat / guard / pause "
-                "のいずれかが必須です"
+                "wait_for_stable / barrier / compute / branch / repeat / guard / pause / "
+                "py / dll のいずれかが必須です"
             )
+
+        # v2.32.0 (SP-6): py / dll の構造チェック (path 解決・ポリシー・式の
+        # 検証は recipe_to_plan)。
+        if flags["py"]:
+            ps = self.py
+            if not isinstance(ps, dict):
+                raise ValueError("py は mapping である必要があります")
+            has_file = bool(ps.get("file"))
+            has_code = bool(str(ps.get("code") or "").strip())
+            if has_file == has_code:
+                raise ValueError("py: file と code はどちらか一方を指定してください")
+            oe = ps.get("on_error", "abort")
+            if oe not in ("abort", "safe_shutdown", "pause"):
+                raise ValueError(
+                    f"py.on_error は abort / safe_shutdown / pause のいずれか: {oe!r}"
+                )
+            outs = ps.get("outputs", [])
+            if not isinstance(outs, list) or any(
+                not isinstance(x, str) or not x.strip() for x in outs
+            ):
+                raise ValueError("py.outputs は変数名 (文字列) のリストが必要です")
+            ins = ps.get("inputs", {})
+            if not isinstance(ins, dict):
+                raise ValueError("py.inputs は {ローカル名: 参照式} の mapping が必要です")
+
+        if flags["dll"]:
+            dl = self.dll
+            if not isinstance(dl, dict):
+                raise ValueError("dll は mapping である必要があります")
+            for k in ("path", "function"):
+                if not dl.get(k):
+                    raise ValueError(f"dll には '{k}' が必須です")
+            # 型宣言必須 (spec §5.8): argtypes / restype が無い呼び出しは検証エラー
+            if "argtypes" not in dl or not isinstance(dl["argtypes"], list):
+                raise ValueError(
+                    "dll: argtypes (ctypes 型名のリスト) の宣言は必須です "
+                    "(引数なし関数は argtypes: [] を明示)"
+                )
+            if not dl.get("restype"):
+                raise ValueError("dll: restype の宣言は必須です (無戻り値は 'void')")
+            oe = dl.get("on_error", "abort")
+            if oe not in ("abort", "safe_shutdown", "pause"):
+                raise ValueError(
+                    f"dll.on_error は abort / safe_shutdown / pause のいずれか: {oe!r}"
+                )
 
         if flags["compute"]:
             cp = self.compute
@@ -479,6 +532,8 @@ class RecipeStep(BaseModel):
         if self.repeat is not None: return "repeat"
         if self.guard is not None: return "guard"
         if self.pause is not None: return "pause"
+        if self.py is not None: return "py"
+        if self.dll is not None: return "dll"
         return "command"
 
 

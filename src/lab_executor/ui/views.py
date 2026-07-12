@@ -213,6 +213,31 @@ def _dryrun_step_row(
     from lab_executor.utils.seq_expression import SeqExpressionError, evaluate
 
     step_type = getattr(st, "type", "command")
+
+    # SP-6: py / dll は dry-run では実行しない不透明ステップ。
+    # (args がリスト or 不在で汎用 row の dict 化に乗らないため専用処理)
+    if step_type == "py":
+        return {
+            "type": "py",
+            "opaque": True,
+            "has_code": getattr(st, "code", None) is not None,
+            "source": "file" if getattr(st, "file", None) else "code",
+            "file": getattr(st, "file", None),
+            "outputs": list(getattr(st, "outputs", []) or []),
+            "sha256": getattr(st, "sha256", "") or "",
+            "description": getattr(st, "description", "") or "",
+        }
+    if step_type == "dll":
+        return {
+            "type": "dll",
+            "opaque": True,
+            "path": getattr(st, "path", "") or "",
+            "function": getattr(st, "function", "") or "",
+            "result_as": getattr(st, "result_as", None),
+            "sha256": getattr(st, "sha256", "") or "",
+            "description": getattr(st, "description", "") or "",
+        }
+
     row: dict[str, Any] = {
         "type": step_type,
         "command": getattr(st, "command", "") or "",
@@ -309,6 +334,42 @@ def _dryrun_step_row(
                     entry["error"] = str(e)
             expose_rows.append(entry)
         row["expose"] = expose_rows
+
+    # SP-6: py / dll — dry-run では実行しない不透明ステップ (spec §7)。
+    # 入出力宣言のみ表示・検証し、後続は outputs の test_values で評価する。
+    # 実行込みの検証 (--run-code) は将来項 (docs 参照)。
+    elif step_type == "py":
+        row["opaque"] = True
+        row["file"] = getattr(st, "file", None)
+        row["sha256"] = getattr(st, "sha256", "")
+        row["has_code"] = bool(getattr(st, "code", None))
+        row["inputs"] = dict(getattr(st, "inputs", {}) or {})
+        row["outputs"] = list(getattr(st, "outputs", []) or [])
+        row["timeout_s"] = getattr(st, "timeout_s", None)
+        row["on_error"] = getattr(st, "on_error", "abort")
+        row["note"] = (
+            "dry-run では実行されません (outputs は test_values で与えて"
+            "後続を評価してください)"
+        )
+    elif step_type == "dll":
+        row["opaque"] = True
+        row["path"] = getattr(st, "path", "")
+        row["function"] = getattr(st, "function", "")
+        row["sha256"] = getattr(st, "sha256", "")
+        row["argtypes"] = list(getattr(st, "argtypes", []) or [])
+        row["restype"] = getattr(st, "restype", "void")
+        row["dll_args"] = [
+            a if not isinstance(a, str) else {"expr": a}
+            for a in (getattr(st, "args", []) or [])
+        ]
+        row["out_args"] = dict(getattr(st, "out_args", {}) or {})
+        row["result_as"] = getattr(st, "result_as", None)
+        row["timeout_s"] = getattr(st, "timeout_s", None)
+        row["on_error"] = getattr(st, "on_error", "abort")
+        row["note"] = (
+            "dry-run では実行されません (result_as / out_args は test_values "
+            "で与えて後続を評価してください)"
+        )
 
     # SP-3: branch — 全 case を展開表示。test_values があれば採択 case を併記
     elif step_type == "branch":

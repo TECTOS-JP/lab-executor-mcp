@@ -92,6 +92,41 @@ def _find_recipe_and_instruments(
     return recipe_fragment, instruments
 
 
+def _detect_contains_code(recipe_fragment: dict | None) -> dict[str, bool] | None:
+    """v2.32.0 (SP-6): recipe 断片に py / dll ステップが含まれるか検出する。
+
+    branch case / repeat body のネスト steps も再帰的に走査する。
+    含まれなければ None (asset.yaml にキーを載せない — 既存資産と同形)。
+    表示義務 (spec §6.1): 受け手はコードを検分の上、自己のポリシーで
+    実行可否を判断する。
+    """
+    found = {"python": False, "dll": False}
+
+    def _walk(steps) -> None:
+        for s in steps or []:
+            if not isinstance(s, dict):
+                continue
+            # model_dump() された RecipeStep は py/dll/branch 等を全て
+            # キーに持つ (値 None) ため、キー存在でなく非 None で判定する
+            if s.get("py") is not None:
+                found["python"] = True
+            if s.get("dll") is not None:
+                found["dll"] = True
+            for case in (s.get("branch") or []):
+                if isinstance(case, dict):
+                    _walk(case.get("steps"))
+            rp = s.get("repeat")
+            if isinstance(rp, dict):
+                _walk(rp.get("steps"))
+
+    definition = (recipe_fragment or {}).get("definition") or {}
+    if isinstance(definition, dict):
+        _walk(definition.get("steps"))
+    if found["python"] or found["dll"]:
+        return found
+    return None
+
+
 _META_KEYS = ("conditions", "hazards", "expected_results", "sample")
 
 
@@ -478,6 +513,8 @@ def build_asset(
             hazards=eff_hazards,
             expected_results=eff_expected_results or [],
             dry_run=dry_run,
+            # v2.32.0 (SP-6): py / dll を含むレシピの表示義務 (spec §6.1)
+            contains_code=_detect_contains_code(recipe_fragment),
             contents=[c.model_dump() for c in contents],
         )
         asset_yaml = yaml.safe_dump(

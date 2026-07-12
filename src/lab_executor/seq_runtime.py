@@ -21,6 +21,7 @@ import numpy as np
 from .experiment_ir import (
     BranchStep, CommandStep, ComputeStep, GuardStep, RepeatStep,
     VariableStore, VariableStoreError, WaitStep,
+    PyStep, DllStep,
 )
 from .step_executor import execute_command_step
 from .utils.seq_expression import SeqExpressionError, evaluate, evaluate_condition
@@ -308,6 +309,16 @@ async def execute_step_list(
         elif isinstance(st, RepeatStep):
             r = await process_repeat_step(
                 st, store, execs, source_step_path=path,
+                emit_event=emit_event, safe_shutdown=safe_shutdown,
+            )
+        elif isinstance(st, PyStep):
+            r = await process_py_step(
+                st, store, source_step_path=path,
+                emit_event=emit_event, safe_shutdown=safe_shutdown,
+            )
+        elif isinstance(st, DllStep):
+            r = await process_dll_step(
+                st, store, source_step_path=path,
                 emit_event=emit_event, safe_shutdown=safe_shutdown,
             )
         else:
@@ -612,3 +623,275 @@ async def process_repeat_step(
     if collected:
         out["collected"] = collected
     return out
+
+
+# ============================================================
+# v2.32.0 (SP-6): py / dll (コード実行 + ポリシーゲート + 来歴記録)
+# ============================================================
+
+
+def _display(v: Any) -> Any:
+    """イベント payload 用の表示値 (ndarray は要約形)。"""
+    from .experiment_ir.context import summarize_array
+    if isinstance(v, np.ndarray):
+        return summarize_array(v)
+    if isinstance(v, np.generic):
+        return v.item()
+    return v
+
+
+async def _code_step_error(
+    base: dict,
+    on_error: str,
+    error: str,
+    message: str,
+    safe_shutdown: SafeShutdown | None,
+    traceback_text: str = "",
+) -> dict:
+    """py / dll のエラーを on_error に従って failed result にする。
+
+    on_error=pause は Job manager 側でインターセプトされる
+    (result に "on_error": "pause" が残ることで検出される)。
+    """
+    shutdown = None
+    if on_error == "safe_shutdown" and safe_shutdown:
+        shutdown = await safe_shutdown()
+    out = {
+        **base, "success": False, "error": error, "message": message,
+        "safe_shutdown": shutdown,
+    }
+    if traceback_text:
+        out["traceback"] = traceback_text[-2000:]
+    return out
+
+
+async def process_py_step(
+    step: PyStep,
+    store: VariableStore,
+    *,
+    source_step_path: str = "",
+    emit_event: EmitEvent | None = None,
+    safe_shutdown: SafeShutdown | None = None,
+    policy: Any = None,
+) -> dict:
+    """PyStep を subprocess ワーカーで実行する (spec §5.7)。
+
+    - 実行直前にポリシー再検証 + file の sha256 再照合 (TOCTOU 対策)
+    - outputs に列挙されたキーのみ vars.* へ取り込む
+    - 来歴: file は sha256 / code は全文を timeline ``py_executed`` に記録
+    """
+    from pathlib import Path as _Path
+
+    from . import code_exec
+    from .code_policy import (
+        CodePolicyError, check_python, load_policy, sha256_file,
+    )
+
+    base = {
+        "step_type": "py",
+        "file": step.file,
+        "sha256": step.sha256,
+        "on_error": step.on_error,
+    }
+
+    # --- 実行直前のポリシー再検証 + sha256 再照合 (TOCTOU 対策) ---
+    pol = policy if policy is not None else load_policy()
+    try:
+        if step.resolved_path:
+            p = _Path(step.resolved_path)
+            if not p.exists():
+                raise CodePolicyError(f"py.file が存在しません: {p}")
+            current = sha256_file(p)
+            if current != step.sha256:
+                raise CodePolicyError(
+                    f"py.file の内容がコンパイル時から変更されています "
+                    f"(sha256 不一致): {p}"
+                )
+            check_python(pol, file_path=p, sha256=current)
+        else:
+            check_python(pol, file_path=None, sha256=step.sha256)
+    except CodePolicyError as e:
+        return await _code_step_error(
+            base, step.on_error, "policy_violation", str(e), safe_shutdown,
+        )
+
+    # --- inputs 評価 ---
+    ctx = store.as_ctx()
+    inputs: dict[str, Any] = {}
+    try:
+        for local, expr in step.inputs.items():
+            inputs[local] = evaluate(expr, ctx)
+    except SeqExpressionError as e:
+        return await _code_step_error(
+            base, step.on_error, "py_input_error", str(e), safe_shutdown,
+        )
+
+    # --- subprocess 実行 ---
+    try:
+        outputs = await code_exec.run_py(
+            code=step.code,
+            file_path=step.resolved_path or None,
+            inputs=inputs,
+            outputs=step.outputs,
+            params=ctx["params"],
+            env=ctx["env"],
+            timeout_s=step.timeout_s,
+        )
+    except code_exec.CodeExecError as e:
+        return await _code_step_error(
+            base, step.on_error, f"py_{e.error}", e.message, safe_shutdown,
+            traceback_text=e.traceback_text,
+        )
+
+    # --- outputs → vars.* (宣言分のみ) ---
+    assigned: dict[str, Any] = {}
+    for name in step.outputs:
+        try:
+            store.set_var(
+                name, outputs[name],
+                source_step_path=source_step_path,
+                expr=f"py:{step.sha256[:12]}",
+            )
+        except (VariableStoreError, TypeError) as e:
+            return await _code_step_error(
+                base, step.on_error, "py_output_error",
+                f"outputs '{name}': {e}", safe_shutdown,
+            )
+        if emit_event:
+            emit_event("var_assigned", store.events[-1])
+        assigned[name] = store.events[-1]["value"]
+
+    # --- 来歴記録 (spec §5.7: file は sha256、code は全文) ---
+    if emit_event:
+        emit_event("py_executed", {
+            "sha256": step.sha256,
+            "file": step.file,
+            "code": step.code if step.code is not None else None,
+            "inputs": {k: _display(v) for k, v in inputs.items()},
+            "outputs": assigned,
+            "timeout_s": step.timeout_s,
+            "step_path": source_step_path,
+        })
+    return {**base, "outputs": assigned, "success": True}
+
+
+async def process_dll_step(
+    step: DllStep,
+    store: VariableStore,
+    *,
+    source_step_path: str = "",
+    emit_event: EmitEvent | None = None,
+    safe_shutdown: SafeShutdown | None = None,
+    policy: Any = None,
+) -> dict:
+    """DllStep を専用ワーカー subprocess で実行する (spec §5.8)。
+
+    **計算専用の位置付け** — 機器制御はバックエンドの役割。
+    アクセス違反はワーカー死として回収しステップ failed (ランタイムは無事)。
+    来歴: DLL の sha256 / path / function / 引数値を timeline ``dll_executed``
+    に記録する。
+    """
+    from pathlib import Path as _Path
+
+    from . import code_exec
+    from .code_policy import CodePolicyError, check_dll, load_policy, sha256_file
+
+    base = {
+        "step_type": "dll",
+        "path": step.path,
+        "function": step.function,
+        "sha256": step.sha256,
+        "on_error": step.on_error,
+    }
+
+    # --- 実行直前のポリシー再検証 + sha256 再照合 (TOCTOU 対策) ---
+    pol = policy if policy is not None else load_policy()
+    try:
+        p = _Path(step.path)
+        if not p.exists():
+            raise CodePolicyError(f"dll.path が存在しません: {p}")
+        current = sha256_file(p)
+        if current != step.sha256:
+            raise CodePolicyError(
+                f"DLL の内容がコンパイル時から変更されています "
+                f"(sha256 不一致): {p}"
+            )
+        check_dll(pol, path=p, sha256=current)
+    except CodePolicyError as e:
+        return await _code_step_error(
+            base, step.on_error, "policy_violation", str(e), safe_shutdown,
+        )
+
+    # --- args 評価 (文字列は参照式、数値はリテラル) ---
+    ctx = store.as_ctx()
+    resolved_args: list[Any] = []
+    try:
+        for a in step.args:
+            resolved_args.append(evaluate(a, ctx) if isinstance(a, str) else a)
+    except SeqExpressionError as e:
+        return await _code_step_error(
+            base, step.on_error, "dll_arg_error", str(e), safe_shutdown,
+        )
+
+    # --- 専用ワーカーで呼び出し ---
+    try:
+        resp = await code_exec.run_dll(
+            path=step.path,
+            function=step.function,
+            argtypes=step.argtypes,
+            restype=step.restype,
+            args=resolved_args,
+            out_args=step.out_args,
+            timeout_s=step.timeout_s,
+        )
+    except code_exec.CodeExecError as e:
+        return await _code_step_error(
+            base, step.on_error, f"dll_{e.error}", e.message, safe_shutdown,
+            traceback_text=e.traceback_text,
+        )
+
+    # --- result_as (戻り値の capture) + out_args (バッファ回収) ---
+    result_val = resp.get("result")
+    try:
+        if step.result_as and result_val is not None:
+            store.set_step(
+                step.result_as, result_val,
+                source_step_path=source_step_path,
+            )
+            if emit_event:
+                emit_event("var_assigned", store.events[-1])
+        for name, arr in (resp.get("outputs") or {}).items():
+            store.set_var(
+                name, arr,
+                source_step_path=source_step_path,
+                expr=f"dll:{step.function}",
+            )
+            if emit_event:
+                emit_event("var_assigned", store.events[-1])
+    except (VariableStoreError, TypeError) as e:
+        return await _code_step_error(
+            base, step.on_error, "dll_output_error", str(e), safe_shutdown,
+        )
+
+    # --- 来歴記録 (spec §5.8: sha256 / path / function / 引数値) ---
+    if emit_event:
+        emit_event("dll_executed", {
+            "sha256": step.sha256,
+            "path": step.path,
+            "function": step.function,
+            "argtypes": list(step.argtypes),
+            "restype": step.restype,
+            "args": [_display(v) for v in resolved_args],
+            "result": _display(result_val),
+            "out_args": {k: v for k, v in step.out_args.items()},
+            "timeout_s": step.timeout_s,
+            "step_path": source_step_path,
+        })
+    return {
+        **base,
+        "result": _display(result_val),
+        "outputs": {
+            k: _display(v) for k, v in (resp.get("outputs") or {}).items()
+        },
+        "success": True,
+    }

@@ -34,6 +34,7 @@ from lab_executor.experiment_ir import (
     WaitUntilStep, WaitForConditionStep, WaitForStableStep,
     VariableStore,
     GuardStep, BranchStep, RepeatStep, PauseStep,
+    PyStep, DllStep,
 )
 from lab_executor import seq_runtime
 from lab_executor.job.state_machine import (
@@ -2899,6 +2900,34 @@ class JobManager:
                         rec, session, runtime, step, idx, store,
                     )
                     self._safe_transition(job_id, JobStatus.RUNNING)
+                elif isinstance(step, PyStep):
+                    result = await seq_runtime.process_py_step(
+                        step, store,
+                        source_step_path=f"steps[{idx}]",
+                        emit_event=(
+                            lambda et, pl, _i=idx: self._safe_record_event(
+                                job_id, et, step_index=_i, payload=pl,
+                            )
+                        ),
+                        safe_shutdown=_job_safe_shutdown,
+                    )
+                    result = await self._maybe_pause_on_code_error(
+                        rec, session, runtime, idx, store, result,
+                    )
+                elif isinstance(step, DllStep):
+                    result = await seq_runtime.process_dll_step(
+                        step, store,
+                        source_step_path=f"steps[{idx}]",
+                        emit_event=(
+                            lambda et, pl, _i=idx: self._safe_record_event(
+                                job_id, et, step_index=_i, payload=pl,
+                            )
+                        ),
+                        safe_shutdown=_job_safe_shutdown,
+                    )
+                    result = await self._maybe_pause_on_code_error(
+                        rec, session, runtime, idx, store, result,
+                    )
                 else:
                     result = {
                         "success": False,
@@ -3181,6 +3210,65 @@ class JobManager:
                     "safe_shutdown": shutdown,
                 }
             await asyncio.sleep(_WAIT_SLICE_S)
+
+    async def _maybe_pause_on_code_error(
+        self,
+        rec: JobRecord,
+        session,
+        runtime: "_JobRuntime",
+        idx: int,
+        var_store: VariableStore,
+        result: dict,
+    ) -> dict:
+        """v2.32.0 (SP-6): py / dll の on_error=pause をインターセプトする。
+
+        失敗 result が ``on_error: "pause"`` を持つ場合、SP-4 の pause 機構で
+        人間 / AI に判断を返す:
+        - continue: エラーを無視して続行 (result は success=True、
+          ``continued_after_error`` と ``original_error`` を残す)
+        - abort / timeout / cancel: failed のまま (中断フラグは伝播)
+        """
+        if result.get("success") or result.get("on_error") != "pause":
+            return result
+
+        job_id = rec.job_id
+        pstep = PauseStep(
+            message=(
+                f"{result.get('step_type', 'code')} ステップが失敗しました: "
+                f"{str(result.get('message', ''))[:300]} — 続行しますか?"
+            ),
+            timeout_s=3600.0,
+            on_timeout="safe_shutdown",
+            expose=[],
+        )
+        self._safe_transition(job_id, JobStatus.WAITING)
+        presult = await self._run_pause_step(
+            rec, session, runtime, pstep, idx, var_store,
+        )
+        self._safe_transition(job_id, JobStatus.RUNNING)
+
+        if presult.get("success"):
+            # continue が選択された → エラーを無視して続行
+            out = {
+                **result,
+                "success": True,
+                "continued_after_error": True,
+                "original_error": result.get("error"),
+                "pause_resolution": "continue",
+                "pause_responder": presult.get("responder"),
+            }
+            out.pop("error", None)
+            return out
+        # abort / timeout / cancel → failed のまま (中断フラグを伝播)
+        out = dict(result)
+        out["pause_resolution"] = presult.get("resolution")
+        for flag in ("interrupted_by_cancel", "interrupted_by_timeout"):
+            if presult.get(flag):
+                out[flag] = True
+        if presult.get("error") == "pause_timeout":
+            # 応答なし → pause 側の safe_shutdown 実行結果も残す
+            out["pause_timeout_safe_shutdown"] = presult.get("safe_shutdown")
+        return out
 
     def respond_pause(
         self,
@@ -3581,4 +3669,9 @@ class JobManager:
             return f"repeat while [{step.while_expr}] max={step.max_iterations}"
         if isinstance(step, PauseStep):
             return f"pause (timeout={step.timeout_s}s, on_timeout={step.on_timeout})"
+        if isinstance(step, PyStep):
+            src = step.file or f"code sha256:{step.sha256[:12]}"
+            return f"py {src}"
+        if isinstance(step, DllStep):
+            return f"dll {step.function} @ {step.path}"
         return f"step type={getattr(step, 'type', '?')}"

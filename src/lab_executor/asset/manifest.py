@@ -86,6 +86,10 @@ class AssetManifest(BaseModel):
     hazards: HazardsInfo | None = None
     expected_results: list[ExpectedResult] = Field(default_factory=list)
     dry_run: DryRunInfo | None = None
+    # v2.32.0 (SP-6, spec §6.1): py / dll ステップを含むレシピの表示義務。
+    # {"python": bool, "dll": bool}。コードを含まない資産では None (キー省略互換)。
+    # 受け手はコードを検分の上、自己のポリシーで実行可否を判断する。
+    contains_code: dict[str, bool] | None = None
     contents: list[ContentEntry] = Field(default_factory=list)
 
     def to_yaml_dict(self) -> dict[str, Any]:

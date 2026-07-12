@@ -29,6 +29,9 @@ class CheckReport:
     level_verified: int = -1
     levels: dict[str, dict] = field(default_factory=dict)
     warnings: list[dict] = field(default_factory=list)
+    # v2.32.0 (SP-6): py / dll ステップを含む資産の表示 (spec §6.1)。
+    # {"python": bool, "dll": bool} または None (コードなし)。
+    contains_code: dict[str, bool] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -39,6 +42,7 @@ class CheckReport:
             "level_verified": self.level_verified,
             "levels": self.levels,
             "warnings": self.warnings,
+            "contains_code": self.contains_code,
         }
 
     @property
@@ -141,6 +145,8 @@ def check_asset(zip_path: str | Path) -> CheckReport:
                 rep.schema_ok = True
                 rep.asset_id = manifest.asset_id
                 rep.level_declared = manifest.level_declared
+                # v2.32.0 (SP-6): contains_code をレポートに表示
+                rep.contains_code = manifest.contains_code
             except Exception as e:
                 rep.warnings.append({
                     "warning_class": "invalid_manifest",

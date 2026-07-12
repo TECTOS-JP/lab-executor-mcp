@@ -13,8 +13,9 @@ v2.28.0 (SP-1/2)・v2.29.0 (SP-3)・v2.30.0 (SP-4)・v2.31.0 (SP-5) で導入。
 - SP-3: branch (条件分岐) / repeat (反復) / guard (範囲検証と安全動作)
 - SP-4: pause (人間 / AI の呼び出し。message の `${...}` 補間を含む)
 - SP-5: array 型 / repeat collect / 式言語の np.* 名前空間 (デナイリスト付き)
+- SP-6: py / dll ステップ (任意コード実行) + ポリシーゲート
 
-未実装 (後続 SP): py / dll (SP-6)、サブシーケンス (SP-7)、
+未実装 (後続 SP): サブシーケンス (SP-7)、
 args への `${...}` 部分埋め込み、ndarray 本体の資産保存 (npy)。
 
 ---
@@ -452,3 +453,79 @@ capture は同名変数への上書きになる (最後の値のみ残る)。
   `test_values: {"vars.iv_voltages": [1.0, 2.0, 3.0]}` → ndarray 化して
   np 式を評価する。compute の ndarray 結果は要約形で表示される。
 - repeat 行に `collect` 宣言が表示される。
+
+
+## py / dll — 任意コード実行 (§5.7-5.8 / §6.1、v2.32.0 SP-6)
+
+本格的なフィッティング・ベンダ解析ライブラリ呼び出しのため、宣言的な式言語の
+外側に **明示的なステップ**として任意コード実行を隔離する。
+
+### py ステップ
+
+```yaml
+- py:
+    file: "scripts/iv_fit.py"      # または code: | の排他
+    inputs:  { v: "vars.iv_voltages", i0: "vars.meas_current" }
+    outputs: [ "r_fit", "r_fit_stderr" ]   # このキーだけ vars.* へ
+    timeout_s: 30
+    on_error: "abort"              # abort | safe_shutdown
+```
+
+- 実行契約: subprocess の中で読み取り専用 `ctx`(inputs 評価値 + params/env)と
+  空 `out` が与えられる。`file:` は `def main(ctx) -> dict` も可。
+- 返却値は 5 型 (float/int/bool/str/array)。array は npy 経由で受け渡す。
+- `file` は sha256 / `code` は全文を timeline `py_executed` に記録 (来歴)。
+
+### dll ステップ (計算専用)
+
+```yaml
+- dll:
+    path: "C:/Vendor/Lib/thickfit.dll"
+    function: "FitThickness"
+    argtypes: [ "double*", "int", "double" ]   # 宣言必須
+    restype: "double"
+    args: [ "vars.psi", "${len(vars.psi)}", 632.8 ]
+    out_args: { 0: "psi_out" }     # 書き換えバッファの回収
+    result_as: "thickness_dll"
+    timeout_s: 30
+```
+
+- **機器の制御を dll で行うのは非推奨** — 制御はバックエンドとして実装し
+  Job・安全層・資産の管理下に置く。dll は計算専用。
+- 専用ワーカー subprocess で ctypes 呼び出し。アクセス違反はワーカー死として
+  ステップ failed に回収 (ランタイムは無事)。
+
+### 信頼モデルとポリシーゲート (§6.1)
+
+> subprocess 分離は**安定性のため**であり、**サンドボックスではない**。
+> 信頼境界は「レシピの作者」。制御は「実行可否」と「来歴の完全記録」で行う。
+
+`_policy.yaml` (instruments dir。無ければ既定):
+
+```yaml
+code_execution:
+  python: "allow"          # allow | scripts_dir_only | hash_pinned | deny
+  scripts_dir: "./scripts"
+  dll: "dir_allowlist"     # allow | dir_allowlist | hash_pinned | deny
+  dll_dirs: [ "C:/Vendor/Lib" ]
+  pinned_hashes: [ "sha256:..." ]
+```
+
+- 既定: python=allow / dll=dir_allowlist (dll_dirs 空 = 事実上 deny)。
+- **コンパイル時 + 実行直前の二段検証** (実行直前に sha256 を再照合 —
+  TOCTOU 対策)。deny / ポリシー不適合は明確なエラー。
+- **外部から受け取った資産の実行時は python/dll とも既定 deny を推奨**
+  (他人のコードを明示的な許可なく走らせない)。
+
+### 資産との接続
+
+- py/dll を含むレシピの asset.yaml に `contains_code: {python, dll}` を
+  builder が自動記載。`asset check` がレポートに表示。
+- external レジストリ publish 時に contains_code 資産へ注意文を表示
+  (拒否はしない — L3 上限の既存共有ゲートは不変)。
+
+### dry-run
+
+- py/dll は**実行しない**不透明ステップとして表示 (`opaque: true`)。
+  outputs / result_as の宣言のみ検証し、後続は test_values で評価する。
+  実行込みの検証 (`--run-code`) は将来項。

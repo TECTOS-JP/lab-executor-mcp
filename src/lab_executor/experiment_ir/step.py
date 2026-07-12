@@ -478,6 +478,93 @@ class PauseStep(BaseModel):
         return v
 
 
+# ============================================================
+# v2.32.0 (SP-6): py / dll (コード実行ステップ + ポリシーゲート)
+# ============================================================
+
+
+class PyStep(BaseModel):
+    """Python コード実行ステップ (sequence_processing_spec §5.7)。
+
+    - ``file`` / ``code`` は排他 (file は scripts_dir 基準で解決済み絶対 path を
+      ``resolved_path`` に持つ)
+    - ``inputs``: {ローカル名: 参照式}。評価値がワーカーの ``ctx`` に載る
+      (加えて ctx["params"] / ctx["env"] の読み取りコピー)
+    - ``outputs``: ``out`` dict のこのキー **だけ** が vars.* に取り込まれる
+      (暗黙の全取り込みはしない)
+    - ``sha256``: file はファイル内容 / code は全文の hash (来歴、timeline
+      ``py_executed`` に記録)
+
+    **信頼モデル (spec §6.1)**: subprocess 分離は安定性のためであり
+    **サンドボックスではない**。実行可否は code_policy が制御する。
+    """
+    type: Literal["py"] = "py"
+    file: str | None = None            # 元の相対指定 (表示・来歴用)
+    code: str | None = None
+    resolved_path: str = ""            # file 型のみ: 解決済み絶対 path
+    sha256: str = ""
+    inputs: dict[str, str] = Field(default_factory=dict)
+    outputs: list[str] = Field(default_factory=list)
+    timeout_s: float = 60.0
+    on_error: Literal["abort", "safe_shutdown", "pause"] = "abort"
+    description: str = ""
+
+    @model_validator(mode="after")
+    def _validate(self) -> "PyStep":
+        has_file = bool(self.file)
+        has_code = self.code is not None and self.code.strip() != ""
+        if has_file == has_code:
+            raise ValueError("py: file と code はどちらか一方を指定してください")
+        if self.timeout_s <= 0:
+            raise ValueError(
+                f"py.timeout_s は正の値である必要があります: {self.timeout_s}"
+            )
+        return self
+
+
+class DllStep(BaseModel):
+    """ネイティブ DLL 呼び出しステップ (sequence_processing_spec §5.8)。
+
+    **計算専用の位置付け**: 機器の「制御」を dll ステップで行うことは非推奨。
+    制御はバックエンドとして実装し、Job・安全層・資産の管理下に置くのが正道。
+
+    - ``argtypes`` / ``restype`` の型宣言は必須 (検証エラー)
+    - ``args``: 数値リテラル、または参照式文字列 (実行時に評価。
+      ``${...}`` 形式・裸の式のどちらも可)
+    - ``out_args``: {引数位置: vars 名} — 書き換えバッファ (array) の回収先
+    - ``result_as``: 戻り値 (数値) を steps.* へ capture
+    - 専用ワーカー subprocess で呼び出し、アクセス違反はワーカー死として
+      回収 (ステップ failed、ランタイムは無事)
+    """
+    type: Literal["dll"] = "dll"
+    path: str                          # 解決済み絶対 path
+    function: str
+    argtypes: list[str]
+    restype: str = "void"
+    args: list[Any] = Field(default_factory=list)
+    out_args: dict[str, str] = Field(default_factory=dict)
+    result_as: str | None = None
+    sha256: str = ""
+    timeout_s: float = 30.0
+    on_error: Literal["abort", "safe_shutdown", "pause"] = "abort"
+    description: str = ""
+
+    @model_validator(mode="after")
+    def _validate(self) -> "DllStep":
+        if not self.path or not self.function:
+            raise ValueError("dll: path と function は必須です")
+        if self.timeout_s <= 0:
+            raise ValueError(
+                f"dll.timeout_s は正の値である必要があります: {self.timeout_s}"
+            )
+        if len(self.args) != len(self.argtypes):
+            raise ValueError(
+                f"dll: args ({len(self.args)}) と argtypes ({len(self.argtypes)}) "
+                "の数が一致しません"
+            )
+        return self
+
+
 # discriminated union: type フィールドで自動的に正しいモデルが選ばれる
 Step = Annotated[
     Union[
@@ -486,6 +573,7 @@ Step = Annotated[
         BarrierStep, ComputeStep,
         GuardStep, BranchStep, RepeatStep,
         PauseStep,
+        PyStep, DllStep,
     ],
     Field(discriminator="type"),
 ]

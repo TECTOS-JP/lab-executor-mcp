@@ -20,6 +20,8 @@ from lab_executor.experiment_ir.step import (
     BranchStep,
     RepeatStep,
     PauseStep,
+    PyStep,
+    DllStep,
     Step,
 )
 from lab_executor.experiment_ir.plan import Plan
@@ -38,6 +40,8 @@ __all__ = [
     "BranchStep",
     "RepeatStep",
     "PauseStep",
+    "PyStep",
+    "DllStep",
     "Step",
     "Plan",
     "VariableStore",

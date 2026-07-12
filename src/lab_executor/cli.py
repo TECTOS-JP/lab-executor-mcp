@@ -1812,6 +1812,12 @@ def _cmd_asset(args: argparse.Namespace) -> int:
             print(f"  checksums_ok:   {data['checksums_ok']}")
             print(f"  level_declared: {data['level_declared']}")
             print(f"  level_verified: {data['level_verified']}")
+            # v2.32.0 (SP-6): contains_code 表示 (spec §6.1 の表示義務)
+            cc = data.get("contains_code")
+            if cc:
+                kinds = [k for k in ("python", "dll") if cc.get(k)]
+                print(f"  contains_code:  {', '.join(kinds)} "
+                      "(受け手はコードを検分の上、自己のポリシーで実行可否を判断)")
             for lid in ("L0", "L1", "L2", "L3", "L4", "L5"):
                 entry = data["levels"].get(lid) or {}
                 flag = "OK " if entry.get("ok") else "NG "
@@ -1873,6 +1879,9 @@ def _cmd_asset(args: argparse.Namespace) -> int:
             print(f"  level_verified: L{res['level_verified']}")
             print(f"  registry:       {res['registry']}")
             print(f"  path:           {res['path']}")
+            # v2.32.0 (SP-6): contains_code 資産の注意表示 (拒否はしない)
+            for note in res.get("notices") or []:
+                print(f"  NOTICE: {note}")
         return 0
 
     if sub == "catalog":

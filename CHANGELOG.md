@@ -1,5 +1,32 @@
 # 変更履歴
 
+## v2.32.0 — シーケンス処理拡張 SP-6: py / dll ステップ + ポリシーゲート
+
+合言葉: **「任意コードは隔離し、来歴に刻み、装置には範囲でしか届かせない」**
+
+### 追加
+
+- **py ステップ**: Python コードを subprocess で実行 (`file:` / `code:`、
+  `inputs` 評価 → `ctx`、`outputs` 宣言キーのみ vars へ、timeout 必須)。
+  file は sha256 / code は全文を timeline `py_executed` に記録。
+- **dll ステップ**: ネイティブ DLL を専用ワーカー subprocess で ctypes 呼び出し
+  (argtypes/restype 宣言必須、array バッファのマーシャリング、アクセス違反は
+  ワーカー死として回収)。**計算専用**の位置付け。
+- **ポリシーゲート** (`_policy.yaml` の `code_execution`): python は
+  allow/scripts_dir_only/hash_pinned/deny、dll は allow/dir_allowlist/
+  hash_pinned/deny。**既定 dll: dir_allowlist (dirs 空 = 事実上 deny)**。
+  コンパイル時 + 実行直前 (sha256 再照合、TOCTOU 対策) の二段検証。
+- **信頼モデル (spec §6.1)**: subprocess 分離は安定性のためであり
+  **サンドボックスではない** (信頼境界はレシピ作者)。asset に
+  `contains_code: {python, dll}` を自動記載し `asset check` が表示、
+  external レジストリ publish 時に注意文を表示 (拒否はしない)。
+- dry-run は py/dll を実行しない不透明ステップとして表示。
+
+### 互換性
+
+- MCP tool surface 不変 (50)。levels.py の L 判定基準は不変。
+  既存レシピ・既存 YAML の検証結果は不変。version を `2.32.0` に更新。
+
 ## v2.31.0 — シーケンス処理拡張 SP-5: array 型 + repeat collect + NumPy 名前空間
 
 合言葉: **「測ってから配列解析 — I-V 曲線の標準経路」**
