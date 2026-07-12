@@ -83,6 +83,8 @@ def _find_recipe_and_instruments(
                 "name": recipe_name,
                 "definition": recipes[recipe_name],
                 "source_instrument": p.stem,
+                # v2.33.0 (SP-7): call の contains_code 走査用に sequences も保持
+                "sequences": data.get("sequences") or {},
             }
         # この定義を同梱する条件: recipe を持つ定義、または resource 名の一致
         if has_recipe:
@@ -101,6 +103,8 @@ def _detect_contains_code(recipe_fragment: dict | None) -> dict[str, bool] | Non
     実行可否を判断する。
     """
     found = {"python": False, "dll": False}
+    sequences = (recipe_fragment or {}).get("sequences") or {}
+    _seen_seqs: set[str] = set()   # call の再帰による無限走査を防ぐ
 
     def _walk(steps) -> None:
         for s in steps or []:
@@ -118,6 +122,14 @@ def _detect_contains_code(recipe_fragment: dict | None) -> dict[str, bool] | Non
             rp = s.get("repeat")
             if isinstance(rp, dict):
                 _walk(rp.get("steps"))
+            # v2.33.0 (SP-7): call は参照先サブシーケンスの steps も走査
+            cl = s.get("call")
+            if isinstance(cl, dict):
+                name = cl.get("sequence")
+                seq = sequences.get(name)
+                if isinstance(seq, dict) and name not in _seen_seqs:
+                    _seen_seqs.add(name)
+                    _walk(seq.get("steps"))
 
     definition = (recipe_fragment or {}).get("definition") or {}
     if isinstance(definition, dict):

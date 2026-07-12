@@ -21,7 +21,7 @@ import numpy as np
 from .experiment_ir import (
     BranchStep, CommandStep, ComputeStep, GuardStep, RepeatStep,
     VariableStore, VariableStoreError, WaitStep,
-    PyStep, DllStep,
+    PyStep, DllStep, CallStep,
 )
 from .step_executor import execute_command_step
 from .utils.seq_expression import SeqExpressionError, evaluate, evaluate_condition
@@ -225,14 +225,15 @@ class NestedExecutors:
     同期経路と Job 経路で command / wait の実行方法 (cancel 応答・イベント記録)
     が異なるため、経路側が束ねて渡す。
 
-    - ``run_command(step, step_path) -> dict``: CommandStep 実行
-      (通常 ``process_command_step`` をラップする)
+    - ``run_command(step, step_path, store) -> dict``: CommandStep 実行
+      (通常 ``process_command_step`` をラップする)。v2.33.0 (SP-7): capture /
+      deferred 解決の対象ストアを引数で受ける (サブシーケンスは親と別スコープ)。
     - ``run_wait(step, step_path) -> dict``: WaitStep 実行
-      (Job 経路は slice + cancel チェック付き)
+      (Job 経路は slice + cancel チェック付き。capture が無いので store 不要)
     - ``cancel_check() -> "cancel" | "timeout" | None``: 各 step 前に呼ばれる
       (同期経路は None のままで良い)
     """
-    run_command: Callable[[CommandStep, str], Awaitable[dict]]
+    run_command: Callable[[CommandStep, str, VariableStore], Awaitable[dict]]
     run_wait: Callable[[WaitStep, str], Awaitable[dict]]
     cancel_check: Callable[[], str | None] | None = None
 
@@ -290,7 +291,7 @@ async def execute_step_list(
         if isinstance(st, WaitStep):
             r = await execs.run_wait(st, path)
         elif isinstance(st, CommandStep):
-            r = await execs.run_command(st, path)
+            r = await execs.run_command(st, path, store)
         elif isinstance(st, ComputeStep):
             r = await process_compute_step(
                 st, store, source_step_path=path,
@@ -319,6 +320,11 @@ async def execute_step_list(
         elif isinstance(st, DllStep):
             r = await process_dll_step(
                 st, store, source_step_path=path,
+                emit_event=emit_event, safe_shutdown=safe_shutdown,
+            )
+        elif isinstance(st, CallStep):
+            r = await process_call_step(
+                st, store, execs, source_step_path=path,
                 emit_event=emit_event, safe_shutdown=safe_shutdown,
             )
         else:
@@ -452,6 +458,74 @@ async def process_branch_step(
             "step_path": source_step_path,
         })
     return {**base, "case_index": None, "steps_executed": [], "success": True}
+
+
+async def process_call_step(
+    step: CallStep,
+    store: VariableStore,
+    execs: NestedExecutors,
+    *,
+    source_step_path: str = "",
+    emit_event: EmitEvent | None = None,
+    safe_shutdown: SafeShutdown | None = None,
+) -> dict:
+    """CallStep をサブシーケンスとして独立スコープで実行する (spec §5.9)。
+
+    - 子 VariableStore を作り (params = sub_params、env は親から継承)、
+      展開済み sub_steps を実行する。呼び出し元の steps/vars は見えない。
+    - 実行後、returns_map に列挙された子 vars/steps だけを呼び出し元 vars へ戻す。
+    """
+    base = {"step_type": "call", "sequence": step.sequence}
+    parent_ctx = store.as_ctx()
+    sub_store = VariableStore(params=dict(step.sub_params), env=dict(parent_ctx["env"]))
+    call_path = f"{source_step_path}/call:{step.sequence}"
+    if emit_event:
+        emit_event("call_entered", {
+            "sequence": step.sequence, "step_path": source_step_path,
+            "lib_sha256": step.lib_sha256,
+        })
+    ok, results = await execute_step_list(
+        step.sub_steps, sub_store, execs,
+        step_path=call_path,
+        emit_event=emit_event, safe_shutdown=safe_shutdown,
+    )
+    out = {**base, "steps_executed": results, "success": ok}
+    if not ok:
+        return _bubble_failure(out, results)
+    # --- returns_map: 子 vars/steps → 呼び出し元 vars ---
+    sub_ctx = sub_store.as_ctx()
+    for sub_name, parent_name in step.returns_map.items():
+        if sub_name in sub_ctx["vars"]:
+            val = sub_ctx["vars"][sub_name]
+        elif sub_name in sub_ctx["steps"]:
+            val = sub_ctx["steps"][sub_name]
+        else:
+            return {
+                **out, "success": False, "error": "call_return_missing",
+                "message": (
+                    f"サブシーケンス '{step.sequence}' の returns "
+                    f"'{sub_name}' が実行後に未定義です"
+                ),
+            }
+        try:
+            store.set_var(
+                parent_name, val,
+                source_step_path=call_path,
+                expr=f"<return {step.sequence}.{sub_name}>",
+            )
+        except (VariableStoreError, TypeError) as e:
+            return {
+                **out, "success": False, "error": "call_return_error",
+                "message": str(e),
+            }
+        if emit_event:
+            emit_event("var_assigned", store.events[-1])
+    if emit_event:
+        emit_event("call_returned", {
+            "sequence": step.sequence, "step_path": source_step_path,
+            "returns": list(step.returns_map.values()),
+        })
+    return out
 
 
 _ENV_MISSING = object()

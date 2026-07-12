@@ -14,8 +14,9 @@ v2.28.0 (SP-1/2)・v2.29.0 (SP-3)・v2.30.0 (SP-4)・v2.31.0 (SP-5) で導入。
 - SP-4: pause (人間 / AI の呼び出し。message の `${...}` 補間を含む)
 - SP-5: array 型 / repeat collect / 式言語の np.* 名前空間 (デナイリスト付き)
 - SP-6: py / dll ステップ (任意コード実行) + ポリシーゲート
+- SP-7: サブシーケンス (サブルーチン) — call / ロール束縛 / スコープ分離
 
-未実装 (後続 SP): サブシーケンス (SP-7)、
+**シーケンス処理拡張は SP-1〜SP-7 で完了。** 残る将来項: 
 args への `${...}` 部分埋め込み、ndarray 本体の資産保存 (npy)。
 
 ---
@@ -529,3 +530,69 @@ code_execution:
 - py/dll は**実行しない**不透明ステップとして表示 (`opaque: true`)。
   outputs / result_as の宣言のみ検証し、後続は test_values で評価する。
   実行込みの検証 (`--run-code`) は将来項。
+
+
+## サブシーケンス (サブルーチン) — call (§5.9、v2.33.0 SP-7)
+
+「安定待ち→N回測定→平均」のような定型手順を一度定義し、複数レシピ・複数装置
+から再利用する。コピペの重複と修正漏れを根絶する。
+
+### 定義 (`sequences:`)
+
+```yaml
+sequences:
+  stabilize_and_measure:
+    roles:
+      - { name: meter, requires: { commands: [measure_voltage] } }
+    parameters:
+      - { name: n, type: integer, default: 5 }
+    returns: [v_avg, v_std]
+    steps:
+      - repeat:
+          count: "$n"
+          collect: { v: "vs" }
+          steps:
+            - { command: measure_voltage, instrument: "@meter", result_as: v }
+      - compute: { set: v_avg, expr: "np.mean(vars.vs)" }
+      - compute: { set: v_std, expr: "np.std(vars.vs)" }
+```
+
+置き場所は3種: ①同一定義 YAML 内の `sequences:` (キー `<名前>`) ②ライブラリ
+ファイル (`recipe_to_plan(sequences_dir=...)`、キー `<ファイル stem>.<名前>`)
+③extension pack (pack の YAML ディレクトリを sequences_dir に指す)。同名衝突は
+検証エラー。
+
+### 呼び出し (`call`)
+
+```yaml
+- call:
+    sequence: "std_lib.stabilize_and_measure"   # 同一ファイル内なら名前のみ
+    bind: { meter: "DMM1" }                     # ロール → 実リソース
+    with: { n: 10 }                             # パラメータ (コンパイル時解決)
+    returns_as: { v_avg: baseline_v, v_std: baseline_noise }
+```
+
+### 意味論
+
+- **スコープ分離**: サブシーケンス内の steps/vars は独立スコープ (別
+  VariableStore)。呼び出し元の変数は見えず、`with` で渡した値だけが params に
+  なる。外に出るのは `returns` に列挙し `returns_as` でマップした値のみ
+  (py の inputs/outputs と同じ規律)。
+- **ロール束縛**: steps 内 `instrument: "@meter"` は call の `bind` で実リソース
+  に解決される。ロールの `requires` (capability 要件) は bind 先装置と機械照合
+  され、満たさない bind は検証エラー → **装置非依存で書け、L4 と同じ語彙で
+  移植性が保証される**。
+- **展開**: コンパイル時にインライン展開。再帰・相互再帰は検証エラー
+  (call グラフ DAG、ネスト深さ上限 `CALL_MAX_DEPTH=5`)。展開後の総ステップ数は
+  `MAX_TOTAL_STEPS_ESTIMATE` に含める。
+- **来歴**: ライブラリファイルの sha256 を記録。資産の `contains_code` 検出は
+  call 先サブシーケンスの py/dll も走査する。
+
+### 制約 (SP-7 段階)
+
+- `call.with` は**コンパイル時解決** (定数 or 呼び出し元 `$param`)。呼び出し元の
+  実行時変数 (`${vars.x}`) を with で渡すのは非対応 (将来項)。
+- サブシーケンス内では polling / barrier / pause は未対応 (branch/repeat と同じ
+  ネスト制約)。
+- UI エディタのライブラリブラウザは将来項 (dry-run の call 展開表示は既存の
+  再帰で効く)。

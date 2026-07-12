@@ -24,7 +24,7 @@ from .experiment_ir import (
     WaitUntilStep, WaitForConditionStep, WaitForStableStep,
     BarrierStep, VariableStore,
     GuardStep, BranchCase, BranchStep, RepeatStep, PauseStep,
-    PyStep, DllStep,
+    PyStep, DllStep, CallStep,
 )
 
 if TYPE_CHECKING:
@@ -68,6 +68,7 @@ _ENV_NAMES = frozenset({"job_id", "started_at"})
 BRANCH_MAX_DEPTH = 3            # branch のネスト最大深さ
 REPEAT_MAX_COUNT = 10_000       # repeat count / max_iterations の上限
 MAX_TOTAL_STEPS_ESTIMATE = 100_000  # 展開後総ステップ数の静的見積り上限
+CALL_MAX_DEPTH = 5             # v2.33.0 (SP-7): サブシーケンス呼び出しのネスト最大深さ
 
 
 def _validate_expr_refs(
@@ -160,6 +161,51 @@ def _resolve_range_decl(
     return (max(mins) if mins else None, min(maxs) if maxs else None)
 
 
+def _resolve_sequences(
+    definition: "InstrumentDefinition | None",
+    sequences_dir: str | None,
+) -> dict[str, Any]:
+    """v2.33.0 (SP-7): サブシーケンス解決辞書を構築する。
+
+    - 同一 definition の ``sequences``: キー ``"<名前>"``
+    - ``sequences_dir`` 内の ``*.yaml``: キー ``"<ファイル stem>.<名前>"``
+      + ライブラリファイルの sha256 を来歴用に保持
+
+    返り値: {解決キー: {"seq": SubsequenceDefinition, "sha256": str}}
+    同名衝突 (同一キーが複数ソース) は SeqExpressionError。
+    """
+    import yaml
+    from pathlib import Path
+    from .code_policy import sha256_text
+    from .models.instrument_def import SubsequenceDefinition
+
+    out: dict[str, Any] = {}
+    if definition is not None:
+        for name, seq in (definition.sequences or {}).items():
+            out[name] = {"seq": seq, "sha256": ""}
+    if sequences_dir:
+        d = Path(sequences_dir)
+        if d.is_dir():
+            for f in sorted(d.glob("*.yaml")) + sorted(d.glob("*.yml")):
+                text = f.read_text(encoding="utf-8")
+                digest = sha256_text(text)
+                data = yaml.safe_load(text) or {}
+                seqs = data.get("sequences") or {}
+                stem = f.stem
+                for name, raw in seqs.items():
+                    key = f"{stem}.{name}"
+                    if key in out:
+                        raise SeqExpressionError(
+                            f"サブシーケンス名が衝突しています: {key!r} "
+                            f"(ファイル {f.name})"
+                        )
+                    out[key] = {
+                        "seq": SubsequenceDefinition.model_validate(raw),
+                        "sha256": digest,
+                    }
+    return out
+
+
 def recipe_to_plan(
     recipe: RecipeDefinition,
     variables: dict[str, Any],
@@ -167,6 +213,7 @@ def recipe_to_plan(
     primary_resource: str | None = None,
     definition: InstrumentDefinition | None = None,
     policy: "CodePolicy | None" = None,
+    sequences_dir: str | None = None,
 ) -> Plan:
     """
     YAML の RecipeDefinition + 変数辞書 → IR Plan に変換する。
@@ -195,10 +242,11 @@ def recipe_to_plan(
     # コンパイル時検証用: その時点までに定義される名前を追跡する
     param_names: set[str] = set(variables.keys()) | {p.name for p in recipe.parameters}
 
+    sequences = _resolve_sequences(definition, sequences_dir)
     conv = _StepConverter(
         recipe=recipe, variables=variables, definition=definition,
         aux_resources=aux_resources, param_names=param_names,
-        policy=policy,
+        policy=policy, sequences=sequences, call_stack=(),
     )
     plan_steps, estimate = conv.convert(
         recipe.steps,
@@ -253,6 +301,8 @@ class _StepConverter:
         aux_resources: set[str],
         param_names: set[str],
         policy: "CodePolicy | None" = None,
+        sequences: dict[str, Any] | None = None,
+        call_stack: tuple[str, ...] = (),
     ):
         self.recipe = recipe
         self.variables = variables
@@ -260,6 +310,8 @@ class _StepConverter:
         self.aux_resources = aux_resources
         self.param_names = param_names
         self._policy = policy   # None なら初回使用時に load_policy()
+        self.sequences = sequences or {}   # v2.33.0 (SP-7)
+        self.call_stack = call_stack       # 再帰検出用
 
     @property
     def policy(self) -> "CodePolicy":
@@ -337,6 +389,15 @@ class _StepConverter:
                 for name in step.out_args.values():
                     defined_vars.add(name)
                 estimate += 1
+            elif st == "call":
+                step, est = self._convert_call(
+                    rs, defined_steps, defined_vars, env_names, spath,
+                )
+                out.append(step)
+                # returns_as でマップされた呼び出し元 vars を定義済みに
+                for parent_name in step.returns_map.values():
+                    defined_vars.add(parent_name)
+                estimate += est
             elif st == "branch":
                 step, est = self._convert_branch(
                     rs, defined_steps, defined_vars, env_names,
@@ -674,6 +735,129 @@ class _StepConverter:
             description=rs.description,
         )
 
+    @staticmethod
+    def _replace_roles(raw: Any, bind: dict[str, str], spath: str) -> Any:
+        """v2.33.0 (SP-7): ステップ (raw dict) 内の instrument: "@role" を
+        bind 先リソースに再帰的に置換する (branch case / repeat body も辿る)。
+        """
+        if isinstance(raw, dict):
+            new: dict[str, Any] = {}
+            for k, v in raw.items():
+                if k == "instrument" and isinstance(v, str) and v.startswith("@"):
+                    role = v[1:]
+                    if role not in bind:
+                        raise SeqExpressionError(
+                            f"{spath}: ロール @{role} が call.bind で束縛されていません"
+                        )
+                    new[k] = bind[role]
+                else:
+                    new[k] = _StepConverter._replace_roles(v, bind, spath)
+            return new
+        if isinstance(raw, list):
+            return [_StepConverter._replace_roles(x, bind, spath) for x in raw]
+        return raw
+
+    def _convert_call(
+        self, rs: RecipeStep,
+        defined_steps: set[str], defined_vars: set[str],
+        env_names: set[str], spath: str,
+    ) -> tuple[CallStep, int]:
+        """v2.33.0 (SP-7): call をサブシーケンスの展開済み IR に変換する。"""
+        from .asset.capability import match_capabilities
+
+        cl = rs.call or {}
+        name = str(cl["sequence"])
+        # --- 解決 ---
+        entry = self.sequences.get(name)
+        if entry is None:
+            raise SeqExpressionError(
+                f"{spath}: サブシーケンス '{name}' が見つかりません "
+                f"(利用可能: {sorted(self.sequences)})"
+            )
+        seq = entry["seq"]
+        lib_sha256 = entry.get("sha256", "")
+        # --- 再帰・深さ ---
+        if name in self.call_stack:
+            raise SeqExpressionError(
+                f"{spath}: サブシーケンスの再帰呼び出しは禁止です "
+                f"(呼び出し経路: {' -> '.join(self.call_stack + (name,))})"
+            )
+        if len(self.call_stack) + 1 > CALL_MAX_DEPTH:
+            raise SeqExpressionError(
+                f"{spath}: call のネスト深さが上限 ({CALL_MAX_DEPTH}) を超えています"
+            )
+        # --- bind とロール capability 照合 ---
+        bind = {str(k): str(v) for k, v in (cl.get("bind") or {}).items()}
+        for role in seq.roles:
+            if role.name not in bind:
+                raise SeqExpressionError(
+                    f"{spath}: ロール '{role.name}' が call.bind で束縛されていません"
+                )
+            if role.requires is not None and self.definition is not None:
+                m = match_capabilities(role.requires, self.definition)
+                if not m.get("satisfied", False):
+                    raise SeqExpressionError(
+                        f"{spath}: ロール '{role.name}' の capability 要件を "
+                        f"bind 先装置が満たしません: "
+                        f"missing={m.get('missing_commands')} "
+                        f"ranges={m.get('range_violations')}"
+                    )
+        # --- with のコンパイル時解決 (${...} 実行時式は SP-7 では非対応) ---
+        sub_params: dict[str, Any] = {}
+        declared = {p.name for p in seq.parameters}
+        for pname, praw in (cl.get("with") or {}).items():
+            if isinstance(praw, str) and "${" in praw:
+                raise SeqExpressionError(
+                    f"{spath}: call.with['{pname}'] の実行時式 ${{...}} は "
+                    "SP-7 では非対応です (定数 or 呼び出し元 $param のみ)"
+                )
+            try:
+                sub_params[str(pname)] = resolve_arg(praw, self.variables)
+            except (ExpressionError, TypeError, ValueError) as e:
+                raise SeqExpressionError(
+                    f"{spath}: call.with['{pname}'] を解決できません: {e}"
+                )
+        # 宣言済み parameters の default を補完
+        for p in seq.parameters:
+            if p.name not in sub_params and p.default is not None:
+                sub_params[p.name] = p.default
+        # --- returns_as 検証 ---
+        returns_as = {str(k): str(v) for k, v in (cl.get("returns_as") or {}).items()}
+        for sub_name in returns_as:
+            if sub_name not in seq.returns:
+                raise SeqExpressionError(
+                    f"{spath}: call.returns_as の '{sub_name}' は "
+                    f"サブシーケンスの returns {seq.returns} に含まれません"
+                )
+        # --- サブステップの @role 置換 + 変換 (子スコープの新 converter) ---
+        raw_steps = [self._replace_roles(s.model_dump(), bind, spath)
+                     for s in seq.steps]
+        sub_recipe = RecipeDefinition(
+            description=seq.description, parameters=seq.parameters,
+            steps=[], requires=None,
+        )
+        sub_param_names = set(sub_params.keys()) | {p.name for p in seq.parameters}
+        sub_conv = _StepConverter(
+            recipe=sub_recipe, variables=sub_params, definition=self.definition,
+            aux_resources=self.aux_resources, param_names=sub_param_names,
+            policy=self._policy, sequences=self.sequences,
+            call_stack=self.call_stack + (name,),
+        )
+        sub_steps, est = sub_conv.convert(
+            raw_steps,
+            defined_steps=set(), defined_vars=set(),
+            env_names=set(env_names), branch_depth=0, nested=False,
+            path=f"{spath}/call:{name}/steps",
+        )
+        # returns_as の子側名が展開後に定義されているか (steps/vars) の確認は
+        # process_call_step が実行時に行う (未定義は返り値エラー)。
+        step = CallStep(
+            sequence=name, sub_steps=sub_steps, sub_params=sub_params,
+            returns_map=returns_as, lib_sha256=lib_sha256,
+            description=rs.description or seq.description,
+        )
+        return step, est + 1
+
     def _convert_branch(
         self, rs: RecipeStep,
         defined_steps: set[str], defined_vars: set[str],
@@ -945,9 +1129,9 @@ async def execute_plan(
         return await _run_safe_shutdown_sync(visa, session)
 
     # v2.29.0 (SP-3): branch / repeat 内のリーフ step 実行コールバック (同期経路)
-    async def _nested_run_command(st: CommandStep, path: str) -> dict:
+    async def _nested_run_command(st: CommandStep, path: str, active_store) -> dict:
         return await seq_runtime.process_command_step(
-            visa, session, st, store,
+            visa, session, st, active_store,
             override_safety=override_safety,
             override_reason=override_reason,
             source_step_path=path,
@@ -986,6 +1170,12 @@ async def execute_plan(
             )
         elif isinstance(step, RepeatStep):
             result = await seq_runtime.process_repeat_step(
+                step, store, nested_execs,
+                source_step_path=f"steps[{idx}]",
+                safe_shutdown=_safe_shutdown,
+            )
+        elif isinstance(step, CallStep):
+            result = await seq_runtime.process_call_step(
                 step, store, nested_execs,
                 source_step_path=f"steps[{idx}]",
                 safe_shutdown=_safe_shutdown,

@@ -266,6 +266,9 @@ class RecipeStep(BaseModel):
     #       timeout_s?, on_error?}
     py: dict[str, Any] | None = None
     dll: dict[str, Any] | None = None
+    # v2.33.0 (SP-7): call (サブシーケンス呼び出し)。
+    # {sequence, bind?, with?, returns_as?}。呼び先はコンパイル時に静的確定。
+    call: dict[str, Any] | None = None
     description: str = ""
     # v0.6.0: instrument logical ref ("$psu" / alias / resource)
     # map_recipe で各 target ごとに違う instrument を指す場合に使用
@@ -297,6 +300,7 @@ class RecipeStep(BaseModel):
             "pause":              self.pause is not None,
             "py":                 self.py is not None,
             "dll":                self.dll is not None,
+            "call":               self.call is not None,
         }
         active = [k for k, v in flags.items() if v]
         if len(active) > 1:
@@ -356,6 +360,16 @@ class RecipeStep(BaseModel):
                 raise ValueError(
                     f"dll.on_error は abort / safe_shutdown / pause のいずれか: {oe!r}"
                 )
+
+        if flags["call"]:
+            cl = self.call
+            if not isinstance(cl, dict):
+                raise ValueError("call は mapping である必要があります")
+            if not cl.get("sequence") or not isinstance(cl["sequence"], str):
+                raise ValueError("call には sequence (サブシーケンス名) が必須です")
+            for k in ("bind", "with", "returns_as"):
+                if k in cl and cl[k] is not None and not isinstance(cl[k], dict):
+                    raise ValueError(f"call.{k} は mapping である必要があります")
 
         if flags["compute"]:
             cp = self.compute
@@ -534,6 +548,7 @@ class RecipeStep(BaseModel):
         if self.pause is not None: return "pause"
         if self.py is not None: return "py"
         if self.dll is not None: return "dll"
+        if self.call is not None: return "call"
         return "command"
 
 
@@ -565,6 +580,30 @@ class RecipeDefinition(BaseModel):
     # v2.25.0 (実験資産 L4): 代替装置追試のための capability 要件宣言。
     # optional。未指定 (None) の既存レシピは検証結果が一切変わらない。
     requires: CapabilityRequirements | None = None
+
+
+class SubsequenceRole(BaseModel):
+    """v2.33.0 (SP-7): サブシーケンスが要求する装置の役割 (ロール)。
+
+    steps 内の ``instrument: "@<name>"`` は call の ``bind`` で実リソースに
+    解決される。``requires`` で役割ごとの capability を宣言し、bind 先の
+    装置定義と機械照合する (装置非依存で書けるようにする — L4 と同じ語彙)。
+    """
+    name: str
+    requires: CapabilityRequirements | None = None
+
+
+class SubsequenceDefinition(BaseModel):
+    """v2.33.0 (SP-7): 再利用可能なサブシーケンス (サブルーチン)。
+
+    call でインライン展開される。呼び出し元とは独立スコープで、``parameters``
+    (with で渡される) と ``returns`` (returns_as でマップされる) だけが境界。
+    """
+    description: str = ""
+    roles: list[SubsequenceRole] = Field(default_factory=list)
+    parameters: list[ParameterDefinition] = Field(default_factory=list)
+    returns: list[str] = Field(default_factory=list)
+    steps: list[RecipeStep] = Field(default_factory=list)
 
 
 class PhysicalTerminal(BaseModel):
@@ -611,6 +650,8 @@ class InstrumentDefinition(BaseModel):
     response_formats: dict[str, ResponseFormat] = Field(default_factory=dict)
     # v0.3.0 追加
     recipes: dict[str, RecipeDefinition] = Field(default_factory=dict)
+    # v2.33.0 (SP-7): 再利用可能なサブシーケンス。optional・既存不変。
+    sequences: dict[str, SubsequenceDefinition] = Field(default_factory=dict)
     operational_states: OperationalStates = Field(default_factory=OperationalStates)
     physical_interface: PhysicalInterface = Field(default_factory=PhysicalInterface)
     # v0.5.0.2 追加: 機器固有の安全停止シーケンス

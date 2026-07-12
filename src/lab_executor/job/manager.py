@@ -34,7 +34,7 @@ from lab_executor.experiment_ir import (
     WaitUntilStep, WaitForConditionStep, WaitForStableStep,
     VariableStore,
     GuardStep, BranchStep, RepeatStep, PauseStep,
-    PyStep, DllStep,
+    PyStep, DllStep, CallStep,
 )
 from lab_executor import seq_runtime
 from lab_executor.job.state_machine import (
@@ -2744,9 +2744,9 @@ class JobManager:
         # command は SP-1/2 と同じ deferred/capture 付き実行、wait は slice +
         # cancel/timeout チェック付き。cancel_check で各ネスト step 前に中断検出。
         def _make_nested_execs(idx: int):
-            async def _run_command(st, path):
+            async def _run_command(st, path, active_store):
                 return await seq_runtime.process_command_step(
-                    self._visa, session, st, store,
+                    self._visa, session, st, active_store,
                     override_safety=override_safety,
                     override_reason=override_reason,
                     source_step_path=path,
@@ -2883,6 +2883,17 @@ class JobManager:
                     )
                 elif isinstance(step, RepeatStep):
                     result = await seq_runtime.process_repeat_step(
+                        step, store, _make_nested_execs(idx),
+                        source_step_path=f"steps[{idx}]",
+                        emit_event=(
+                            lambda et, pl, _i=idx: self._safe_record_event(
+                                job_id, et, step_index=_i, payload=pl,
+                            )
+                        ),
+                        safe_shutdown=_job_safe_shutdown,
+                    )
+                elif isinstance(step, CallStep):
+                    result = await seq_runtime.process_call_step(
                         step, store, _make_nested_execs(idx),
                         source_step_path=f"steps[{idx}]",
                         emit_event=(
@@ -3674,4 +3685,6 @@ class JobManager:
             return f"py {src}"
         if isinstance(step, DllStep):
             return f"dll {step.function} @ {step.path}"
+        if isinstance(step, CallStep):
+            return f"call {step.sequence} ({len(step.sub_steps)} steps)"
         return f"step type={getattr(step, 'type', '?')}"

@@ -565,6 +565,23 @@ class DllStep(BaseModel):
         return self
 
 
+class CallStep(BaseModel):
+    """v2.33.0 (SP-7): サブシーケンス呼び出し (コンパイル時に展開済み)。
+
+    ``sub_steps`` は ``@role`` 置換・検証済みの展開済みステップ列。実行時は
+    **独立スコープ (別 VariableStore)** で処理され、呼び出し元の steps/vars は
+    見えない。``sub_params`` (with のコンパイル時解決値) が子 params になり、
+    ``returns_map`` に列挙された子 vars だけが呼び出し元 vars へ戻る。
+    """
+    type: Literal["call"] = "call"
+    sequence: str
+    sub_steps: list["Step"] = Field(default_factory=list)
+    sub_params: dict[str, Any] = Field(default_factory=dict)
+    returns_map: dict[str, str] = Field(default_factory=dict)
+    lib_sha256: str = ""
+    description: str = ""
+
+
 # discriminated union: type フィールドで自動的に正しいモデルが選ばれる
 Step = Annotated[
     Union[
@@ -574,11 +591,13 @@ Step = Annotated[
         GuardStep, BranchStep, RepeatStep,
         PauseStep,
         PyStep, DllStep,
+        CallStep,
     ],
     Field(discriminator="type"),
 ]
 
-# 再帰参照 (BranchCase.steps / RepeatStep.body -> Step) の解決
+# 再帰参照 (BranchCase.steps / RepeatStep.body / CallStep.sub_steps -> Step) の解決
 BranchCase.model_rebuild()
 BranchStep.model_rebuild()
 RepeatStep.model_rebuild()
+CallStep.model_rebuild()
