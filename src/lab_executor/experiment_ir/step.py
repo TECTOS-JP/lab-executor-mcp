@@ -577,6 +577,10 @@ class CallStep(BaseModel):
     sequence: str
     sub_steps: list["Step"] = Field(default_factory=list)
     sub_params: dict[str, Any] = Field(default_factory=dict)
+    # v2.34.0 (SP-7.1): with に実行時式 ${...} を渡した場合、{param名: 式文字列}。
+    # process_call_step が呼び出し元スコープで評価して子 params に合流する。
+    # (サブシーケンス内では params.X として参照可、$X (コンパイル時) は不可)
+    with_exprs: dict[str, str] = Field(default_factory=dict)
     returns_map: dict[str, str] = Field(default_factory=dict)
     lib_sha256: str = ""
     description: str = ""

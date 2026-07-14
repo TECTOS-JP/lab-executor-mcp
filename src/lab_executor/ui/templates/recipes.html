@@ -31,6 +31,45 @@
 </table>
 {% endif %}
 
+<section class="seq-library" id="sequence-library">
+  <h2>サブシーケンス ライブラリ</h2>
+  <p class="edit-note">
+    再利用可能なサブルーチン。レシピの <code>call</code> ステップから
+    <code>sequence:</code> に下記の呼び出しキーを指定して使います。
+  </p>
+  {% if not sequences %}
+  <p class="empty">サブシーケンス (sequences:) は見つかりません。</p>
+  {% else %}
+  <table class="jobs">
+    <thead>
+      <tr><th>呼び出しキー</th><th>ロール</th><th>パラメータ</th><th>returns</th><th>説明</th></tr>
+    </thead>
+    <tbody>
+      {% for s in sequences %}
+      <tr>
+        <td><code>{{ s.call_key }}</code></td>
+        <td>
+          {% for r in s.roles %}<span class="phase">@{{ r }}</span> {% endfor %}
+          {% if not s.roles %}<span class="empty">—</span>{% endif %}
+        </td>
+        <td>
+          {% for p in s.parameters %}
+            <span class="phase">{{ p.name }}{% if p.type %}:{{ p.type }}{% endif %}{% if p.default is defined %}={{ p.default }}{% endif %}</span>
+          {% endfor %}
+          {% if not s.parameters %}<span class="empty">—</span>{% endif %}
+        </td>
+        <td>
+          {% for rn in s.returns %}<span class="phase">{{ rn }}</span> {% endfor %}
+          {% if not s.returns %}<span class="empty">—</span>{% endif %}
+        </td>
+        <td>{{ s.description }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</section>
+
 {% if control_available and files %}
 <section class="control-section" id="run-recipe-panel">
   <h2>レシピ実行</h2>

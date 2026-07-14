@@ -588,11 +588,39 @@ sequences:
 - **来歴**: ライブラリファイルの sha256 を記録。資産の `contains_code` 検出は
   call 先サブシーケンスの py/dll も走査する。
 
-### 制約 (SP-7 段階)
+### call.with の 2 種類 (v2.34.0 SP-7.1)
 
-- `call.with` は**コンパイル時解決** (定数 or 呼び出し元 `$param`)。呼び出し元の
-  実行時変数 (`${vars.x}`) を with で渡すのは非対応 (将来項)。
+`call.with` の値は 2 種類に分かれる:
+
+- **コンパイル時解決** (定数 / 呼び出し元 `$param`): 展開時に確定し `sub_params`
+  へ。サブシーケンス内で `$X` (コンパイル時) と `params.X` (実行時) の両方で
+  参照できる。
+- **実行時式 `${...}`**: 呼び出し元の実行時変数 (`${steps.base * 10}` 等) を
+  渡せる。`process_call_step` が呼び出し元スコープで評価して子 params に合流。
+  **サブシーケンス内では `params.X` としてのみ参照可** (`$X` はコンパイル時に
+  値が未知のためコンパイルエラー)。参照名は呼び出し元スコープで検証される。
+
+```yaml
+recipes:
+  main:
+    steps:
+      - { command: measure_voltage, result_as: base }
+      - call:
+          sequence: scaled_measure
+          bind: { m: "DMM1" }
+          with: { factor: "${steps.base * 10}" }   # 呼び出し元の測定値を渡す
+          returns_as: { out: result }
+```
+
+### UI ライブラリブラウザ (v2.34.0 SP-7)
+
+`lab-executor ui --edit-dir <DIR>` の `/recipes` ページに、利用可能な
+サブシーケンスの一覧 (呼び出しキー `<stem>.<名前>` / ロール / パラメータ /
+returns / 説明) が表示される。API は `GET /api/edit/sequences`。
+
+### 残る制約
+
 - サブシーケンス内では polling / barrier / pause は未対応 (branch/repeat と同じ
   ネスト制約)。
-- UI エディタのライブラリブラウザは将来項 (dry-run の call 展開表示は既存の
-  再帰で効く)。
+- UI dry-run の call 展開表示は既存の再帰で効く (call 行を表示。sub_steps の
+  詳細インライン表示は将来項)。

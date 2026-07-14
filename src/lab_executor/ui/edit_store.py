@@ -55,6 +55,47 @@ def _recipe_names(path: Path) -> list[str]:
     return sorted(str(k) for k in recipes.keys())
 
 
+def _sequence_infos(path: Path, stem: str) -> list[dict[str, Any]]:
+    """v2.34.0 (SP-7): YAML の sequences のシグネチャ一覧を返す (失敗時は空)。
+
+    ライブラリブラウザ用: 各サブシーケンスの呼び出しキー (``<stem>.<名前>``)、
+    roles / parameters / returns を表示する。
+    """
+    try:
+        raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return []
+    if not isinstance(raw, dict):
+        return []
+    seqs = raw.get("sequences")
+    if not isinstance(seqs, dict):
+        return []
+    out: list[dict[str, Any]] = []
+    for name, body in seqs.items():
+        body = body if isinstance(body, dict) else {}
+        roles = [
+            r.get("name") for r in (body.get("roles") or [])
+            if isinstance(r, dict) and r.get("name")
+        ]
+        params = []
+        for p in (body.get("parameters") or []):
+            if isinstance(p, dict) and p.get("name"):
+                entry = {"name": p["name"], "type": p.get("type", "")}
+                if p.get("default") is not None:
+                    entry["default"] = p["default"]
+                params.append(entry)
+        out.append({
+            "name": str(name),
+            "call_key": f"{stem}.{name}",
+            "description": str(body.get("description", "")),
+            "roles": roles,
+            "parameters": params,
+            "returns": [str(x) for x in (body.get("returns") or [])],
+        })
+    out.sort(key=lambda d: d["name"])
+    return out
+
+
 class EditDirStore:
     """edit-dir 内の機器定義 YAML を列挙・読み書き・git commit する。
 
@@ -112,6 +153,22 @@ class EditDirStore:
                     "recipes": _recipe_names(path),
                 })
         out.sort(key=lambda d: d["rel"])
+        return out
+
+    def list_sequences(self) -> list[dict[str, Any]]:
+        """v2.34.0 (SP-7): edit-dir 内の全サブシーケンスのシグネチャを列挙する。
+
+        call_key (``<ファイル stem>.<名前>``) 昇順。ライブラリブラウザ用。
+        """
+        out: list[dict[str, Any]] = []
+        for pattern in ("*.yaml", "*.yml"):
+            for path in self._root.rglob(pattern):
+                if not path.is_file():
+                    continue
+                for info in _sequence_infos(path, path.stem):
+                    info["rel"] = path.relative_to(self._root).as_posix()
+                    out.append(info)
+        out.sort(key=lambda d: d["call_key"])
         return out
 
     def read_file(self, rel: str) -> str:

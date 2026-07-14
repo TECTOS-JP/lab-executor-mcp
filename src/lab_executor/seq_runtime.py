@@ -477,7 +477,17 @@ async def process_call_step(
     """
     base = {"step_type": "call", "sequence": step.sequence}
     parent_ctx = store.as_ctx()
-    sub_store = VariableStore(params=dict(step.sub_params), env=dict(parent_ctx["env"]))
+    # v2.34.0 (SP-7.1): 実行時 with 式を呼び出し元スコープで評価して子 params に合流。
+    child_params = dict(step.sub_params)
+    for pname, expr in (step.with_exprs or {}).items():
+        try:
+            child_params[pname] = evaluate(expr, parent_ctx)
+        except SeqExpressionError as e:
+            return {
+                **base, "success": False, "error": "call_with_error",
+                "message": f"call.with['{pname}'] の評価エラー: {e}",
+            }
+    sub_store = VariableStore(params=child_params, env=dict(parent_ctx["env"]))
     call_path = f"{source_step_path}/call:{step.sequence}"
     if emit_event:
         emit_event("call_entered", {

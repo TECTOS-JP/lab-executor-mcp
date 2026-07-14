@@ -802,24 +802,38 @@ class _StepConverter:
                         f"missing={m.get('missing_commands')} "
                         f"ranges={m.get('range_violations')}"
                     )
-        # --- with のコンパイル時解決 (${...} 実行時式は SP-7 では非対応) ---
+        # --- with の解決 ---
+        # コンパイル時解決値 (定数 / 呼び出し元 $param) は sub_params へ →
+        #   サブ内で $X (コンパイル時) と params.X (実行時) の両方で参照可。
+        # 実行時式 ${...} は with_exprs へ (SP-7.1、v2.34.0) → 呼び出し元スコープで
+        #   process_call_step が評価。サブ内では params.X のみ参照可 ($X は不可)。
         sub_params: dict[str, Any] = {}
-        declared = {p.name for p in seq.parameters}
+        with_exprs: dict[str, str] = {}
+        runtime_param_names: set[str] = set()
         for pname, praw in (cl.get("with") or {}).items():
-            if isinstance(praw, str) and "${" in praw:
-                raise SeqExpressionError(
-                    f"{spath}: call.with['{pname}'] の実行時式 ${{...}} は "
-                    "SP-7 では非対応です (定数 or 呼び出し元 $param のみ)"
+            pname = str(pname)
+            expr = parse_deferred(praw)  # ${...} 全体なら inner 式、無ければ None
+            if expr is not None:
+                # 実行時式: 呼び出し元スコープ (親の defined) で参照を検証
+                _validate_expr_refs(
+                    expr,
+                    defined_steps=defined_steps, defined_vars=defined_vars,
+                    param_names=self.param_names, env_names=env_names,
+                    context=f"{spath}: call.with['{pname}'] (${{...}})",
                 )
-            try:
-                sub_params[str(pname)] = resolve_arg(praw, self.variables)
-            except (ExpressionError, TypeError, ValueError) as e:
-                raise SeqExpressionError(
-                    f"{spath}: call.with['{pname}'] を解決できません: {e}"
-                )
-        # 宣言済み parameters の default を補完
+                with_exprs[pname] = expr
+                runtime_param_names.add(pname)
+            else:
+                try:
+                    sub_params[pname] = resolve_arg(praw, self.variables)
+                except (ExpressionError, TypeError, ValueError) as e:
+                    raise SeqExpressionError(
+                        f"{spath}: call.with['{pname}'] を解決できません: {e}"
+                    )
+        # 宣言済み parameters の default を補完 (with で与えられていない分のみ)
         for p in seq.parameters:
-            if p.name not in sub_params and p.default is not None:
+            if (p.name not in sub_params and p.name not in with_exprs
+                    and p.default is not None):
                 sub_params[p.name] = p.default
         # --- returns_as 検証 ---
         returns_as = {str(k): str(v) for k, v in (cl.get("returns_as") or {}).items()}
@@ -836,7 +850,14 @@ class _StepConverter:
             description=seq.description, parameters=seq.parameters,
             steps=[], requires=None,
         )
-        sub_param_names = set(sub_params.keys()) | {p.name for p in seq.parameters}
+        # param_names: サブ内で params.X 参照が有効な名前。
+        # 実行時 with (runtime_param_names) も params.X としては参照可なので含める。
+        # ただし variables (=sub_params、$X コンパイル時解決の元) には含めない →
+        # 実行時 with を $X で使うとコンパイルエラーになる (意図した制約)。
+        sub_param_names = (
+            set(sub_params.keys()) | runtime_param_names
+            | {p.name for p in seq.parameters}
+        )
         sub_conv = _StepConverter(
             recipe=sub_recipe, variables=sub_params, definition=self.definition,
             aux_resources=self.aux_resources, param_names=sub_param_names,
@@ -853,6 +874,7 @@ class _StepConverter:
         # process_call_step が実行時に行う (未定義は返り値エラー)。
         step = CallStep(
             sequence=name, sub_steps=sub_steps, sub_params=sub_params,
+            with_exprs=with_exprs,
             returns_map=returns_as, lib_sha256=lib_sha256,
             description=rs.description or seq.description,
         )

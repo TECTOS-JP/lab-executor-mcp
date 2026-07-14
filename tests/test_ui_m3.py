@@ -301,3 +301,57 @@ def test_monitor_routes_unaffected(edit_client):
     r = edit_client.get("/api/jobs")
     assert r.status_code == 200
     assert "jobs" in r.json()
+
+
+# ============================================================
+# SP-7 (v2.34.0): サブシーケンス ライブラリブラウザ
+# ============================================================
+
+_SEQ_LIB_YAML = """
+sequences:
+  stabilize_and_measure:
+    description: "N 回測定して平均"
+    roles:
+      - { name: meter, requires: { commands: [measure_voltage] } }
+    parameters:
+      - { name: n, type: integer, default: 5 }
+    returns: [v_avg, v_std]
+    steps:
+      - { command: measure_voltage, instrument: "@meter", result_as: v }
+"""
+
+
+@pytest.fixture
+def edit_client_with_seq(db_path, tmp_path):
+    d = tmp_path / "defs_seq"
+    d.mkdir()
+    (d / "std_lib.yaml").write_text(_SEQ_LIB_YAML, encoding="utf-8")
+    app = create_app(db_path, edit_dir=d)
+    return TestClient(app, raise_server_exceptions=False)
+
+
+def test_api_sequences(edit_client_with_seq):
+    r = edit_client_with_seq.get("/api/edit/sequences")
+    assert r.status_code == 200
+    seqs = r.json()["sequences"]
+    assert len(seqs) == 1
+    s = seqs[0]
+    assert s["call_key"] == "std_lib.stabilize_and_measure"
+    assert s["roles"] == ["meter"]
+    assert s["returns"] == ["v_avg", "v_std"]
+    assert s["parameters"][0]["name"] == "n"
+    assert s["parameters"][0]["default"] == 5
+
+
+def test_recipes_page_shows_library(edit_client_with_seq):
+    r = edit_client_with_seq.get("/recipes")
+    assert r.status_code == 200
+    assert "サブシーケンス ライブラリ" in r.text
+    assert "std_lib.stabilize_and_measure" in r.text
+
+
+def test_sequences_empty_without_seq(edit_client):
+    """sequences を持たない edit-dir では空リスト。"""
+    r = edit_client.get("/api/edit/sequences")
+    assert r.status_code == 200
+    assert r.json()["sequences"] == []

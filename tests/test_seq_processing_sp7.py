@@ -190,13 +190,46 @@ def test_call_bad_returns_as():
         recipe_to_plan(r, {}, definition=defn)
 
 
-def test_call_runtime_with_expr_rejected():
-    """with に実行時式 ${...} は SP-7 では非対応。"""
+def test_call_runtime_with_expr_refs_validated():
+    """v2.34.0 (SP-7.1): with の実行時式 ${...} は呼び出し元スコープで参照検証。
+    未定義参照はコンパイルエラー。"""
     defn = _defn()
     r = defn.recipes["main"].model_copy(deep=True)
-    r.steps[0].call["with"] = {"n": "${vars.something}"}
-    with pytest.raises(SeqExpressionError, match="実行時式"):
+    r.steps[0].call["with"] = {"n": "${vars.undefined_here}"}
+    with pytest.raises(SeqExpressionError, match="未定義"):
         recipe_to_plan(r, {}, definition=defn)
+
+
+@pytest.mark.asyncio
+async def test_call_runtime_with_expr_evaluated():
+    """v2.34.0 (SP-7.1): 呼び出し元の実行時変数を with で渡し、
+    サブシーケンス内で params.X として使える。"""
+    doc = yaml.safe_load(textwrap.dedent(SAMPLE_YAML))
+    doc["sequences"]["scaled"] = {
+        "roles": [{"name": "m", "requires": {"commands": ["measure_voltage"]}}],
+        "parameters": [{"name": "factor", "type": "float", "default": 1.0}],
+        "returns": ["out"],
+        "steps": [
+            {"command": "measure_voltage", "instrument": "@m", "result_as": "raw"},
+            {"compute": {"set": "out", "expr": "steps.raw * params.factor"}},
+        ],
+    }
+    doc["recipes"]["rt"] = {"steps": [
+        {"command": "measure_voltage", "result_as": "base"},
+        {"call": {"sequence": "scaled", "bind": {"m": "DMM1"},
+                  "with": {"factor": "${steps.base * 10}"},
+                  "returns_as": {"out": "result"}}},
+    ]}
+    defn = InstrumentDefinition(**doc)
+    # コンパイル: with_exprs に式が入り sub_params には入らない
+    plan = recipe_to_plan(defn.recipes["rt"], {}, definition=defn)
+    call = plan.steps[1]
+    assert call.with_exprs == {"factor": "steps.base * 10"}
+    assert "factor" not in call.sub_params
+    # 実行: base=2.5 -> factor=25 -> result=2.5*25=62.5
+    r = await execute_recipe(_visa("2.5"), _session(defn), "rt", {})
+    assert r["success"] is True
+    assert r["variables"]["vars"]["result"] == 62.5
 
 
 def test_call_recursion_detected():

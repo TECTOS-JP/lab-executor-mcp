@@ -626,10 +626,16 @@ def _register_edit_routes(
                 "POST は Content-Type: application/json のみ受け付けます"
             )
 
+    # ---- API: サブシーケンス ライブラリ (SP-7, v2.34.0) ----
+    @app.get("/api/edit/sequences")
+    async def edit_sequences():
+        return {"sequences": edit_store.list_sequences()}
+
     # ---- HTML ----
     @app.get("/recipes", response_class=HTMLResponse)
     async def recipes_list(request: Request):
         files = edit_store.list_files()
+        sequences = edit_store.list_sequences()   # SP-7: ライブラリブラウザ
         control_available = False
         if control_client is not None:
             control_available = (
@@ -640,6 +646,7 @@ def _register_edit_routes(
             "recipes.html",
             {
                 "files": files,
+                "sequences": sequences,
                 "edit_dir": str(edit_store.root),
                 "control_available": control_available,
             },
