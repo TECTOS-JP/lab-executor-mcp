@@ -24,6 +24,7 @@ from lab_executor.code_policy import (
     load_policy, sha256_file, sha256_text,
 )
 from lab_executor.models.instrument_def import InstrumentDefinition
+from lab_executor.instrument_registry import InstrumentRegistry
 from lab_executor.recipe_executor import execute_recipe, recipe_to_plan
 from lab_executor.experiment_ir import DllStep, PyStep
 from lab_executor.utils.seq_expression import SeqExpressionError
@@ -295,6 +296,67 @@ def test_policy_hash_pinned(tmp_path, monkeypatch):
     })
     with pytest.raises(SeqExpressionError, match="pinned"):
         recipe_to_plan(defn2.recipes["other"], {}, definition=defn2)
+
+
+def _write_policy_instrument(tmp_path: Path) -> InstrumentDefinition:
+    raw = {
+        "metadata": {"manufacturer": "Test", "model": "PolicyRig"},
+        "recipes": {
+            "code": {
+                "steps": [{
+                    "py": {
+                        "code": "out['v'] = 1",
+                        "outputs": ["v"],
+                        "timeout_s": 5,
+                    },
+                }],
+            },
+        },
+    }
+    (tmp_path / "policy_rig.yaml").write_text(
+        yaml.safe_dump(raw, sort_keys=False), encoding="utf-8",
+    )
+    definition = InstrumentRegistry(tmp_path).get_definition("Test", "PolicyRig")
+    assert definition is not None
+    return definition
+
+
+def test_registry_definition_uses_adjacent_policy_at_compile_time(tmp_path):
+    _write_policy(tmp_path, """
+        code_execution:
+          python: deny
+    """)
+    definition = _write_policy_instrument(tmp_path)
+
+    with pytest.raises(SeqExpressionError, match="deny"):
+        recipe_to_plan(definition.recipes["code"], {}, definition=definition)
+
+
+@pytest.mark.asyncio
+async def test_adjacent_policy_is_reloaded_for_runtime_recheck(tmp_path):
+    _write_policy(tmp_path, """
+        code_execution:
+          python: allow
+    """)
+    definition = _write_policy_instrument(tmp_path)
+    plan = recipe_to_plan(
+        definition.recipes["code"], {}, definition=definition,
+    )
+    assert plan.steps[0].policy_dir == str(tmp_path.resolve())
+
+    # 管理者がcompile後にdenyへ変更した場合も、実行直前ゲートで止める。
+    _write_policy(tmp_path, """
+        code_execution:
+          python: deny
+    """)
+    from lab_executor import seq_runtime
+    from lab_executor.experiment_ir import VariableStore
+
+    result = await seq_runtime.process_py_step(
+        plan.steps[0], VariableStore(params={}, env={}),
+    )
+    assert result["success"] is False
+    assert result["error"] == "policy_violation"
 
 
 def test_policy_dll_default_effectively_deny():

@@ -1,6 +1,6 @@
 from __future__ import annotations
 from typing import Any, Literal
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
 
 class ParameterDefinition(BaseModel):
@@ -640,6 +640,10 @@ class OperationalStates(BaseModel):
 # ===== ルート定義 =====
 
 class InstrumentDefinition(BaseModel):
+    # Registry loaderが設定する由来情報。YAML schema/model_dumpには露出させない。
+    # 隣接する _policy.yaml を確実に選ぶために使用する。
+    _source_dir: str | None = PrivateAttr(default=None)
+
     metadata: MetadataConfig
     identification: IdentificationConfig = Field(default_factory=IdentificationConfig)
     connection: ConnectionConfig = Field(default_factory=ConnectionConfig)

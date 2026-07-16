@@ -239,6 +239,14 @@ def recipe_to_plan(
     """
     aux_resources: set[str] = set()
 
+    # Registry経由の定義はロード元dirを保持する。env設定を要求せず、仕様どおり
+    # instruments dir直下の_policy.yamlをコンパイル時・実行時の起点にする。
+    if policy is None and definition is not None:
+        source_dir = getattr(definition, "_source_dir", None)
+        if source_dir:
+            from .code_policy import load_policy
+            policy = load_policy(source_dir)
+
     # コンパイル時検証用: その時点までに定義される名前を追跡する
     param_names: set[str] = set(variables.keys()) | {p.name for p in recipe.parameters}
 
@@ -604,6 +612,8 @@ class _StepConverter:
         env_names: set[str], spath: str,
     ) -> PyStep:
         """py の変換 (v2.32.0 SP-6): path 解決 + sha256 + ポリシーゲート。"""
+        from pathlib import Path as _Path
+
         from .code_policy import (
             CodePolicyError, check_python, resolve_py_file,
             sha256_file, sha256_text,
@@ -647,11 +657,16 @@ class _StepConverter:
         except (TypeError, ValueError) as e:
             raise SeqExpressionError(f"{spath}: py.timeout_s が不正です: {e}")
 
+        policy_dir = (
+            str(_Path(self.policy.source).parent)
+            if self.policy.source != "default" else ""
+        )
         return PyStep(
             file=str(file_ref) if file_ref else None,
             code=str(code) if code is not None else None,
             resolved_path=resolved_path,
             sha256=digest,
+            policy_dir=policy_dir,
             inputs=inputs,
             outputs=outputs,
             timeout_s=timeout_s,
@@ -727,6 +742,10 @@ class _StepConverter:
         except (TypeError, ValueError) as e:
             raise SeqExpressionError(f"{spath}: dll.timeout_s が不正です: {e}")
 
+        policy_dir = (
+            str(_Path(self.policy.source).parent)
+            if self.policy.source != "default" else ""
+        )
         return DllStep(
             path=str(dll_path),
             function=str(dl["function"]),
@@ -736,6 +755,7 @@ class _StepConverter:
             out_args=out_args,
             result_as=str(result_as) if result_as else None,
             sha256=digest,
+            policy_dir=policy_dir,
             timeout_s=timeout_s,
             on_error=dl.get("on_error", "abort"),
             description=rs.description,

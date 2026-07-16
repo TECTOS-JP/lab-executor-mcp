@@ -777,7 +777,7 @@ async def process_py_step(
     }
 
     # --- 実行直前のポリシー再検証 + sha256 再照合 (TOCTOU 対策) ---
-    pol = policy if policy is not None else load_policy()
+    pol = policy if policy is not None else load_policy(step.policy_dir or None)
     verified_file_code: str | None = None
     try:
         if step.resolved_path:
@@ -904,7 +904,7 @@ async def process_dll_step(
     }
 
     # --- 実行直前のポリシー再検証 + sha256 再照合 (TOCTOU 対策) ---
-    pol = policy if policy is not None else load_policy()
+    pol = policy if policy is not None else load_policy(step.policy_dir or None)
     try:
         p = _Path(step.path)
         if not p.exists():

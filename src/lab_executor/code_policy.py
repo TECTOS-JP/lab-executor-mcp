@@ -93,7 +93,9 @@ def load_policy(policy_dir: Path | str | None = None) -> CodePolicy:
         return CodePolicy()
     pf = base / POLICY_FILE_NAME
     if not pf.exists():
-        return CodePolicy()
+        # baseの由来は保持する。compile後に管理者が_policy.yamlを追加した
+        # 場合も、IRが同じdirを実行直前に再検査できるようにする。
+        return CodePolicy(source=str(pf))
 
     try:
         raw = yaml.safe_load(pf.read_text(encoding="utf-8")) or {}

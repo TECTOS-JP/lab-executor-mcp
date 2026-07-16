@@ -30,6 +30,7 @@ class InstrumentRegistry:
             with path.open(encoding="utf-8") as f:
                 data = yaml.safe_load(f)
             defn = InstrumentDefinition.model_validate(data)
+            defn._source_dir = str(path.resolve().parent)
             self._definitions.append(defn)
             logger.debug("ロード済み: %s (%s)", defn.display_name, path.name)
         except (yaml.YAMLError, ValidationError, Exception) as e:
