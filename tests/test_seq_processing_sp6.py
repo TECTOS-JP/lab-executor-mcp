@@ -172,6 +172,35 @@ async def test_py_timeout():
 
 
 @pytest.mark.asyncio
+async def test_py_worker_is_terminated_when_parent_task_is_cancelled(tmp_path):
+    from lab_executor.code_exec import run_py
+
+    marker = tmp_path / "worker-survived.txt"
+    code = (
+        "import time\n"
+        "from pathlib import Path\n"
+        "time.sleep(0.8)\n"
+        f"Path({str(marker)!r}).write_text('survived', encoding='utf-8')\n"
+    )
+    task = asyncio.create_task(run_py(
+        code=code,
+        file_path=None,
+        inputs={},
+        outputs=[],
+        params={},
+        env={},
+        timeout_s=10,
+    ))
+    await asyncio.sleep(0.1)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await asyncio.sleep(1.0)
+
+    assert not marker.exists()
+
+
+@pytest.mark.asyncio
 async def test_py_file_with_main_and_sha256_event(tmp_path, monkeypatch):
     scripts = tmp_path / "scripts"
     scripts.mkdir()
