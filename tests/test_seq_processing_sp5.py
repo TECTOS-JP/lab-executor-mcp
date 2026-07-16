@@ -200,6 +200,21 @@ def test_np_allowlist_rejects_side_effects_and_allocators():
         evaluate("np.array([1, 2])", ctx)
 
 
+def test_np_allocator_is_rejected_before_numpy_invocation(monkeypatch):
+    """Result-size checks are too late if an allocator has already run."""
+    invoked = False
+
+    def forbidden_allocator(*args, **kwargs):
+        nonlocal invoked
+        invoked = True
+        raise AssertionError("NumPy allocator must not be invoked")
+
+    monkeypatch.setattr(np, "zeros", forbidden_allocator)
+    with pytest.raises(SeqExpressionError, match="allowlist"):
+        evaluate("np.zeros(1000000000000)", _CTX())
+    assert invoked is False
+
+
 def test_np_allowlist_documented_calculations_still_work():
     ctx = _CTX(xs=np.array([1.0, 2.0, 3.0]))
     assert evaluate("np.mean(vars.xs)", ctx) == 2.0
