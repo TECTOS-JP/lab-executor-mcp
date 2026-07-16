@@ -547,7 +547,7 @@ async def test_py_file_executes_verified_snapshot_when_path_is_swapped(
     result = await seq_runtime.process_py_step(plan.steps[0], store)
 
     assert result["success"] is True, result
-    assert store.vars["v"] == 1
+    assert store.as_ctx()["vars"]["v"] == 1
 
 
 # ============================================================
