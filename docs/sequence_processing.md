@@ -12,7 +12,7 @@ v2.28.0 (SP-1/2)・v2.29.0 (SP-3)・v2.30.0 (SP-4)・v2.31.0 (SP-5) で導入。
 - SP-2: `${...}` 実行時引数解決 / 範囲宣言必須 / 実行時範囲執行 / dry-run 拡張
 - SP-3: branch (条件分岐) / repeat (反復) / guard (範囲検証と安全動作)
 - SP-4: pause (人間 / AI の呼び出し。message の `${...}` 補間を含む)
-- SP-5: array 型 / repeat collect / 式言語の np.* 名前空間 (デナイリスト付き)
+- SP-5: array 型 / repeat collect / 式言語の np.* 名前空間 (明示allowlist)
 - SP-6: py / dll ステップ (任意コード実行) + ポリシーゲート
 - SP-7: サブシーケンス (サブルーチン) — call / ロール束縛 / スコープ分離
 
@@ -428,13 +428,17 @@ capture は同名変数への上書きになる (最後の値のみ残る)。
 - `np.` 配下 **1〜2 段** の属性参照と関数呼び出しを許可:
   `np.mean(vars.vs)` / `np.polyfit(vars.x, vars.y, 1)` / `np.interp(...)` /
   `np.std` / `np.fft.rfft` などサブモジュール 1 段を含む。`np.pi` 等の定数も可。
-- **デナイリスト** (spec §4 — I/O と任意コード実行は式から不可):
-  - I/O 系: `load, save, savez, savez_compressed, loadtxt, savetxt,
-    genfromtxt, fromfile, tofile, memmap, DataSource, lib` (lib.npyio 系を
-    丸ごと遮断)
-  - 実行系 (コールバック受け取り): `vectorize, frompyfunc, apply_along_axis,
-    apply_over_axes, piecewise, fromfunction, fromiter`
-  - dunder (`__` 始まり) は全面禁止。3 段以上の属性も禁止
+- **明示 allowlist** (spec §4 — 純粋計算のみ):
+  - 統計・集約: `all, any, mean, std, var, sum, min, max, median,
+    percentile, quantile, ptp, argmin, argmax`
+  - 要素演算: `abs, absolute, sqrt, log, log10, exp, clip, diff, gradient,
+    cumsum, cumprod, sort, argsort`
+  - fitting等: `interp, polyfit, polyval, corrcoef, cov, dot`
+  - FFT: `fft.fft, fft.ifft, fft.rfft, fft.irfft, fft.fftfreq, fft.rfftfreq`
+  - 定数: `pi, e`
+- allowlist外は全面拒否。I/O・`ctypeslib`・コールバック受取・global state変更・
+  配列constructor (`zeros/ones/arange`等) は使用不可。constructorは結果サイズ検査前に
+  allocateするため、要素数上限の安全境界にできない。
 - **array リテラルは作れない** (list リテラルは従来どおり禁止)。値は collect /
   np 関数の返りから来る。式の返り値が ndarray の場合は変数へ代入できる
   (返り値にも要素数上限・NaN/inf 検査 [配列要素含む] を適用)。

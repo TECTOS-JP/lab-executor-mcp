@@ -15,14 +15,12 @@ compute / ${...} 実行時解決など **新機能だけ** が使う。
 - 論理 (短絡): ``and or not``
 - 三項: ``A if cond else B``
 - 関数: abs, min, max, round, floor, ceil, sqrt, log10, log, exp, clamp, len
-- NumPy 名前空間 (v2.31.0 SP-5): ``np.*`` として NumPy 関数を利用可
+- NumPy 名前空間 (v2.31.0 SP-5): ``np.*`` として許可済みNumPy関数を利用可
   (例 ``np.mean(vars.xs)`` / ``np.polyfit(vars.x, vars.y, 1)`` /
   ``np.fft.rfft(...)``)。属性は ``np.`` 配下 1〜2 段のみ。
-  **デナイリスト** (spec §4): ファイル/ネットワーク I/O 系 (load / save /
-  savez / loadtxt / savetxt / genfromtxt / fromfile / tofile / memmap /
-  DataSource / lib.npyio 系) と実行系 (vectorize / frompyfunc /
-  apply_along_axis / piecewise 等のコールバック受け取り) は式からは不可。
-  dunder (``__`` 始まり) アクセスは全面禁止。
+  **明示allowlist** (spec §4): 統計・補間・fitting・FFT等の純粋計算だけを
+  許可する。I/O / ctypes / callback受付 / global state変更 / 配列constructorは
+  allowlist外として拒否する。dunder (``__`` 始まり) アクセスも全面禁止。
 
 拒否:
 - np 以外の 2 段以上の属性チェーン / dunder (``__``) アクセス
@@ -61,18 +59,36 @@ _BARE_LOOKUP_ORDER = ("params", "vars", "steps", "env")
 # VariableStore の代入時と式評価の返り値の両方で執行する。
 ARRAY_MAX_ELEMENTS = 10_000_000
 
-# v2.31.0 (SP-5): np.* のデナイリスト (spec §4)。
-# I/O 系と任意コード実行系 (コールバック受け取り)。属性チェーンの
-# **どの部分にも** 現れてはならない ("lib" は lib.npyio 系を丸ごと遮断)。
-NP_DENYLIST = frozenset({
-    # ファイル / ネットワーク I/O
-    "load", "save", "savez", "savez_compressed",
-    "loadtxt", "savetxt", "genfromtxt", "fromfile", "tofile",
-    "memmap", "DataSource", "lib", "npyio",
-    # 実行系 (任意関数・コールバックを受け取る)
-    "vectorize", "frompyfunc", "apply_along_axis", "apply_over_axes",
-    "piecewise", "fromfunction", "fromiter",
+# v2.34.x security hardening: NumPy は denylist ではなく純粋計算APIの
+# **明示allowlist** に限定する。NumPyの公開名前空間は広く、ctypeslib等の
+# 副作用APIが追加・見落としで到達可能になるため「危険名だけ拒否」は安全境界に
+# できない。配列生成関数も結果サイズ検査より前にallocateするため許可しない。
+NP_ALLOWED_TOP_LEVEL = frozenset({
+    # reductions / statistics
+    "all", "any", "mean", "std", "var", "sum", "min", "max",
+    "median", "percentile", "quantile", "ptp", "argmin", "argmax",
+    # element-wise / shape-preserving transforms
+    "abs", "absolute", "sqrt", "log", "log10", "exp", "clip",
+    "diff", "gradient", "cumsum", "cumprod", "sort", "argsort",
+    # fitting / interpolation / linear operations with bounded inputs
+    "interp", "polyfit", "polyval", "corrcoef", "cov", "dot",
+    # constants
+    "pi", "e",
 })
+
+NP_ALLOWED_SUBMODULES: dict[str, frozenset[str]] = {
+    "fft": frozenset({
+        "fft", "ifft", "rfft", "irfft", "fftfreq", "rfftfreq",
+    }),
+}
+
+
+def _np_allowed(parts: list[str]) -> bool:
+    if len(parts) == 1:
+        return parts[0] in NP_ALLOWED_TOP_LEVEL
+    if len(parts) == 2:
+        return parts[1] in NP_ALLOWED_SUBMODULES.get(parts[0], frozenset())
+    return False
 
 
 def _np_chain(node: ast.AST) -> list[str] | None:
@@ -149,16 +165,10 @@ def check_expr(expr: str) -> ast.Expression:
                 raise SeqExpressionError(f"dunder 属性アクセスは禁止です (式: {expr!r})")
             np_parts = _np_chain(node)
             if np_parts is not None:
-                # v2.31.0 (SP-5): np.* は 1〜2 段 + デナイリスト
-                if len(np_parts) > 2:
+                if not _np_allowed(np_parts):
                     raise SeqExpressionError(
-                        f"np.* の属性は 2 段までです (式: {expr!r})"
-                    )
-                denied = [p for p in np_parts if p in NP_DENYLIST]
-                if denied:
-                    raise SeqExpressionError(
-                        f"np.{'.'.join(np_parts)} は式から使用できません "
-                        f"(デナイリスト: I/O / 任意コード実行系。spec §4) "
+                        f"np.{'.'.join(np_parts)} は式のNumPy allowlistに"
+                        f"含まれていません (純粋計算APIのみ許可。spec §4) "
                         f"(式: {expr!r})"
                     )
             elif isinstance(node.value, ast.Name) and node.value.id in _NAMESPACES:
