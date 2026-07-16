@@ -356,7 +356,7 @@ class _StepConverter:
 
             if nested and st in self._NESTED_FORBIDDEN:
                 raise SeqExpressionError(
-                    f"{spath}: branch / repeat 内の {st} は SP-3 では未対応です"
+                    f"{spath}: ネストしたシーケンス内の {st} は未対応です"
                 )
 
             if st == "compute":
@@ -381,7 +381,7 @@ class _StepConverter:
                 )
                 if nested and step.on_error == "pause":
                     raise SeqExpressionError(
-                        f"{spath}: branch / repeat 内の py は on_error=pause を"
+                        f"{spath}: ネストしたシーケンス内の py は on_error=pause を"
                         "指定できません (abort / safe_shutdown を使用)"
                     )
                 out.append(step)
@@ -394,7 +394,7 @@ class _StepConverter:
                 )
                 if nested and step.on_error == "pause":
                     raise SeqExpressionError(
-                        f"{spath}: branch / repeat 内の dll は on_error=pause を"
+                        f"{spath}: ネストしたシーケンス内の dll は on_error=pause を"
                         "指定できません (abort / safe_shutdown を使用)"
                     )
                 out.append(step)
@@ -907,7 +907,7 @@ class _StepConverter:
         sub_steps, est = sub_conv.convert(
             raw_steps,
             defined_steps=set(), defined_vars=set(),
-            env_names=set(env_names), branch_depth=0, nested=False,
+            env_names=set(env_names), branch_depth=0, nested=True,
             path=f"{spath}/call:{name}/steps",
         )
         # returns_as の子側名が展開後に定義されているか (steps/vars) の確認は

@@ -370,6 +370,29 @@ def test_dryrun_expands_call():
     assert row["type"] == "call"
 
 
+def test_call_rejects_code_pause_that_nested_runtime_cannot_service():
+    doc = yaml.safe_load(textwrap.dedent(SAMPLE_YAML))
+    doc["sequences"]["pausing_code"] = {
+        "returns": [],
+        "steps": [{
+            "py": {
+                "code": "raise RuntimeError('pause me')",
+                "outputs": [],
+                "on_error": "pause",
+            },
+        }],
+    }
+    doc["recipes"]["call_pausing_code"] = {
+        "steps": [{"call": {"sequence": "pausing_code"}}],
+    }
+    defn = InstrumentDefinition(**doc)
+
+    with pytest.raises(SeqExpressionError, match="on_error=pause"):
+        recipe_to_plan(
+            defn.recipes["call_pausing_code"], {}, definition=defn,
+        )
+
+
 @pytest.mark.asyncio
 async def test_backward_compat_no_sequences():
     """sequences を持たない既存レシピは一切変わらない。"""
