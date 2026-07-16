@@ -983,6 +983,24 @@ class _StepConverter:
             str(k): str(v) for k, v in (rp.get("collect") or {}).items()
         }
 
+        def _exact_int(value: Any, field: str) -> int:
+            """Accept integral numeric values without silently truncating."""
+            import math
+
+            if isinstance(value, bool):
+                raise SeqExpressionError(f"{spath}: {field} は整数が必要です: {value!r}")
+            try:
+                number = float(value)
+            except (TypeError, ValueError) as e:
+                raise SeqExpressionError(
+                    f"{spath}: {field} は整数が必要です: {value!r}"
+                ) from e
+            if not math.isfinite(number) or not number.is_integer():
+                raise SeqExpressionError(
+                    f"{spath}: {field} は整数が必要です: {value!r}"
+                )
+            return int(number)
+
         def _validate_collect(body_new_steps: set[str], body_new_vars: set[str]) -> None:
             """collect の検証 (SP-5): source は body 内で定義される名前、
             target は命名規則を満たす array 変数名。"""
@@ -1004,7 +1022,8 @@ class _StepConverter:
         if rp.get("count") is not None:
             # count はコンパイル時解決 ($param 可)
             try:
-                count = int(float(resolve_arg(rp["count"], self.variables)))
+                resolved_count = resolve_arg(rp["count"], self.variables)
+                count = _exact_int(resolved_count, "repeat.count")
             except (ExpressionError, TypeError, ValueError) as e:
                 raise SeqExpressionError(f"{spath}: repeat.count を解決できません: {e}")
             if count < 1:
@@ -1039,10 +1058,7 @@ class _StepConverter:
 
         # while 型
         while_expr = rp["while"]
-        try:
-            max_it = int(rp["max_iterations"])
-        except (TypeError, ValueError) as e:
-            raise SeqExpressionError(f"{spath}: repeat.max_iterations が不正です: {e}")
+        max_it = _exact_int(rp["max_iterations"], "repeat.max_iterations")
         if max_it < 1:
             raise SeqExpressionError(
                 f"{spath}: repeat.max_iterations は 1 以上である必要があります: {max_it}"
