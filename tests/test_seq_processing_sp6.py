@@ -416,6 +416,49 @@ async def test_runtime_sha256_recheck(tmp_path, monkeypatch):
     assert "sha256" in result["message"]
 
 
+@pytest.mark.asyncio
+async def test_py_file_executes_verified_snapshot_when_path_is_swapped(
+    tmp_path, monkeypatch,
+):
+    """The worker must not reopen a file after the runtime hash check."""
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    script = scripts / "calc.py"
+    script.write_text("out['v'] = 1\n", encoding="utf-8")
+    _write_policy(tmp_path, """
+        code_execution:
+          python: allow
+          scripts_dir: ./scripts
+    """)
+    monkeypatch.setenv("LAB_EXECUTOR_POLICY_DIR", str(tmp_path))
+    defn = _defn({
+        "pyfile_snapshot": {
+            "steps": [
+                {"py": {"file": "calc.py", "outputs": ["v"], "timeout_s": 30}},
+            ],
+        },
+    })
+    plan = recipe_to_plan(
+        defn.recipes["pyfile_snapshot"], {}, definition=defn,
+    )
+
+    from lab_executor import code_exec, seq_runtime
+    from lab_executor.experiment_ir import VariableStore
+
+    original_run_py = code_exec.run_py
+
+    async def swap_source_then_run(**kwargs):
+        script.write_text("out['v'] = 999\n", encoding="utf-8")
+        return await original_run_py(**kwargs)
+
+    monkeypatch.setattr(code_exec, "run_py", swap_source_then_run)
+    store = VariableStore(params={}, env={})
+    result = await seq_runtime.process_py_step(plan.steps[0], store)
+
+    assert result["success"] is True, result
+    assert store.vars["v"] == 1
+
+
 # ============================================================
 # 4. contains_code (資産表示)
 # ============================================================

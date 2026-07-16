@@ -13,6 +13,7 @@ timeline (来歴の完全記録) で行う。
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import shutil
 import subprocess
@@ -102,6 +103,7 @@ async def run_py(
     params: dict[str, Any],
     env: dict[str, Any],
     timeout_s: float,
+    source_name: str | None = None,
 ) -> dict[str, Any]:
     """py ステップをワーカーで実行し、outputs (宣言分のみ) を返す。
 
@@ -113,6 +115,7 @@ async def run_py(
             "mode": "py",
             "code": code,
             "file": file_path,
+            "source_name": source_name,
             "inputs": {
                 k: _encode_for_worker(v, npy_dir, k)
                 for k, v in inputs.items()
@@ -141,6 +144,7 @@ async def run_dll(
     args: list[Any],
     out_args: dict[str, str],
     timeout_s: float,
+    expected_sha256: str,
 ) -> dict[str, Any]:
     """dll 呼び出しをワーカーで実行する。
 
@@ -150,9 +154,26 @@ async def run_dll(
     """
     npy_dir = Path(tempfile.mkdtemp(prefix="labexec_dll_"))
     try:
+        # source pathをhash検査後にworkerが再openすると差し替え可能になる。
+        # 一度だけ読んだbytesを照合し、その同じbytesのprivate copyをloadする。
+        source = Path(path)
+        try:
+            dll_bytes = source.read_bytes()
+        except OSError as e:
+            raise CodeExecError(
+                "integrity_error", f"DLLの読み込みに失敗: {source} ({e})",
+            )
+        actual = hashlib.sha256(dll_bytes).hexdigest()
+        if actual != expected_sha256:
+            raise CodeExecError(
+                "integrity_error",
+                f"DLLのsha256が実行直前に変化しました: {source}",
+            )
+        staged = npy_dir / f"verified{source.suffix or '.dll'}"
+        staged.write_bytes(dll_bytes)
         request = {
             "mode": "dll",
-            "path": path,
+            "path": str(staged),
             "function": function,
             "argtypes": list(argtypes),
             "restype": restype,
