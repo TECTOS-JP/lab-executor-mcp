@@ -30,6 +30,14 @@ Codex による独立レビューで検出された 10 件 (Critical 2 / High 6 
   path を再オープンせず、親が検証した同一 bytes (DLL は private copy) を使う。
 - **cancel / timeout 時に code worker のプロセスツリーを終了・回収** (High)。
   `asyncio.subprocess` 化 + `taskkill /T /F` / `killpg`。
+  Opus 検証中、この終了処理が Windows + Python 3.14 (Proactor) で
+  worker を殺せず生き残るケースを再現 (回帰テストが本環境で fail):
+  `communicate()` を cancel すると transport がプロセスをまだ生きているのに
+  「終了 (rc=0)」と誤検知して `proc.kill()` が ProcessLookupError となり、
+  さらに `taskkill` は生成直後の pid 可視化前に "not found" を返し、実行完了
+  まで数秒かかることがある。**権威的 kill を OpenProcess+TerminateProcess
+  (pid 直接) に置き換え最初に実行**し、`taskkill /T` は子孫回収の best-effort
+  として後段へ。生成中 cancel の孤児化も spawn コルーチンの shield で塞いだ。
 - **最終 step 実行中に job deadline を越えた場合も TIMEOUT 化** (High)。
   従来は完了後 cancel のみ確認し COMPLETED へ落ちる経路があった。
 

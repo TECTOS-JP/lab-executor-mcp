@@ -13,6 +13,7 @@ timeline (来歴の完全記録) で行う。
 from __future__ import annotations
 
 import asyncio
+import ctypes
 import hashlib
 import json
 import os
@@ -84,30 +85,66 @@ def _parse_worker_response(
     return resp
 
 
+def _os_kill_win(pid: int) -> None:
+    """Windows: pid を OpenProcess+TerminateProcess で直接落とす (権威的)。
+
+    ``communicate()`` を cancel すると asyncio の subprocess transport は
+    プロセスをまだ生きているのに「終了 (returncode=0)」と誤検知し、以降
+    ``proc.kill()`` が ProcessLookupError を投げて効かなくなる (Python 3.14
+    Proactor)。さらに taskkill は生成直後の pid 可視化前ウィンドウで "not
+    found" を返すことがある。OpenProcess による直接 kill はこの双方に依存
+    しないため、ワーカーを確実に終了できる。既に終了/アクセス不可なら黙認。
+    """
+    PROCESS_TERMINATE = 0x0001
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    handle = kernel32.OpenProcess(PROCESS_TERMINATE, False, int(pid))
+    if not handle:
+        return  # 既に終了済み、またはアクセス権なし
+    try:
+        kernel32.TerminateProcess(handle, 1)
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def _os_kill(pid: int) -> None:
+    """プラットフォーム別にプロセス (POSIX はグループ) を確実に落とす。"""
+    if sys.platform == "win32":
+        _os_kill_win(pid)
+    else:
+        try:
+            os.killpg(pid, signal.SIGKILL)
+        except (ProcessLookupError, OSError):
+            pass
+
+
 async def _terminate_worker(proc: asyncio.subprocess.Process) -> None:
-    """ワーカーのプロセスグループを終了し、必ず回収する。"""
+    """ワーカー (と子孫) を終了し、必ず回収する。
+
+    順序が要: まず ``_os_kill`` (Windows は OpenProcess+TerminateProcess、
+    POSIX は killpg) でワーカー本体を **即座に** 権威的に落とす。これは
+    transport の誤検知や taskkill のレースに依存しない。続けて taskkill /T
+    (Windows) を best-effort で流し、ユーザコードが spawn した子孫を回収する
+    (親を先に落とすため取りこぼしはあり得るが、taskkill は数秒かかることが
+    あり authoritative kill を遅延させてはならないので後段に置く)。
+    """
     if proc.returncode is not None:
         return
-    try:
-        if sys.platform == "win32":
+    pid = proc.pid
+    _os_kill(pid)
+    if sys.platform == "win32":
+        try:
             killer = await asyncio.create_subprocess_exec(
-                "taskkill", "/PID", str(proc.pid), "/T", "/F",
+                "taskkill", "/PID", str(pid), "/T", "/F",
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.DEVNULL,
             )
-            await killer.wait()
-            if killer.returncode != 0 and proc.returncode is None:
-                proc.kill()
-        else:
-            os.killpg(proc.pid, signal.SIGKILL)
-    except (ProcessLookupError, OSError):
-        if proc.returncode is None:
-            proc.kill()
+            await asyncio.wait_for(killer.wait(), timeout=5.0)
+        except (OSError, asyncio.TimeoutError):
+            pass
     try:
         await asyncio.wait_for(proc.wait(), timeout=5.0)
     except asyncio.TimeoutError:
-        if proc.returncode is None:
-            proc.kill()
+        _os_kill(pid)
         await proc.wait()
 
 
@@ -118,13 +155,23 @@ async def _run_worker(request: dict, timeout_s: float) -> dict:
         kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
     else:
         kwargs["start_new_session"] = True
-    proc = await asyncio.create_subprocess_exec(
+    # プロセス生成中 (create_subprocess_exec の await 中) に cancel が届くと、
+    # OS が生成した子プロセスの参照を失い孤児化する。生成コルーチンを shield し、
+    # cancel された場合でも生成完了を待ってから確実に終了・回収する。
+    spawn = asyncio.ensure_future(asyncio.create_subprocess_exec(
         sys.executable, "-m", "lab_executor.code_worker",
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         **kwargs,
-    )
+    ))
+    try:
+        proc = await asyncio.shield(spawn)
+    except asyncio.CancelledError:
+        # spawn は shield 済みで生成は継続している。完了を待って回収する。
+        proc = await spawn
+        await asyncio.shield(_terminate_worker(proc))
+        raise
     payload = json.dumps(request, ensure_ascii=False).encode("utf-8")
     try:
         stdout, stderr_bytes = await asyncio.wait_for(
