@@ -247,6 +247,7 @@ def recipe_to_plan(
         recipe=recipe, variables=variables, definition=definition,
         aux_resources=aux_resources, param_names=param_names,
         policy=policy, sequences=sequences, call_stack=(),
+        primary_resource=primary_resource,
     )
     plan_steps, estimate = conv.convert(
         recipe.steps,
@@ -303,6 +304,7 @@ class _StepConverter:
         policy: "CodePolicy | None" = None,
         sequences: dict[str, Any] | None = None,
         call_stack: tuple[str, ...] = (),
+        primary_resource: str | None = None,
     ):
         self.recipe = recipe
         self.variables = variables
@@ -312,6 +314,10 @@ class _StepConverter:
         self._policy = policy   # None なら初回使用時に load_policy()
         self.sequences = sequences or {}   # v2.33.0 (SP-7)
         self.call_stack = call_stack       # 再帰検出用
+        # v2.34.x safety gate: SP-7 の command routing はまだ主 session 固定。
+        # 複数装置 call を「対応済み」に見せて誤装置へ送るより、bind を主装置に
+        # 制限して fail-closed にする。完全なmulti-session routingは別設計とする。
+        self.primary_resource = primary_resource
 
     @property
     def policy(self) -> "CodePolicy":
@@ -788,6 +794,17 @@ class _StepConverter:
             )
         # --- bind とロール capability 照合 ---
         bind = {str(k): str(v) for k, v in (cl.get("bind") or {}).items()}
+        if self.primary_resource is not None:
+            cross = {
+                role: target for role, target in bind.items()
+                if target != self.primary_resource
+            }
+            if cross:
+                raise SeqExpressionError(
+                    f"{spath}: call.bind の複数装置ルーティングは未対応です。"
+                    f"全ロールを主装置 '{self.primary_resource}' に束縛してください: "
+                    f"{cross}"
+                )
         for role in seq.roles:
             if role.name not in bind:
                 raise SeqExpressionError(
@@ -863,6 +880,7 @@ class _StepConverter:
             aux_resources=self.aux_resources, param_names=sub_param_names,
             policy=self._policy, sequences=self.sequences,
             call_stack=self.call_stack + (name,),
+            primary_resource=self.primary_resource,
         )
         sub_steps, est = sub_conv.convert(
             raw_steps,
@@ -1096,6 +1114,42 @@ async def execute_plan(
             "recipe": recipe_name or plan.name,
             "error": "NoDefinitionFound",
             "message": "機器定義が読み込まれていません",
+            "steps_executed": [],
+        }
+
+    # SP-7 safety gate: recipe_to_plan(primary_resource=None) で作られたPlanでも、
+    # call内のcommandを別装置へ送ったつもりで主sessionへ誤送信しないよう実行直前に
+    # 再検証する。完全な複数装置routingが実装されるまでは単一装置に限定する。
+    def _cross_in_call(steps: list[Step], *, inside_call: bool = False) -> str | None:
+        for st in steps:
+            if isinstance(st, CommandStep):
+                if inside_call and st.instrument and st.instrument != session.resource_name:
+                    return st.instrument
+            elif isinstance(st, BranchStep):
+                for case in st.cases:
+                    bad = _cross_in_call(case.steps, inside_call=inside_call)
+                    if bad:
+                        return bad
+            elif isinstance(st, RepeatStep):
+                bad = _cross_in_call(st.body, inside_call=inside_call)
+                if bad:
+                    return bad
+            elif isinstance(st, CallStep):
+                bad = _cross_in_call(st.sub_steps, inside_call=True)
+                if bad:
+                    return bad
+        return None
+
+    cross_target = _cross_in_call(plan.steps)
+    if cross_target is not None:
+        return {
+            "success": False,
+            "recipe": recipe_name or plan.name,
+            "error": "CrossInstrumentCallUnsupported",
+            "message": (
+                "call.bind の複数装置ルーティングは未対応です。"
+                f"主装置={session.resource_name!r}, bind先={cross_target!r}"
+            ),
             "steps_executed": [],
         }
 
@@ -1340,7 +1394,11 @@ async def execute_recipe(
 
     # Recipe → IR Plan 変換 (definition を渡し ${...} の範囲宣言検証を有効化)
     try:
-        plan = recipe_to_plan(recipe, variables, definition=session.definition)
+        plan = recipe_to_plan(
+            recipe, variables,
+            primary_resource=session.resource_name,
+            definition=session.definition,
+        )
     except (ExpressionError, SeqExpressionError) as e:
         return {
             "success": False,

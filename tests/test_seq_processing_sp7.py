@@ -149,6 +149,33 @@ def test_call_role_bound_and_replaced():
     assert cmd.instrument == "DMM1"
 
 
+def test_call_bind_to_non_primary_resource_is_rejected():
+    """multi-session routing未実装中は誤装置送信よりcompile拒否を優先する。"""
+    defn = _defn()
+    r = defn.recipes["main"].model_copy(deep=True)
+    r.steps[0].call["bind"] = {"meter": "OTHER"}
+    with pytest.raises(SeqExpressionError, match="複数装置ルーティングは未対応"):
+        recipe_to_plan(
+            r, {}, definition=defn, primary_resource="DMM1",
+        )
+
+
+@pytest.mark.asyncio
+async def test_execute_plan_rejects_cross_instrument_call_built_without_primary():
+    """primary_resource無しで作られたPlanも実行直前の二段目gateで拒否する。"""
+    from lab_executor.recipe_executor import execute_plan
+
+    defn = _defn()
+    r = defn.recipes["main"].model_copy(deep=True)
+    r.steps[0].call["bind"] = {"meter": "OTHER"}
+    plan = recipe_to_plan(r, {}, definition=defn)
+    visa = _visa("2.5")
+    result = await execute_plan(visa, _session(defn), plan)
+    assert result["success"] is False
+    assert result["error"] == "CrossInstrumentCallUnsupported"
+    visa.query.assert_not_awaited()
+
+
 # ============================================================
 # 2. 検証エラー系
 # ============================================================
