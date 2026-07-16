@@ -865,7 +865,9 @@ class _StepConverter:
                      for s in seq.steps]
         sub_recipe = RecipeDefinition(
             description=seq.description, parameters=seq.parameters,
-            steps=[], requires=None,
+            # callはinline expansionであり、親recipeの安全制約を弱めてはならない。
+            # requires.rangesを子commandにも適用し、装置rangeとの積集合を維持する。
+            steps=[], requires=self.recipe.requires,
         )
         # param_names: サブ内で params.X 参照が有効な名前。
         # 実行時 with (runtime_param_names) も params.X としては参照可なので含める。

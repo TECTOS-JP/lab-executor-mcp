@@ -14,7 +14,10 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 import yaml
 
-from lab_executor.models.instrument_def import InstrumentDefinition
+from lab_executor.models.instrument_def import (
+    CapabilityRequirements, InstrumentDefinition, RangeSpec,
+    SubsequenceDefinition,
+)
 from lab_executor.recipe_executor import (
     CALL_MAX_DEPTH, execute_recipe, recipe_to_plan,
 )
@@ -174,6 +177,33 @@ async def test_execute_plan_rejects_cross_instrument_call_built_without_primary(
     assert result["success"] is False
     assert result["error"] == "CrossInstrumentCallUnsupported"
     visa.query.assert_not_awaited()
+
+
+def test_call_inherits_parent_requires_ranges():
+    """call展開で親の厳しいrangeを失わず、装置rangeとの積集合にする。"""
+    defn = _defn()
+    defn.sequences["range_child"] = SubsequenceDefinition.model_validate({
+        "parameters": [{"name": "current", "type": "float", "default": 0.0}],
+        "steps": [{
+            "command": "set_current",
+            "args": {"current": "${params.current}"},
+        }],
+    })
+    r = defn.recipes["main"].model_copy(deep=True)
+    r.requires = CapabilityRequirements(ranges={
+        "set_current.current": RangeSpec(min=0.0, max=0.001),
+    })
+    r.steps = [type(r.steps[0])(call={
+        "sequence": "range_child",
+        "with": {"current": 0.005},
+    })]
+    plan = recipe_to_plan(
+        r, {}, definition=defn, primary_resource="DMM1",
+    )
+    command = plan.steps[0].sub_steps[0]
+    assert command.deferred_args["current"] == {
+        "expr": "params.current", "min": 0.0, "max": 0.001,
+    }
 
 
 # ============================================================
