@@ -85,7 +85,13 @@ NP_ALLOWED_SUBMODULES: dict[str, frozenset[str]] = {
 
 def _np_allowed(parts: list[str]) -> bool:
     if len(parts) == 1:
-        return parts[0] in NP_ALLOWED_TOP_LEVEL
+        # ast.walk also visits the intermediate ``np.fft`` Attribute in
+        # ``np.fft.rfft(...)``.  Permit only named allowlisted submodules here;
+        # evaluating the module itself is still rejected by result typing.
+        return (
+            parts[0] in NP_ALLOWED_TOP_LEVEL
+            or parts[0] in NP_ALLOWED_SUBMODULES
+        )
     if len(parts) == 2:
         return parts[1] in NP_ALLOWED_SUBMODULES.get(parts[0], frozenset())
     return False
