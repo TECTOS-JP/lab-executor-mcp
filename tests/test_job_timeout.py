@@ -37,6 +37,11 @@ recipes:
     steps:
       - { command: "reset" }
       - { command: "set_voltage", args: { voltage: 1 } }
+
+  slow_final:
+    parameters: []
+    steps:
+      - { command: "reset" }
 """
 
 
@@ -123,3 +128,26 @@ async def test_default_timeout_used_when_unset(setup):
             break
         await asyncio.sleep(0.05)
     assert mgr.get(rec.job_id).status == JobStatus.COMPLETED
+
+
+@pytest.mark.asyncio
+async def test_timeout_crossed_during_final_command_is_not_completed(setup):
+    """The final command can succeed after the overall job deadline."""
+    mgr = setup
+
+    async def slow_write(*args, **kwargs):
+        await asyncio.sleep(0.1)
+
+    mgr._visa.write = AsyncMock(side_effect=slow_write)
+    rec = await mgr.start_recipe_job(
+        "TEST::INSTR", "slow_final", None, job_timeout_s=0.02,
+    )
+    for _ in range(40):
+        if is_terminal(mgr.get(rec.job_id).status):
+            break
+        await asyncio.sleep(0.02)
+
+    final = mgr.get(rec.job_id)
+    assert final.status == JobStatus.TIMEOUT
+    assert final.error_class == "timeout"
+    assert final.result["timed_out_at_step"] == 0

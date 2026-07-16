@@ -767,9 +767,7 @@ async def process_py_step(
     from pathlib import Path as _Path
 
     from . import code_exec
-    from .code_policy import (
-        CodePolicyError, check_python, load_policy, sha256_file,
-    )
+    from .code_policy import CodePolicyError, check_python, load_policy
 
     base = {
         "step_type": "py",
@@ -779,19 +777,35 @@ async def process_py_step(
     }
 
     # --- 実行直前のポリシー再検証 + sha256 再照合 (TOCTOU 対策) ---
-    pol = policy if policy is not None else load_policy()
+    pol = policy if policy is not None else load_policy(step.policy_dir or None)
+    verified_file_code: str | None = None
     try:
         if step.resolved_path:
             p = _Path(step.resolved_path)
             if not p.exists():
                 raise CodePolicyError(f"py.file が存在しません: {p}")
-            current = sha256_file(p)
+            # Hash and decode the same immutable byte snapshot that is handed to
+            # the worker.  Reopening ``p`` in the worker would leave a race in
+            # which an attacker can replace the file after this check.
+            try:
+                raw = p.read_bytes()
+            except OSError as e:
+                raise CodePolicyError(f"py.file を読み込めません: {p} ({e})") from e
+            import hashlib as _hashlib
+
+            current = _hashlib.sha256(raw).hexdigest()
             if current != step.sha256:
                 raise CodePolicyError(
                     f"py.file の内容がコンパイル時から変更されています "
                     f"(sha256 不一致): {p}"
                 )
             check_python(pol, file_path=p, sha256=current)
+            try:
+                verified_file_code = raw.decode("utf-8")
+            except UnicodeDecodeError as e:
+                raise CodePolicyError(
+                    f"py.file は UTF-8 である必要があります: {p}"
+                ) from e
         else:
             check_python(pol, file_path=None, sha256=step.sha256)
     except CodePolicyError as e:
@@ -813,8 +827,9 @@ async def process_py_step(
     # --- subprocess 実行 ---
     try:
         outputs = await code_exec.run_py(
-            code=step.code,
-            file_path=step.resolved_path or None,
+            code=verified_file_code if step.resolved_path else step.code,
+            file_path=None,
+            source_name=step.resolved_path or None,
             inputs=inputs,
             outputs=step.outputs,
             params=ctx["params"],
@@ -889,7 +904,7 @@ async def process_dll_step(
     }
 
     # --- 実行直前のポリシー再検証 + sha256 再照合 (TOCTOU 対策) ---
-    pol = policy if policy is not None else load_policy()
+    pol = policy if policy is not None else load_policy(step.policy_dir or None)
     try:
         p = _Path(step.path)
         if not p.exists():
@@ -927,6 +942,7 @@ async def process_dll_step(
             args=resolved_args,
             out_args=step.out_args,
             timeout_s=step.timeout_s,
+            expected_sha256=step.sha256,
         )
     except code_exec.CodeExecError as e:
         return await _code_step_error(

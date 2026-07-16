@@ -77,7 +77,10 @@ def _run_py(req: dict) -> dict:
     else:
         code = req.get("code") or ""
 
-    exec(compile(code, file_path or "<py step>", "exec"), namespace)  # noqa: S102
+    # source_nameはtraceback表示専用。verified file stepは親が検証したcode bytesを
+    # 渡すため、worker側で元pathを再openしない。
+    source_name = req.get("source_name") or file_path or "<py step>"
+    exec(compile(code, source_name, "exec"), namespace)  # noqa: S102
 
     out = namespace.get("out")
     # file 型は def main(ctx) -> dict も可 (戻り値が out になる)

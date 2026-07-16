@@ -3,7 +3,7 @@
 対象:
 - VariableStore の array 代入 / 要素数上限 / var_assigned・snapshot の要約形
 - repeat collect (count / while / 空 / 複数 / 型混入エラー)
-- 式言語の np.* (mean / polyfit / fft) / デナイリスト / 0 次元スカラ化
+- 式言語の np.* (mean / polyfit / fft) / 明示allowlist / 0 次元スカラ化
 - ndarray の deferred 拒否 (明示エラー)
 - 条件式での ndarray 曖昧真偽値エラー
 - dry-run (array test_values は list で与えて ndarray 化)
@@ -173,13 +173,19 @@ def test_np_scalar_and_0dim_to_python_scalar():
     assert type(v2) is float
 
 
-def test_np_denylist_and_limits():
+def test_np_allowlist_rejects_side_effects_and_allocators():
     ctx = _CTX()
     for expr in (
         "np.load('x.npy')", "np.save('x.npy', 1)", "np.loadtxt('x.txt')",
         "np.fromfile('x')", "np.memmap('x')", "np.DataSource()",
         "np.lib.npyio", "np.vectorize(abs)", "np.frompyfunc(abs, 1, 1)",
         "np.apply_along_axis(abs, 0, 1)",
+        # 任意native code load。結果型を拒否してもload時副作用は既に起きる。
+        "np.ctypeslib.load_library('evil.dll', '.')",
+        # 結果size検査より前に巨大allocateできるためconstructorは許可しない。
+        "np.zeros(10)", "np.ones(10)", "np.arange(10)",
+        # global state mutation / 非決定的名前空間も許可しない。
+        "np.seterr('ignore')", "np.random.seed(1)",
     ):
         with pytest.raises(SeqExpressionError):
             evaluate(expr, ctx)
@@ -192,9 +198,31 @@ def test_np_denylist_and_limits():
     # list リテラルは引き続き禁止 (値は collect / np 関数から来る)
     with pytest.raises(SeqExpressionError):
         evaluate("np.array([1, 2])", ctx)
-    # 要素数上限
-    with pytest.raises(SeqExpressionError, match="上限"):
-        evaluate(f"np.zeros({ARRAY_MAX_ELEMENTS + 1})", ctx)
+
+
+def test_np_allocator_is_rejected_before_numpy_invocation(monkeypatch):
+    """Result-size checks are too late if an allocator has already run."""
+    invoked = False
+
+    def forbidden_allocator(*args, **kwargs):
+        nonlocal invoked
+        invoked = True
+        raise AssertionError("NumPy allocator must not be invoked")
+
+    monkeypatch.setattr(np, "zeros", forbidden_allocator)
+    with pytest.raises(SeqExpressionError, match="allowlist"):
+        evaluate("np.zeros(1000000000000)", _CTX())
+    assert invoked is False
+
+
+def test_np_allowlist_documented_calculations_still_work():
+    ctx = _CTX(xs=np.array([1.0, 2.0, 3.0]))
+    assert evaluate("np.mean(vars.xs)", ctx) == 2.0
+    assert evaluate("np.std(vars.xs)", ctx) == pytest.approx(np.std(ctx["vars"]["xs"]))
+    assert evaluate("np.sum(vars.xs)", ctx) == 6.0
+    assert evaluate("np.all(vars.xs > 0)", ctx) is True
+    fft = evaluate("np.fft.rfft(vars.xs)", ctx)
+    assert isinstance(fft, np.ndarray)
 
 
 def test_np_not_a_variable_reference():

@@ -14,7 +14,10 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 import yaml
 
-from lab_executor.models.instrument_def import InstrumentDefinition
+from lab_executor.models.instrument_def import (
+    CapabilityRequirements, InstrumentDefinition, RangeSpec,
+    SubsequenceDefinition,
+)
 from lab_executor.recipe_executor import (
     CALL_MAX_DEPTH, execute_recipe, recipe_to_plan,
 )
@@ -147,6 +150,60 @@ def test_call_role_bound_and_replaced():
     repeat = call.sub_steps[0]
     cmd = repeat.body[0]
     assert cmd.instrument == "DMM1"
+
+
+def test_call_bind_to_non_primary_resource_is_rejected():
+    """multi-session routing未実装中は誤装置送信よりcompile拒否を優先する。"""
+    defn = _defn()
+    r = defn.recipes["main"].model_copy(deep=True)
+    r.steps[0].call["bind"] = {"meter": "OTHER"}
+    with pytest.raises(SeqExpressionError, match="複数装置ルーティングは未対応"):
+        recipe_to_plan(
+            r, {}, definition=defn, primary_resource="DMM1",
+        )
+
+
+@pytest.mark.asyncio
+async def test_execute_plan_rejects_cross_instrument_call_built_without_primary():
+    """primary_resource無しで作られたPlanも実行直前の二段目gateで拒否する。"""
+    from lab_executor.recipe_executor import execute_plan
+
+    defn = _defn()
+    r = defn.recipes["main"].model_copy(deep=True)
+    r.steps[0].call["bind"] = {"meter": "OTHER"}
+    plan = recipe_to_plan(r, {}, definition=defn)
+    visa = _visa("2.5")
+    result = await execute_plan(visa, _session(defn), plan)
+    assert result["success"] is False
+    assert result["error"] == "CrossInstrumentCallUnsupported"
+    visa.query.assert_not_awaited()
+
+
+def test_call_inherits_parent_requires_ranges():
+    """call展開で親の厳しいrangeを失わず、装置rangeとの積集合にする。"""
+    defn = _defn()
+    defn.sequences["range_child"] = SubsequenceDefinition.model_validate({
+        "parameters": [{"name": "current", "type": "float", "default": 0.0}],
+        "steps": [{
+            "command": "set_current",
+            "args": {"current": "${params.current}"},
+        }],
+    })
+    r = defn.recipes["main"].model_copy(deep=True)
+    r.requires = CapabilityRequirements(ranges={
+        "set_current.current": RangeSpec(min=0.0, max=0.001),
+    })
+    r.steps = [type(r.steps[0])(call={
+        "sequence": "range_child",
+        "with": {"current": 0.005},
+    })]
+    plan = recipe_to_plan(
+        r, {}, definition=defn, primary_resource="DMM1",
+    )
+    command = plan.steps[0].sub_steps[0]
+    assert command.deferred_args["current"] == {
+        "expr": "params.current", "min": 0.0, "max": 0.001,
+    }
 
 
 # ============================================================
@@ -311,6 +368,29 @@ def test_dryrun_expands_call():
     view = dryrun_view(plan)
     row = view["steps"][0]
     assert row["type"] == "call"
+
+
+def test_call_rejects_code_pause_that_nested_runtime_cannot_service():
+    doc = yaml.safe_load(textwrap.dedent(SAMPLE_YAML))
+    doc["sequences"]["pausing_code"] = {
+        "returns": [],
+        "steps": [{
+            "py": {
+                "code": "raise RuntimeError('pause me')",
+                "outputs": [],
+                "on_error": "pause",
+            },
+        }],
+    }
+    doc["recipes"]["call_pausing_code"] = {
+        "steps": [{"call": {"sequence": "pausing_code"}}],
+    }
+    defn = InstrumentDefinition(**doc)
+
+    with pytest.raises(SeqExpressionError, match="on_error=pause"):
+        recipe_to_plan(
+            defn.recipes["call_pausing_code"], {}, definition=defn,
+        )
 
 
 @pytest.mark.asyncio

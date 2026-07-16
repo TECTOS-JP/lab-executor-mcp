@@ -239,6 +239,14 @@ def recipe_to_plan(
     """
     aux_resources: set[str] = set()
 
+    # Registry経由の定義はロード元dirを保持する。env設定を要求せず、仕様どおり
+    # instruments dir直下の_policy.yamlをコンパイル時・実行時の起点にする。
+    if policy is None and definition is not None:
+        source_dir = getattr(definition, "_source_dir", None)
+        if source_dir:
+            from .code_policy import load_policy
+            policy = load_policy(source_dir)
+
     # コンパイル時検証用: その時点までに定義される名前を追跡する
     param_names: set[str] = set(variables.keys()) | {p.name for p in recipe.parameters}
 
@@ -247,6 +255,7 @@ def recipe_to_plan(
         recipe=recipe, variables=variables, definition=definition,
         aux_resources=aux_resources, param_names=param_names,
         policy=policy, sequences=sequences, call_stack=(),
+        primary_resource=primary_resource,
     )
     plan_steps, estimate = conv.convert(
         recipe.steps,
@@ -303,6 +312,7 @@ class _StepConverter:
         policy: "CodePolicy | None" = None,
         sequences: dict[str, Any] | None = None,
         call_stack: tuple[str, ...] = (),
+        primary_resource: str | None = None,
     ):
         self.recipe = recipe
         self.variables = variables
@@ -312,6 +322,10 @@ class _StepConverter:
         self._policy = policy   # None なら初回使用時に load_policy()
         self.sequences = sequences or {}   # v2.33.0 (SP-7)
         self.call_stack = call_stack       # 再帰検出用
+        # v2.34.x safety gate: SP-7 の command routing はまだ主 session 固定。
+        # 複数装置 call を「対応済み」に見せて誤装置へ送るより、bind を主装置に
+        # 制限して fail-closed にする。完全なmulti-session routingは別設計とする。
+        self.primary_resource = primary_resource
 
     @property
     def policy(self) -> "CodePolicy":
@@ -342,7 +356,7 @@ class _StepConverter:
 
             if nested and st in self._NESTED_FORBIDDEN:
                 raise SeqExpressionError(
-                    f"{spath}: branch / repeat 内の {st} は SP-3 では未対応です"
+                    f"{spath}: ネストしたシーケンス内の {st} は未対応です"
                 )
 
             if st == "compute":
@@ -367,7 +381,7 @@ class _StepConverter:
                 )
                 if nested and step.on_error == "pause":
                     raise SeqExpressionError(
-                        f"{spath}: branch / repeat 内の py は on_error=pause を"
+                        f"{spath}: ネストしたシーケンス内の py は on_error=pause を"
                         "指定できません (abort / safe_shutdown を使用)"
                     )
                 out.append(step)
@@ -380,7 +394,7 @@ class _StepConverter:
                 )
                 if nested and step.on_error == "pause":
                     raise SeqExpressionError(
-                        f"{spath}: branch / repeat 内の dll は on_error=pause を"
+                        f"{spath}: ネストしたシーケンス内の dll は on_error=pause を"
                         "指定できません (abort / safe_shutdown を使用)"
                     )
                 out.append(step)
@@ -598,6 +612,8 @@ class _StepConverter:
         env_names: set[str], spath: str,
     ) -> PyStep:
         """py の変換 (v2.32.0 SP-6): path 解決 + sha256 + ポリシーゲート。"""
+        from pathlib import Path as _Path
+
         from .code_policy import (
             CodePolicyError, check_python, resolve_py_file,
             sha256_file, sha256_text,
@@ -641,11 +657,16 @@ class _StepConverter:
         except (TypeError, ValueError) as e:
             raise SeqExpressionError(f"{spath}: py.timeout_s が不正です: {e}")
 
+        policy_dir = (
+            str(_Path(self.policy.source).parent)
+            if self.policy.source != "default" else ""
+        )
         return PyStep(
             file=str(file_ref) if file_ref else None,
             code=str(code) if code is not None else None,
             resolved_path=resolved_path,
             sha256=digest,
+            policy_dir=policy_dir,
             inputs=inputs,
             outputs=outputs,
             timeout_s=timeout_s,
@@ -721,6 +742,10 @@ class _StepConverter:
         except (TypeError, ValueError) as e:
             raise SeqExpressionError(f"{spath}: dll.timeout_s が不正です: {e}")
 
+        policy_dir = (
+            str(_Path(self.policy.source).parent)
+            if self.policy.source != "default" else ""
+        )
         return DllStep(
             path=str(dll_path),
             function=str(dl["function"]),
@@ -730,6 +755,7 @@ class _StepConverter:
             out_args=out_args,
             result_as=str(result_as) if result_as else None,
             sha256=digest,
+            policy_dir=policy_dir,
             timeout_s=timeout_s,
             on_error=dl.get("on_error", "abort"),
             description=rs.description,
@@ -788,6 +814,17 @@ class _StepConverter:
             )
         # --- bind とロール capability 照合 ---
         bind = {str(k): str(v) for k, v in (cl.get("bind") or {}).items()}
+        if self.primary_resource is not None:
+            cross = {
+                role: target for role, target in bind.items()
+                if target != self.primary_resource
+            }
+            if cross:
+                raise SeqExpressionError(
+                    f"{spath}: call.bind の複数装置ルーティングは未対応です。"
+                    f"全ロールを主装置 '{self.primary_resource}' に束縛してください: "
+                    f"{cross}"
+                )
         for role in seq.roles:
             if role.name not in bind:
                 raise SeqExpressionError(
@@ -848,7 +885,9 @@ class _StepConverter:
                      for s in seq.steps]
         sub_recipe = RecipeDefinition(
             description=seq.description, parameters=seq.parameters,
-            steps=[], requires=None,
+            # callはinline expansionであり、親recipeの安全制約を弱めてはならない。
+            # requires.rangesを子commandにも適用し、装置rangeとの積集合を維持する。
+            steps=[], requires=self.recipe.requires,
         )
         # param_names: サブ内で params.X 参照が有効な名前。
         # 実行時 with (runtime_param_names) も params.X としては参照可なので含める。
@@ -863,11 +902,12 @@ class _StepConverter:
             aux_resources=self.aux_resources, param_names=sub_param_names,
             policy=self._policy, sequences=self.sequences,
             call_stack=self.call_stack + (name,),
+            primary_resource=self.primary_resource,
         )
         sub_steps, est = sub_conv.convert(
             raw_steps,
             defined_steps=set(), defined_vars=set(),
-            env_names=set(env_names), branch_depth=0, nested=False,
+            env_names=set(env_names), branch_depth=0, nested=True,
             path=f"{spath}/call:{name}/steps",
         )
         # returns_as の子側名が展開後に定義されているか (steps/vars) の確認は
@@ -943,6 +983,24 @@ class _StepConverter:
             str(k): str(v) for k, v in (rp.get("collect") or {}).items()
         }
 
+        def _exact_int(value: Any, field: str) -> int:
+            """Accept integral numeric values without silently truncating."""
+            import math
+
+            if isinstance(value, bool):
+                raise SeqExpressionError(f"{spath}: {field} は整数が必要です: {value!r}")
+            try:
+                number = float(value)
+            except (TypeError, ValueError) as e:
+                raise SeqExpressionError(
+                    f"{spath}: {field} は整数が必要です: {value!r}"
+                ) from e
+            if not math.isfinite(number) or not number.is_integer():
+                raise SeqExpressionError(
+                    f"{spath}: {field} は整数が必要です: {value!r}"
+                )
+            return int(number)
+
         def _validate_collect(body_new_steps: set[str], body_new_vars: set[str]) -> None:
             """collect の検証 (SP-5): source は body 内で定義される名前、
             target は命名規則を満たす array 変数名。"""
@@ -964,7 +1022,8 @@ class _StepConverter:
         if rp.get("count") is not None:
             # count はコンパイル時解決 ($param 可)
             try:
-                count = int(float(resolve_arg(rp["count"], self.variables)))
+                resolved_count = resolve_arg(rp["count"], self.variables)
+                count = _exact_int(resolved_count, "repeat.count")
             except (ExpressionError, TypeError, ValueError) as e:
                 raise SeqExpressionError(f"{spath}: repeat.count を解決できません: {e}")
             if count < 1:
@@ -999,10 +1058,7 @@ class _StepConverter:
 
         # while 型
         while_expr = rp["while"]
-        try:
-            max_it = int(rp["max_iterations"])
-        except (TypeError, ValueError) as e:
-            raise SeqExpressionError(f"{spath}: repeat.max_iterations が不正です: {e}")
+        max_it = _exact_int(rp["max_iterations"], "repeat.max_iterations")
         if max_it < 1:
             raise SeqExpressionError(
                 f"{spath}: repeat.max_iterations は 1 以上である必要があります: {max_it}"
@@ -1096,6 +1152,42 @@ async def execute_plan(
             "recipe": recipe_name or plan.name,
             "error": "NoDefinitionFound",
             "message": "機器定義が読み込まれていません",
+            "steps_executed": [],
+        }
+
+    # SP-7 safety gate: recipe_to_plan(primary_resource=None) で作られたPlanでも、
+    # call内のcommandを別装置へ送ったつもりで主sessionへ誤送信しないよう実行直前に
+    # 再検証する。完全な複数装置routingが実装されるまでは単一装置に限定する。
+    def _cross_in_call(steps: list[Step], *, inside_call: bool = False) -> str | None:
+        for st in steps:
+            if isinstance(st, CommandStep):
+                if inside_call and st.instrument and st.instrument != session.resource_name:
+                    return st.instrument
+            elif isinstance(st, BranchStep):
+                for case in st.cases:
+                    bad = _cross_in_call(case.steps, inside_call=inside_call)
+                    if bad:
+                        return bad
+            elif isinstance(st, RepeatStep):
+                bad = _cross_in_call(st.body, inside_call=inside_call)
+                if bad:
+                    return bad
+            elif isinstance(st, CallStep):
+                bad = _cross_in_call(st.sub_steps, inside_call=True)
+                if bad:
+                    return bad
+        return None
+
+    cross_target = _cross_in_call(plan.steps)
+    if cross_target is not None:
+        return {
+            "success": False,
+            "recipe": recipe_name or plan.name,
+            "error": "CrossInstrumentCallUnsupported",
+            "message": (
+                "call.bind の複数装置ルーティングは未対応です。"
+                f"主装置={session.resource_name!r}, bind先={cross_target!r}"
+            ),
             "steps_executed": [],
         }
 
@@ -1340,7 +1432,11 @@ async def execute_recipe(
 
     # Recipe → IR Plan 変換 (definition を渡し ${...} の範囲宣言検証を有効化)
     try:
-        plan = recipe_to_plan(recipe, variables, definition=session.definition)
+        plan = recipe_to_plan(
+            recipe, variables,
+            primary_resource=session.resource_name,
+            definition=session.definition,
+        )
     except (ExpressionError, SeqExpressionError) as e:
         return {
             "success": False,

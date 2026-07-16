@@ -306,6 +306,26 @@ def test_repeat_count_over_limit():
         recipe_to_plan(defn.recipes["big"], {}, definition=defn)
 
 
+@pytest.mark.parametrize("repeat", [
+    {"count": 2.9, "steps": [{"compute": {"set": "y", "expr": "1"}}]},
+    {
+        "while": "True", "max_iterations": 2.9,
+        "steps": [{"compute": {"set": "y", "expr": "1"}}],
+    },
+])
+def test_repeat_rejects_fractional_iteration_limits(repeat):
+    yaml_doc = yaml.safe_load(textwrap.dedent(SAMPLE_YAML))
+    yaml_doc["recipes"]["fractional"] = {
+        "steps": [{"repeat": repeat}],
+    }
+    defn = InstrumentDefinition(**yaml_doc)
+
+    with pytest.raises(SeqExpressionError, match="整数"):
+        recipe_to_plan(
+            defn.recipes["fractional"], {}, definition=defn,
+        )
+
+
 # ============================================================
 # 3. guard
 # ============================================================

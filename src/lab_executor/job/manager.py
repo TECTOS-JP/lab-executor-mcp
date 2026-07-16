@@ -3013,6 +3013,12 @@ class JobManager:
                     )
                     return
 
+                # 最終stepの実行中にdeadlineを越えた場合もCOMPLETEDへ落とさない。
+                # 次イテレーションが無いので、末尾で検査しないと見逃す。
+                if runtime.is_timed_out():
+                    self._record_timeout(rec, idx, step_results)
+                    return
+
                 # ループ末尾の cancel チェック。
                 # 「最後の step 完了直後に cancel された」ケースを救うため必要。
                 # 中間 step の場合は次イテレーション先頭のチェックと等価。

@@ -24,6 +24,7 @@ from lab_executor.code_policy import (
     load_policy, sha256_file, sha256_text,
 )
 from lab_executor.models.instrument_def import InstrumentDefinition
+from lab_executor.instrument_registry import InstrumentRegistry
 from lab_executor.recipe_executor import execute_recipe, recipe_to_plan
 from lab_executor.experiment_ir import DllStep, PyStep
 from lab_executor.utils.seq_expression import SeqExpressionError
@@ -172,6 +173,35 @@ async def test_py_timeout():
 
 
 @pytest.mark.asyncio
+async def test_py_worker_is_terminated_when_parent_task_is_cancelled(tmp_path):
+    from lab_executor.code_exec import run_py
+
+    marker = tmp_path / "worker-survived.txt"
+    code = (
+        "import time\n"
+        "from pathlib import Path\n"
+        "time.sleep(0.8)\n"
+        f"Path({str(marker)!r}).write_text('survived', encoding='utf-8')\n"
+    )
+    task = asyncio.create_task(run_py(
+        code=code,
+        file_path=None,
+        inputs={},
+        outputs=[],
+        params={},
+        env={},
+        timeout_s=10,
+    ))
+    await asyncio.sleep(0.1)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await asyncio.sleep(1.0)
+
+    assert not marker.exists()
+
+
+@pytest.mark.asyncio
 async def test_py_file_with_main_and_sha256_event(tmp_path, monkeypatch):
     scripts = tmp_path / "scripts"
     scripts.mkdir()
@@ -266,6 +296,67 @@ def test_policy_hash_pinned(tmp_path, monkeypatch):
     })
     with pytest.raises(SeqExpressionError, match="pinned"):
         recipe_to_plan(defn2.recipes["other"], {}, definition=defn2)
+
+
+def _write_policy_instrument(tmp_path: Path) -> InstrumentDefinition:
+    raw = {
+        "metadata": {"manufacturer": "Test", "model": "PolicyRig"},
+        "recipes": {
+            "code": {
+                "steps": [{
+                    "py": {
+                        "code": "out['v'] = 1",
+                        "outputs": ["v"],
+                        "timeout_s": 5,
+                    },
+                }],
+            },
+        },
+    }
+    (tmp_path / "policy_rig.yaml").write_text(
+        yaml.safe_dump(raw, sort_keys=False), encoding="utf-8",
+    )
+    definition = InstrumentRegistry(tmp_path).get_definition("Test", "PolicyRig")
+    assert definition is not None
+    return definition
+
+
+def test_registry_definition_uses_adjacent_policy_at_compile_time(tmp_path):
+    _write_policy(tmp_path, """
+        code_execution:
+          python: deny
+    """)
+    definition = _write_policy_instrument(tmp_path)
+
+    with pytest.raises(SeqExpressionError, match="deny"):
+        recipe_to_plan(definition.recipes["code"], {}, definition=definition)
+
+
+@pytest.mark.asyncio
+async def test_adjacent_policy_is_reloaded_for_runtime_recheck(tmp_path):
+    _write_policy(tmp_path, """
+        code_execution:
+          python: allow
+    """)
+    definition = _write_policy_instrument(tmp_path)
+    plan = recipe_to_plan(
+        definition.recipes["code"], {}, definition=definition,
+    )
+    assert plan.steps[0].policy_dir == str(tmp_path.resolve())
+
+    # 管理者がcompile後にdenyへ変更した場合も、実行直前ゲートで止める。
+    _write_policy(tmp_path, """
+        code_execution:
+          python: deny
+    """)
+    from lab_executor import seq_runtime
+    from lab_executor.experiment_ir import VariableStore
+
+    result = await seq_runtime.process_py_step(
+        plan.steps[0], VariableStore(params={}, env={}),
+    )
+    assert result["success"] is False
+    assert result["error"] == "policy_violation"
 
 
 def test_policy_dll_default_effectively_deny():
@@ -414,6 +505,49 @@ async def test_runtime_sha256_recheck(tmp_path, monkeypatch):
     assert result["success"] is False
     assert result["error"] == "policy_violation"
     assert "sha256" in result["message"]
+
+
+@pytest.mark.asyncio
+async def test_py_file_executes_verified_snapshot_when_path_is_swapped(
+    tmp_path, monkeypatch,
+):
+    """The worker must not reopen a file after the runtime hash check."""
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    script = scripts / "calc.py"
+    script.write_text("out['v'] = 1\n", encoding="utf-8")
+    _write_policy(tmp_path, """
+        code_execution:
+          python: allow
+          scripts_dir: ./scripts
+    """)
+    monkeypatch.setenv("LAB_EXECUTOR_POLICY_DIR", str(tmp_path))
+    defn = _defn({
+        "pyfile_snapshot": {
+            "steps": [
+                {"py": {"file": "calc.py", "outputs": ["v"], "timeout_s": 30}},
+            ],
+        },
+    })
+    plan = recipe_to_plan(
+        defn.recipes["pyfile_snapshot"], {}, definition=defn,
+    )
+
+    from lab_executor import code_exec, seq_runtime
+    from lab_executor.experiment_ir import VariableStore
+
+    original_run_py = code_exec.run_py
+
+    async def swap_source_then_run(**kwargs):
+        script.write_text("out['v'] = 999\n", encoding="utf-8")
+        return await original_run_py(**kwargs)
+
+    monkeypatch.setattr(code_exec, "run_py", swap_source_then_run)
+    store = VariableStore(params={}, env={})
+    result = await seq_runtime.process_py_step(plan.steps[0], store)
+
+    assert result["success"] is True, result
+    assert store.as_ctx()["vars"]["v"] == 1
 
 
 # ============================================================

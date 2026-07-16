@@ -503,6 +503,7 @@ class PyStep(BaseModel):
     code: str | None = None
     resolved_path: str = ""            # file 型のみ: 解決済み絶対 path
     sha256: str = ""
+    policy_dir: str = ""               # 実行時再検証用 (_policy.yaml のdir)
     inputs: dict[str, str] = Field(default_factory=dict)
     outputs: list[str] = Field(default_factory=list)
     timeout_s: float = 60.0
@@ -545,6 +546,7 @@ class DllStep(BaseModel):
     out_args: dict[str, str] = Field(default_factory=dict)
     result_as: str | None = None
     sha256: str = ""
+    policy_dir: str = ""               # 実行時再検証用 (_policy.yaml のdir)
     timeout_s: float = 30.0
     on_error: Literal["abort", "safe_shutdown", "pause"] = "abort"
     description: str = ""
