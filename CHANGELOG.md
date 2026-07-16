@@ -1,5 +1,48 @@
 # 変更履歴
 
+## v2.34.1 — シーケンス処理拡張 独立レビュー指摘の修正 (Codex レビュー + Codex 修正 + Opus 独立検証)
+
+合言葉: **「安全の防衛線を、テストの happy path でなく攻撃者視点で塞ぐ」**
+
+Codex による独立レビューで検出された 10 件 (Critical 2 / High 6 / Medium 1 / Low 1)
+を修正。Opus が攻撃的再現テストで独立検証済み。
+
+### セキュリティ
+
+- **式評価器の NumPy を denylist から純粋計算 allowlist へ転換** (Critical)。
+  `np.ctypeslib.load_library` 等による任意 DLL ロード (= 任意ネイティブコード
+  実行) を阻止。allocator (`np.zeros/ones/arange`) も allowlist 外として
+  確保前に拒否される。
+- **サブシーケンス `call.bind` を主装置のみに制限し fail-closed 化** (Critical)。
+  従来は `@role` を別装置へ束縛しても主装置へ誤送信され success 扱いだった。
+  compile 時と実行直前の二段 gate (`CrossInstrumentCallUnsupported`) で拒否。
+  複数装置ルーティングは今後の機能課題。
+- **親 recipe の `requires.ranges` をサブシーケンスへ継承** (High)。
+  call 境界で親の安全上限が失われ、上限超過値が装置へ届く問題を修正。
+- **機器定義ディレクトリ直下の `_policy.yaml` を compile / runtime で自動適用**
+  (High)。従来は環境変数を設定しないと `python: deny` が効かず、管理者が
+  deny を書いても既定 allow が使われていた。`InstrumentDefinition._source_dir`
+  (registry が設定・YAML 非露出) を起点に隣接ポリシーを確実に選ぶ。
+
+### 堅牢性
+
+- **py/dll は hash 検証済みの bytes を実行** (High、TOCTOU 解消)。worker が
+  path を再オープンせず、親が検証した同一 bytes (DLL は private copy) を使う。
+- **cancel / timeout 時に code worker のプロセスツリーを終了・回収** (High)。
+  `asyncio.subprocess` 化 + `taskkill /T /F` / `killpg`。
+- **最終 step 実行中に job deadline を越えた場合も TIMEOUT 化** (High)。
+  従来は完了後 cancel のみ確認し COMPLETED へ落ちる経路があった。
+
+### 契約の整合
+
+- call 内の未対応 pause / `on_error=pause` をコンパイル時拒否 (Medium)。
+- fractional な `repeat count` / `max_iterations` の黙示切捨てを拒否 (Low)。
+
+### 互換性
+
+- MCP tool surface 不変 (50)。`utils/expression.py` / `condition.py` 不変。
+- 全スイート 2015 passed / 28 skipped / 0 failed。version を `2.34.1` に更新。
+
 ## v2.34.0 — シーケンス処理拡張 SP-7 の残課題: 実行時 with + UI ライブラリブラウザ
 
 合言葉: **「呼び出し元の測定値もサブルーチンへ、ライブラリは一覧で見える」**
