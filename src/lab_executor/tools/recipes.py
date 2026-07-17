@@ -66,5 +66,6 @@ def register_tools(mcp: FastMCP, session_mgr: SessionManager) -> None:
         result = await _execute_recipe(
             session_mgr._visa, session, recipe_name, parameters,
             override_safety=override_safety, override_reason=override_reason,
+            session_resolver=session_mgr.get_session,
         )
         return result

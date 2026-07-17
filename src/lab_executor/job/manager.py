@@ -382,6 +382,7 @@ class JobManager:
             tentative_plan = recipe_to_plan(
                 recipe, variables, primary_resource=resource_name,
                 definition=session.definition,
+                session_resolver=self._sessions.get_session,
             )
             required_resources = list(tentative_plan.required_resources) or [resource_name]
         except Exception:
@@ -1874,6 +1875,7 @@ class JobManager:
                 plan = recipe_to_plan(
                     recipe, variables, primary_resource=primary_resource,
                     definition=primary_session.definition,
+                    session_resolver=self._session_for_alias_or_resource,
                 )
                 # required_resources は plan.required_resources + bindings 全部
                 target_resources = collect_target_resources(bindings, self._system_config)
@@ -2709,6 +2711,7 @@ class JobManager:
             plan: Plan = recipe_to_plan(
                 recipe, variables, primary_resource=rec.resource_name,
                 definition=session.definition,
+                session_resolver=self._sessions.get_session,
             )
         except Exception as e:
             self._store.transition_status(
@@ -2737,8 +2740,52 @@ class JobManager:
             env={"job_id": job_id, "started_at": _dt.datetime.now().isoformat()},
         )
 
+        written_resources: set[str] = set()
+
+        def _record_write(resource: str) -> None:
+            written_resources.add(resource)
+
         async def _job_safe_shutdown() -> dict:
-            return await self._best_effort_safe_shutdown(session)
+            resources: dict[str, dict] = {}
+            all_ok = True
+            legacy_single = set(plan.required_resources or [session.resource_name]) <= {
+                session.resource_name,
+            }
+            shutdown_resources = (
+                written_resources
+                or ({session.resource_name} if legacy_single else set())
+            )
+            for resource in sorted(shutdown_resources):
+                try:
+                    target = self._sessions.get_session(resource)
+                    if target is None:
+                        result = {
+                            "attempted": False, "success": False,
+                            "error": "InstrumentNotAvailable",
+                        }
+                    elif target.definition is None:
+                        result = {
+                            "attempted": False, "success": False,
+                            "error": "NoDefinitionFound",
+                        }
+                    else:
+                        result = await self._best_effort_safe_shutdown(target)
+                except Exception as e:  # noqa: BLE001
+                    result = {
+                        "attempted": True, "success": False,
+                        "error": type(e).__name__, "message": str(e),
+                    }
+                resources[resource] = result
+                all_ok = all_ok and bool(result.get("success"))
+            if list(resources) == [session.resource_name]:
+                # Preserve the established single-instrument cancel/result
+                # schema (source, fallback metadata, attempted semantics).
+                return resources[session.resource_name]
+            return {
+                "attempted": bool(shutdown_resources),
+                "success": all_ok,
+                "resources": resources,
+            }
 
         # v2.29.0 (SP-3): branch / repeat 内のリーフ step 実行コールバック (Job 経路)。
         # command は SP-1/2 と同じ deferred/capture 付き実行、wait は slice +
@@ -2756,6 +2803,8 @@ class JobManager:
                         )
                     ),
                     safe_shutdown=_job_safe_shutdown,
+                    session_resolver=self._sessions.get_session,
+                    record_write=_record_write,
                 )
 
             async def _run_wait(st, path):
@@ -2780,6 +2829,7 @@ class JobManager:
                 if runtime.cancel_mode is not None:
                     await self._handle_cancel(
                         rec, session, runtime.cancel_mode, step_results,
+                        safe_shutdown=_job_safe_shutdown,
                     )
                     return
 
@@ -2847,6 +2897,8 @@ class JobManager:
                             )
                         ),
                         safe_shutdown=_job_safe_shutdown,
+                        session_resolver=self._sessions.get_session,
+                        record_write=_record_write,
                     )
                 elif isinstance(step, ComputeStep):
                     result = await seq_runtime.process_compute_step(
@@ -2991,6 +3043,7 @@ class JobManager:
                             rec, session,
                             runtime.cancel_mode or CancelMode.AFTER_CURRENT_STEP,
                             step_results,
+                            safe_shutdown=_job_safe_shutdown,
                         )
                         return
                     err_class = result.get("error", "internal")
@@ -3028,6 +3081,7 @@ class JobManager:
                     ):
                         await self._handle_cancel(
                             rec, session, runtime.cancel_mode, step_results,
+                            safe_shutdown=_job_safe_shutdown,
                         )
                         return
 
@@ -3379,6 +3433,7 @@ class JobManager:
         session,
         mode: CancelMode,
         step_results: list[dict],
+        safe_shutdown=None,
     ) -> JobStatus:
         """cancel 要求を実際に実行 (safe_shutdown なら shutdown シーケンス)"""
         job_id = rec.job_id
@@ -3386,7 +3441,11 @@ class JobManager:
         # v0.5.0.4: safe_shutdown は構造化結果 (dict) を返す
         shutdown_info: dict | None = None
         if mode is CancelMode.SAFE_SHUTDOWN:
-            shutdown_info = await self._best_effort_safe_shutdown(session)
+            shutdown_info = (
+                await safe_shutdown()
+                if safe_shutdown is not None
+                else await self._best_effort_safe_shutdown(session)
+            )
             step_results.append({
                 "step": -1, "step_type": "safe_shutdown",
                 "shutdown": shutdown_info,

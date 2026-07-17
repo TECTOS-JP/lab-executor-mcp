@@ -30,6 +30,7 @@ from .experiment_ir import (
 if TYPE_CHECKING:
     from .code_policy import CodePolicy
 from .models.instrument_def import InstrumentDefinition, RecipeDefinition, RecipeStep
+from .session import SessionResolver
 from .step_executor import execute_command_step, execute_wait_step
 from .utils.expression import resolve_arg, ExpressionError
 from .utils.seq_expression import (
@@ -214,6 +215,7 @@ def recipe_to_plan(
     definition: InstrumentDefinition | None = None,
     policy: "CodePolicy | None" = None,
     sequences_dir: str | None = None,
+    session_resolver: SessionResolver | None = None,
 ) -> Plan:
     """
     YAML の RecipeDefinition + 変数辞書 → IR Plan に変換する。
@@ -256,6 +258,7 @@ def recipe_to_plan(
         aux_resources=aux_resources, param_names=param_names,
         policy=policy, sequences=sequences, call_stack=(),
         primary_resource=primary_resource,
+        session_resolver=session_resolver,
     )
     plan_steps, estimate = conv.convert(
         recipe.steps,
@@ -313,6 +316,7 @@ class _StepConverter:
         sequences: dict[str, Any] | None = None,
         call_stack: tuple[str, ...] = (),
         primary_resource: str | None = None,
+        session_resolver: SessionResolver | None = None,
     ):
         self.recipe = recipe
         self.variables = variables
@@ -322,10 +326,35 @@ class _StepConverter:
         self._policy = policy   # None なら初回使用時に load_policy()
         self.sequences = sequences or {}   # v2.33.0 (SP-7)
         self.call_stack = call_stack       # 再帰検出用
-        # v2.34.x safety gate: SP-7 の command routing はまだ主 session 固定。
-        # 複数装置 call を「対応済み」に見せて誤装置へ送るより、bind を主装置に
-        # 制限して fail-closed にする。完全なmulti-session routingは別設計とする。
         self.primary_resource = primary_resource
+        self.session_resolver = session_resolver
+
+    def _definition_for_instrument(
+        self, resource: str | None, context: str, *, strict: bool = False,
+    ) -> InstrumentDefinition | None:
+        """Resolve the target definition without falling back to the primary."""
+        if not resource or resource == self.primary_resource:
+            return self.definition
+        if self.session_resolver is None:
+            # Direct plan conversion cannot inspect another session. Runtime
+            # remains the final fail-closed gate in this compatibility mode.
+            return self.definition if self.primary_resource is None else None
+        target = self.session_resolver(resource)
+        if target is None:
+            if strict:
+                raise SeqExpressionError(
+                    f"{context}: InstrumentNotAvailable: target={resource!r}, "
+                    f"primary={self.primary_resource!r}"
+                )
+            return None
+        target_definition = getattr(target, "definition", None)
+        if target_definition is None:
+            if strict:
+                raise SeqExpressionError(
+                    f"{context}: NoDefinitionFound: target={resource!r}"
+                )
+            return None
+        return target_definition
 
     @property
     def policy(self) -> "CodePolicy":
@@ -814,31 +843,25 @@ class _StepConverter:
             )
         # --- bind とロール capability 照合 ---
         bind = {str(k): str(v) for k, v in (cl.get("bind") or {}).items()}
-        if self.primary_resource is not None:
-            cross = {
-                role: target for role, target in bind.items()
-                if target != self.primary_resource
-            }
-            if cross:
-                raise SeqExpressionError(
-                    f"{spath}: call.bind の複数装置ルーティングは未対応です。"
-                    f"全ロールを主装置 '{self.primary_resource}' に束縛してください: "
-                    f"{cross}"
-                )
         for role in seq.roles:
             if role.name not in bind:
                 raise SeqExpressionError(
                     f"{spath}: ロール '{role.name}' が call.bind で束縛されていません"
                 )
-            if role.requires is not None and self.definition is not None:
-                m = match_capabilities(role.requires, self.definition)
-                if not m.get("satisfied", False):
-                    raise SeqExpressionError(
-                        f"{spath}: ロール '{role.name}' の capability 要件を "
-                        f"bind 先装置が満たしません: "
-                        f"missing={m.get('missing_commands')} "
-                        f"ranges={m.get('range_violations')}"
-                    )
+            if role.requires is not None:
+                target_definition = self._definition_for_instrument(
+                    bind[role.name], f"{spath}: role '{role.name}'",
+                    strict=self.session_resolver is not None,
+                )
+                if target_definition is not None:
+                    m = match_capabilities(role.requires, target_definition)
+                    if not m.get("satisfied", False):
+                        raise SeqExpressionError(
+                            f"{spath}: ロール '{role.name}' の capability 要件を "
+                            f"bind 先装置が満たしません: "
+                            f"missing={m.get('missing_commands')} "
+                            f"ranges={m.get('range_violations')}"
+                        )
         # --- with の解決 ---
         # コンパイル時解決値 (定数 / 呼び出し元 $param) は sub_params へ →
         #   サブ内で $X (コンパイル時) と params.X (実行時) の両方で参照可。
@@ -903,6 +926,7 @@ class _StepConverter:
             policy=self._policy, sequences=self.sequences,
             call_stack=self.call_stack + (name,),
             primary_resource=self.primary_resource,
+            session_resolver=self.session_resolver,
         )
         sub_steps, est = sub_conv.convert(
             raw_steps,
@@ -1099,6 +1123,10 @@ class _StepConverter:
         defined_steps: set[str], defined_vars: set[str],
         env_names: set[str], spath: str,
     ) -> CommandStep:
+        instrument = getattr(rs, "instrument", None)
+        if instrument and instrument != self.primary_resource:
+            self.aux_resources.add(instrument)
+        target_definition = self._definition_for_instrument(instrument, spath)
         resolved_args: dict[str, Any] = {}
         deferred_args: dict[str, Any] = {}
         for k, v in rs.args.items():
@@ -1111,7 +1139,7 @@ class _StepConverter:
                     context=f"{spath} {rs.command}.{k} (${{...}})",
                 )
                 mn, mx = _resolve_range_decl(
-                    self.recipe, self.definition, rs.command or "", k,
+                    self.recipe, target_definition, rs.command or "", k,
                 )
                 deferred_args[k] = {"expr": expr, "min": mn, "max": mx}
             else:
@@ -1126,7 +1154,7 @@ class _StepConverter:
             value_path=rs.value_path or "",
             unit=rs.unit or "",
             description=rs.description,
-            instrument=getattr(rs, "instrument", None),
+            instrument=instrument,
             stagger_ms=getattr(rs, "stagger_ms", None),
         )
 
@@ -1142,6 +1170,7 @@ async def execute_plan(
     recipe_name: str | None = None,
     override_safety: bool = False,
     override_reason: str = "",
+    session_resolver: SessionResolver | None = None,
 ) -> dict:
     """
     IR Plan を実行する。返り値の形式は execute_recipe と同じ (後方互換)。
@@ -1155,43 +1184,12 @@ async def execute_plan(
             "steps_executed": [],
         }
 
-    # SP-7 safety gate: recipe_to_plan(primary_resource=None) で作られたPlanでも、
-    # call内のcommandを別装置へ送ったつもりで主sessionへ誤送信しないよう実行直前に
-    # 再検証する。完全な複数装置routingが実装されるまでは単一装置に限定する。
-    def _cross_in_call(steps: list[Step], *, inside_call: bool = False) -> str | None:
-        for st in steps:
-            if isinstance(st, CommandStep):
-                if inside_call and st.instrument and st.instrument != session.resource_name:
-                    return st.instrument
-            elif isinstance(st, BranchStep):
-                for case in st.cases:
-                    bad = _cross_in_call(case.steps, inside_call=inside_call)
-                    if bad:
-                        return bad
-            elif isinstance(st, RepeatStep):
-                bad = _cross_in_call(st.body, inside_call=inside_call)
-                if bad:
-                    return bad
-            elif isinstance(st, CallStep):
-                bad = _cross_in_call(st.sub_steps, inside_call=True)
-                if bad:
-                    return bad
-        return None
-
-    cross_target = _cross_in_call(plan.steps)
-    if cross_target is not None:
-        return {
-            "success": False,
-            "recipe": recipe_name or plan.name,
-            "error": "CrossInstrumentCallUnsupported",
-            "message": (
-                "call.bind の複数装置ルーティングは未対応です。"
-                f"主装置={session.resource_name!r}, bind先={cross_target!r}"
-            ),
-            "steps_executed": [],
-        }
-
     step_results: list[dict] = []
+    resolve_session = session_resolver or seq_runtime._primary_only_resolver(session)
+    written_resources: set[str] = set()
+
+    def _record_write(resource: str) -> None:
+        written_resources.add(resource)
 
     # v0.5.1.1 / v0.6.1: polling / barrier 系 step は同期 execute_recipe では実行不可。
     # LLM が誤って execute_recipe を選んだ場合に分かりやすく Job 化を促す。
@@ -1240,7 +1238,48 @@ async def execute_plan(
     )
 
     async def _safe_shutdown() -> dict:
-        return await _run_safe_shutdown_sync(visa, session)
+        resources: dict[str, dict] = {}
+        all_ok = True
+        # Preserve the established single-device behavior for recipes that
+        # request safe shutdown before their first write. Cross-device runs use
+        # the precise set of write-attempted resources.
+        legacy_single = set(plan.required_resources or [session.resource_name]) <= {
+            session.resource_name,
+        }
+        shutdown_resources = (
+            written_resources
+            or ({session.resource_name} if legacy_single else set())
+        )
+        for resource in sorted(shutdown_resources):
+            try:
+                target = resolve_session(resource)
+                if target is None:
+                    result = {
+                        "attempted": False, "success": False,
+                        "error": "InstrumentNotAvailable",
+                    }
+                elif target.definition is None:
+                    result = {
+                        "attempted": False, "success": False,
+                        "error": "NoDefinitionFound",
+                    }
+                else:
+                    result = await _run_safe_shutdown_sync(visa, target)
+            except Exception as e:  # noqa: BLE001
+                result = {
+                    "attempted": True, "success": False,
+                    "error": type(e).__name__, "message": str(e),
+                }
+            resources[resource] = result
+            all_ok = all_ok and bool(result.get("success"))
+        if list(resources) == [session.resource_name]:
+            # Preserve the public single-instrument shutdown schema.
+            return resources[session.resource_name]
+        return {
+            "attempted": bool(shutdown_resources),
+            "success": all_ok,
+            "resources": resources,
+        }
 
     # v2.29.0 (SP-3): branch / repeat 内のリーフ step 実行コールバック (同期経路)
     async def _nested_run_command(st: CommandStep, path: str, active_store) -> dict:
@@ -1250,6 +1289,8 @@ async def execute_plan(
             override_reason=override_reason,
             source_step_path=path,
             safe_shutdown=_safe_shutdown,
+            session_resolver=resolve_session,
+            record_write=_record_write,
         )
 
     async def _nested_run_wait(st: WaitStep, path: str) -> dict:
@@ -1313,6 +1354,8 @@ async def execute_plan(
                 override_reason=override_reason,
                 source_step_path=f"steps[{idx}]",
                 safe_shutdown=_safe_shutdown,
+                session_resolver=resolve_session,
+                record_write=_record_write,
             )
         else:
             # 将来 step type 追加時に備えた fallback
@@ -1392,6 +1435,7 @@ async def execute_recipe(
     parameters: dict[str, Any] | None,
     override_safety: bool = False,
     override_reason: str = "",
+    session_resolver: SessionResolver | None = None,
 ) -> dict:
     """
     指定の recipe を実行する。
@@ -1436,6 +1480,7 @@ async def execute_recipe(
             recipe, variables,
             primary_resource=session.resource_name,
             definition=session.definition,
+            session_resolver=session_resolver,
         )
     except (ExpressionError, SeqExpressionError) as e:
         return {
@@ -1452,4 +1497,5 @@ async def execute_recipe(
         recipe_name=recipe_name,
         override_safety=override_safety,
         override_reason=override_reason,
+        session_resolver=session_resolver,
     )

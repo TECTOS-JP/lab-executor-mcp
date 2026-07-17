@@ -448,6 +448,17 @@ def _dryrun_step_row(
             ctx["env"].pop("loop_index", None)
             row["iterations_omitted"] = True
 
+    # SP-7/SP-8: expose expanded substeps so UI users can inspect the target
+    # resource of every command before execution.
+    elif step_type == "call":
+        row["sequence"] = getattr(st, "sequence", "")
+        child_ctx = _copy_ctx(ctx)
+        child_ctx["params"].update(dict(getattr(st, "sub_params", {}) or {}))
+        row["steps"] = [
+            _dryrun_step_row(s, child_ctx, has_test)
+            for s in (getattr(st, "sub_steps", []) or [])
+        ]
+
     # capture 注記
     if getattr(st, "result_as", None):
         row["result_as"] = st.result_as
@@ -476,6 +487,23 @@ def dryrun_view(plan: Any, test_values: dict[str, Any] | None = None) -> dict[st
     has_test = bool(test_values)
 
     steps_out = [_dryrun_step_row(st, ctx, has_test) for st in plan.steps]
+
+    def _fill_effective_instrument(row: dict[str, Any]) -> None:
+        if row.get("type") == "command" and not row.get("instrument"):
+            row["instrument"] = getattr(plan, "resource_hint", None)
+        for case in row.get("cases", []) or []:
+            for child in case.get("steps", []) or []:
+                _fill_effective_instrument(child)
+        for iteration in row.get("iterations", []) or []:
+            for child in iteration.get("steps", []) or []:
+                _fill_effective_instrument(child)
+        for child in row.get("body", []) or []:
+            _fill_effective_instrument(child)
+        for child in row.get("steps", []) or []:
+            _fill_effective_instrument(child)
+
+    for row in steps_out:
+        _fill_effective_instrument(row)
 
     return {
         "name": getattr(plan, "name", ""),

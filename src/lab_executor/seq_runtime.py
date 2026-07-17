@@ -31,6 +31,7 @@ from .utils.seq_expression import SeqExpressionError, evaluate, evaluate_conditi
 EmitEvent = Callable[[str, dict], None]
 # safe_shutdown を実行する async callable。dict (実行サマリ) を返す
 SafeShutdown = Callable[[], Awaitable[dict]]
+RecordWrite = Callable[[str], None]
 
 
 def _primary_only_resolver(session: Any) -> SessionResolver:
@@ -120,6 +121,7 @@ async def process_command_step(
     emit_event: EmitEvent | None = None,
     safe_shutdown: SafeShutdown | None = None,
     session_resolver: SessionResolver | None = None,
+    record_write: RecordWrite | None = None,
 ) -> dict:
     """CommandStep を deferred 解決 + 範囲執行 + capture 付きで実行する。"""
     primary_resource = session.resource_name
@@ -195,6 +197,11 @@ async def process_command_step(
         call_step = step
 
     # --- 2. コマンド実行 ---
+    # A transport error does not prove that a write failed to reach hardware.
+    # Register before I/O so emergency shutdown conservatively includes it.
+    if target.definition.commands[step.command].type != "query" and record_write:
+        record_write(target_resource)
+
     result = await execute_command_step(
         visa, target, call_step,
         override_safety=override_safety, override_reason=override_reason,
