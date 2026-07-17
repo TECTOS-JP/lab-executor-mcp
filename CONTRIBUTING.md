@@ -96,12 +96,18 @@ strict gate を通すための最低ラインです。
 
 1. issue を立てる (再現手順 / 期待動作 / 環境)。新規 MCP tool は
    慎重に判断するため、まず discussion を推奨。
-2. branch を切る (`fix/<id>` / `feat/<id>`)。
+2. branch を切る (`fix/<id>` / `feat/<id>`)。**issue 番号が無い依頼なら
+   `fix/<短い説明>` で構わない** (英小文字ケバブケース。例:
+   `fix/worker-terminate-race`)。maintainer からの ID 指定を待つ必要はない。
 3. 必要なら関連 docs を更新。`docs/` 配下を touch する PR は歓迎。
 4. tests を回す (`python -m pytest -k "not hardware_integration"`)。
    ハードウェア依存テストは local hardware が無いと skip されるが、
    CI で network/visa を必要としないテストはすべて pass する必要あり。
-5. CHANGELOG.md に entry を追加。version は maintainer が bump。
+5. CHANGELOG.md の **`## Unreleased`** に entry を追加する
+   (無ければ `# 変更履歴` の直下に新設してよい)。
+   **version は bump しない** — maintainer がリリース時に `## Unreleased` を
+   `## vX.Y.Z — <タイトル>` へ書き換え、合言葉を添え、version を bump する。
+   合言葉はリリース単位の要約なので maintainer が付ける。
 
 ### 3.1 作業ディレクトリ: 別クローンではなく worktree
 
@@ -138,8 +144,8 @@ git worktree remove ../lab-executor-codex
   作らせない (指定を曖昧にすると古い別チェックアウトを掴むことがある)
 - 着手前に `git switch -c fix/<id>` でブランチを切らせ、`main` へ直接コミット
   させない。統合は maintainer が `--no-ff` で行う
-- **version は bump させない** (上記 5 のとおり maintainer の役割)。CHANGELOG の
-  entry 追加は依頼してよい
+- **version は bump させない** (上記 5 のとおり maintainer の役割)。CHANGELOG は
+  `## Unreleased` への entry 追加を依頼してよい
 - レビューや修正を別エージェントへ委ねた場合も、**別環境で追検証する**。
   タイミング依存の欠陥は速いマシンでは緑のまま通り抜けることがある
 
