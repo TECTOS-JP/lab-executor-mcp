@@ -1,5 +1,15 @@
 # 変更履歴
 
+<!--
+未リリースの変更はここに追記する (version は bump しない)。
+maintainer がリリース時にこの見出しを `## vX.Y.Z — <タイトル>` へ書き換え、
+合言葉を添えて version を bump する。詳細は CONTRIBUTING.md §3。
+-->
+
+## Unreleased
+
+(なし)
+
 ## v2.34.1 — シーケンス処理拡張 独立レビュー指摘の修正 (Codex レビュー + Codex 修正 + Opus 独立検証)
 
 合言葉: **「安全の防衛線を、テストの happy path でなく攻撃者視点で塞ぐ」**
