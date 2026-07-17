@@ -9,7 +9,11 @@ v2.3 では新規追加のみ (既存 _SessionFacade / SessionManager との
 動作互換は維持)。
 """
 from __future__ import annotations
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Callable, Protocol, TypeAlias, runtime_checkable
+
+
+# polling_executor とシーケンス実行経路で共有する、最小の session 解決契約。
+SessionResolver: TypeAlias = Callable[[str], Any | None]
 
 
 @runtime_checkable
