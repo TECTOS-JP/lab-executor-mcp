@@ -103,6 +103,46 @@ strict gate を通すための最低ラインです。
    CI で network/visa を必要としないテストはすべて pass する必要あり。
 5. CHANGELOG.md に entry を追加。version は maintainer が bump。
 
+### 3.1 作業ディレクトリ: 別クローンではなく worktree
+
+正規リポジトリは 1 つだけとし、**コードをコピーした別クローンで作業しない**。
+別クローンは履歴が分岐し、古いチェックアウトを最新と誤認する事故につながる。
+
+並行作業が必要なら `git worktree` を使う。別ディレクトリだが**コピーではなく**、
+同一リポジトリの履歴・ブランチ・オブジェクトを共有する。
+
+```bash
+# 作業用 worktree を用意する (一度だけ)
+git worktree add --detach ../lab-executor-codex main
+
+# 作業のたびに「場所は変えず」ブランチを切る
+cd ../lab-executor-codex
+git switch -c fix/<id> main
+
+# 不要になったら
+git worktree remove ../lab-executor-codex
+```
+
+- 同一ブランチを複数の worktree で同時に checkout できない仕様が衝突防止になる
+- worktree でのコミットは主リポジトリから fetch なしで即座に見える
+
+**import の注意**: `pip install -e .` は主リポジトリを指すため、worktree 内で
+`python -c "import lab_executor"` すると **主リポジトリのコード**を読んでしまう。
+`python -m pytest` は root の `conftest.py` がその worktree の `src/` を
+`sys.path` 先頭へ挿すので正しく解決される。pytest 以外で worktree のコードを
+動かすときは `PYTHONPATH=<worktree>/src` を明示する。
+
+### 3.2 AI エージェント (Claude / Codex 等) へ依頼するとき
+
+- cwd は**正規リポジトリか、その worktree** を明示的に指定する。新しい clone を
+  作らせない (指定を曖昧にすると古い別チェックアウトを掴むことがある)
+- 着手前に `git switch -c fix/<id>` でブランチを切らせ、`main` へ直接コミット
+  させない。統合は maintainer が `--no-ff` で行う
+- **version は bump させない** (上記 5 のとおり maintainer の役割)。CHANGELOG の
+  entry 追加は依頼してよい
+- レビューや修正を別エージェントへ委ねた場合も、**別環境で追検証する**。
+  タイミング依存の欠陥は速いマシンでは緑のまま通り抜けることがある
+
 ## 4. ポリシー
 
 - **新規 MCP tool 追加は最小限**。CLI 化で済む機能は CLI に閉じる
