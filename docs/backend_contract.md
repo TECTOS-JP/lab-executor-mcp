@@ -89,6 +89,16 @@ def make_backend(config: dict | None = None) -> BackendRegistration: ...
 `prefixes: tuple[str, ...]`. Factory/import failure disables only that child and
 emits a warning; it never grants its resources to another backend.
 
+Discovery is available as:
+
+```python
+discover_backends(names: list[str] | None) -> list[BackendRegistration]
+```
+
+`None` discovers every installed entry point. A name list selects only those
+entry points. Runtime configuration may additionally be supplied by the
+composition layer and is passed unchanged to the matching factory.
+
 ## Declarative selection
 
 `lab-executor serve --backends visa,modbus` has highest priority. If absent, a
@@ -96,3 +106,37 @@ emits a warning; it never grants its resources to another backend.
 neither is present, the legacy `--backend` value is used. Exactly one selected
 backend is returned directly and is not wrapped in `CompositeBackend`; this
 preserves the existing `--backend mock` path.
+
+The conventional YAML location is `instruments/_system.yaml`. The preferred
+mapping form names each entry point and passes its value to the factory:
+
+```yaml
+backends:
+  visa:
+    library: "@ivi"
+  modbus:
+    port: COM3
+```
+
+An empty mapping selects a backend with no configuration. A list form is also
+accepted for UI authoring tools:
+
+```yaml
+backends:
+  - name: visa
+    config: {library: "@ivi"}
+  - name: modbus
+    config: {port: COM3}
+```
+
+CLI `--backends` selects names only and therefore does not merge factory config
+from YAML. Selection precedence is strictly:
+
+1. `serve --backends name1,name2`
+2. `instruments/_system.yaml` `backends:`
+3. legacy `serve --backend mock`
+
+Unknown, duplicate, or failed entry points are never replaced by another child.
+If no selected backend can be constructed, server startup fails. If one child
+survives it is returned directly; if two or more survive they are wrapped in a
+`CompositeBackend`.

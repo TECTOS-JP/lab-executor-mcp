@@ -10,6 +10,14 @@ maintainer がリリース時にこの見出しを `## vX.Y.Z — <タイトル>
 
 ### 機能
 
+- **Backend Expansion Foundation (BEF)**: `InstrumentBackend` の凍結契約と
+  再利用可能な適合キットを追加。`lab_executor.backends` entry point による
+  backend 発見、最長 resource prefix 一致で厳格に振り分ける
+  `CompositeBackend`、`serve --backends` / `_system.yaml` `backends:` による
+  宣言的構成を追加した。単一 backend は従来どおり wrapper なしで使用する。
+- backend plugin の import / factory 失敗は警告してその子だけ除外する。
+  未知 resource は `ResourceRoutingError` で fail-closed とし、別 backend への
+  fallback は行わない。prefix 衝突は起動時に拒否する。
 - **SP-8 クロス装置ルーティング**: recipe / sequence の `instrument` と
   `call.bind` を session resolver で解決し、同期実行と Recipe Job の双方で
   複数の VISA 装置へ正しくルーティングする。送信先装置自身のコマンド定義・
