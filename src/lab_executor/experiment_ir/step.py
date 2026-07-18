@@ -62,6 +62,8 @@ class CommandStep(BaseModel):
     # コンパイル時は解決せず deferred として保持し、ステップ実行直前に評価 + 範囲執行する。
     # min/max は ParameterDefinition.range と requires.ranges の積集合 (片側可)。
     deferred_args: dict[str, Any] = Field(default_factory=dict)
+    # v2.35.0 (SP-9): command 失敗時の処理。コンパイル時に recipe 既定を解決済み。
+    on_error: Literal["abort", "safe_shutdown"] = "abort"
 
     @field_validator("stagger_ms")
     @classmethod

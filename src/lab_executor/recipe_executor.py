@@ -911,6 +911,7 @@ class _StepConverter:
             # callはinline expansionであり、親recipeの安全制約を弱めてはならない。
             # requires.rangesを子commandにも適用し、装置rangeとの積集合を維持する。
             steps=[], requires=self.recipe.requires,
+            on_error=self.recipe.on_error,
         )
         # param_names: サブ内で params.X 参照が有効な名前。
         # 実行時 with (runtime_param_names) も params.X としては参照可なので含める。
@@ -1156,6 +1157,7 @@ class _StepConverter:
             description=rs.description,
             instrument=instrument,
             stagger_ms=getattr(rs, "stagger_ms", None),
+            on_error=rs.on_error if rs.on_error is not None else self.recipe.on_error,
         )
 
 
