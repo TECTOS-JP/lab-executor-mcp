@@ -126,10 +126,24 @@ async def process_command_step(
     """CommandStep を deferred 解決 + 範囲執行 + capture 付きで実行する。"""
     primary_resource = session.resource_name
     target_resource = step.instrument or primary_resource
+
+    async def _apply_on_error(result: dict) -> dict:
+        """Annotate a failed command exactly like compute failures."""
+        if result.get("success", False):
+            return result
+        shutdown = None
+        if step.on_error == "safe_shutdown" and safe_shutdown:
+            shutdown = await safe_shutdown()
+        return {
+            **result,
+            "on_error": step.on_error,
+            "safe_shutdown": shutdown,
+        }
+
     resolve = session_resolver or _primary_only_resolver(session)
     target = resolve(target_resource)
     if target is None:
-        return {
+        return await _apply_on_error({
             "command": step.command,
             "instrument": target_resource,
             "success": False,
@@ -138,17 +152,17 @@ async def process_command_step(
                 f"指定装置 {target_resource!r} を解決できません "
                 f"(主装置={primary_resource!r})"
             ),
-        }
+        })
     if target.definition is None:
-        return {
+        return await _apply_on_error({
             "command": step.command,
             "instrument": target_resource,
             "success": False,
             "error": "NoDefinitionFound",
             "message": f"送信先装置 {target_resource!r} に機器定義がありません",
-        }
+        })
     if step.command not in target.definition.commands:
-        return {
+        return await _apply_on_error({
             "command": step.command,
             "instrument": target_resource,
             "success": False,
@@ -157,7 +171,7 @@ async def process_command_step(
                 f"コマンド {step.command!r} は送信先装置 "
                 f"{target_resource!r} の定義にありません"
             ),
-        }
+        })
     resolved_args = dict(step.args)
 
     # --- 1. ${...} 実行時引数の解決 + 範囲執行 ---
@@ -165,11 +179,11 @@ async def process_command_step(
         try:
             resolved, infos = resolve_deferred(step, store)
         except SeqExpressionError as e:
-            return {
+            return await _apply_on_error({
                 "command": step.command, "instrument": target_resource,
                 "success": False,
                 "error": "deferred_resolve_failed", "message": str(e),
-            }
+            })
         resolved_args.update(resolved)
         if emit_event:
             for info in infos:
@@ -177,6 +191,8 @@ async def process_command_step(
                            {**info, "step_path": source_step_path})
         violated = [i for i in infos if not i["in_range"]]
         if violated:
+            # Runtime range enforcement is the safety floor: it always shuts
+            # down, even when the command policy is on_error=abort (SP-2/SP-9).
             shutdown = await safe_shutdown() if safe_shutdown else None
             return {
                 "command": step.command, "instrument": target_resource,
@@ -212,29 +228,29 @@ async def process_command_step(
     if result.get("success") and step.result_as:
         val = extract_capture_value(result, step.value_path or "")
         if val is None:
-            return {
+            return await _apply_on_error({
                 **result, "success": False, "error": "capture_failed",
                 "message": (
                     f"result_as '{step.result_as}' の値を抽出できません "
                     f"(value_path={step.value_path!r})"
                 ),
-            }
+            })
         try:
             store.set_step(
                 step.result_as, val,
                 source_step_path=source_step_path, unit=step.unit or "",
             )
         except (VariableStoreError, TypeError) as e:
-            return {
+            return await _apply_on_error({
                 **result, "success": False, "error": "capture_failed",
                 "message": str(e),
-            }
+            })
         if emit_event:
             emit_event("var_assigned", store.events[-1])
         result = {**result, "captured": {
             "name": step.result_as, "value": val, "unit": step.unit or "",
         }}
-    return result
+    return await _apply_on_error(result)
 
 
 async def process_compute_step(

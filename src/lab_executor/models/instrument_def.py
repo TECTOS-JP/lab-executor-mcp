@@ -249,6 +249,8 @@ class RecipeStep(BaseModel):
     # v2.28.0 (SP-1): capture 拡張。result_as で登録する値の抽出パスと単位注記。
     value_path: str = ""                    # 例 "parsed.value"。未指定は寛容抽出
     unit: str = ""                          # 注記 (計算には関与しない)
+    # v2.35.0 (SP-9): command step の明示値。None は recipe 既定を継承。
+    on_error: Literal["abort", "safe_shutdown"] | None = None
     # v2.28.0 (SP-1): compute (演算) ステップ。{set, expr, unit?, on_error?}
     compute: dict[str, Any] | None = None
     # v2.29.0 (SP-3): branch / repeat / guard。
@@ -577,6 +579,8 @@ class RecipeDefinition(BaseModel):
     description: str = ""
     parameters: list[ParameterDefinition] = Field(default_factory=list)
     steps: list[RecipeStep] = Field(default_factory=list)
+    # v2.35.0 (SP-9): command step の失敗時ポリシー既定。
+    on_error: Literal["abort", "safe_shutdown"] = "abort"
     # v2.25.0 (実験資産 L4): 代替装置追試のための capability 要件宣言。
     # optional。未指定 (None) の既存レシピは検証結果が一切変わらない。
     requires: CapabilityRequirements | None = None

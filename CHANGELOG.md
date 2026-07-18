@@ -22,6 +22,10 @@ maintainer がリリース時にこの見出しを `## vX.Y.Z — <タイトル>
 
 - resolver 未指定・未知の装置・定義なし・送信先にコマンドなしを fail-closed にし、
   主装置への暗黙フォールバックと誤送信を防止する。
+- **SP-9 command 失敗時 safe shutdown ポリシー**: command step に
+  `on_error: abort | safe_shutdown` を追加し、step 明示値、recipe 既定、`abort`
+  の優先順で解決する。通信・パラメータ検証・capture 等の失敗時に、SP-8 が
+  記録した書込対象装置を安全停止できる。deferred 範囲違反の無条件 shutdown は維持。
 
 ## v2.34.1 — シーケンス処理拡張 独立レビュー指摘の修正 (Codex レビュー + Codex 修正 + Opus 独立検証)
 
