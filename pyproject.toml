@@ -48,6 +48,9 @@ dev = [
 [project.scripts]
 lab-executor = "lab_executor.cli:main"
 
+[project.entry-points."lab_executor.backends"]
+mock = "lab_executor.backends.discovery:make_mock_backend"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/lab_executor"]
 

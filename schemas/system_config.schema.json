@@ -109,6 +109,34 @@
       },
       "title": "Experiment Units",
       "type": "object"
+    },
+    "backends": {
+      "description": "BEF-2 backend entry-point names and optional factory configuration",
+      "title": "Backends",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object"
+          }
+        },
+        {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {"type": "string", "minLength": 1},
+              {
+                "type": "object",
+                "required": ["name"],
+                "properties": {
+                  "name": {"type": "string", "minLength": 1},
+                  "config": {"type": "object"}
+                }
+              }
+            ]
+          }
+        }
+      ]
     }
   },
   "title": "System Configuration (_system.yaml) (v1.0 stable)",

@@ -168,6 +168,13 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Backend to use (v2.1: mock only); required argument",
     )
     sp_serve.add_argument(
+        "--backends", default=None,
+        help=(
+            "BEF-2 backend entry-point names (comma-separated). Takes "
+            "priority over instruments/_system.yaml and --backend"
+        ),
+    )
+    sp_serve.add_argument(
         "--dry-run", action="store_true",
         help="Compose server and list tools only (no transport start)",
     )
@@ -698,6 +705,15 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _cmd_serve(args: argparse.Namespace) -> int:
+    try:
+        selected = _resolve_declared_backends(args)
+    except (OSError, ValueError) as exc:
+        print(f"invalid backend configuration: {exc}", file=sys.stderr)
+        return 2
+    if selected is not None:
+        names, configs = selected
+        return _cmd_serve_discovered(args, names, configs)
+
     if args.backend is None:
         # ASCII-only stderr (subprocess decode 安全性)
         print(
@@ -801,6 +817,128 @@ def _cmd_serve(args: argparse.Namespace) -> int:
 
     print(f"unsupported backend: {args.backend}", file=sys.stderr)
     return 2
+
+
+def _resolve_declared_backends(
+    args: argparse.Namespace,
+) -> tuple[list[str], dict[str, dict]] | None:
+    """Resolve BEF-2 selection without touching the legacy serve path."""
+    cli_value = getattr(args, "backends", None)
+    if cli_value is not None:
+        names = [name.strip() for name in cli_value.split(",")]
+        if not names or any(not name for name in names):
+            raise ValueError("--backends requires comma-separated non-empty names")
+        if len(set(names)) != len(names):
+            raise ValueError("--backends must not contain duplicate names")
+        return names, {}
+
+    from pathlib import Path
+
+    system_path = Path("instruments") / "_system.yaml"
+    if not system_path.exists():
+        return None
+    from lab_executor.system_config import SystemConfig
+
+    configs = SystemConfig.from_yaml(system_path).backends
+    if not configs:
+        return None
+    return list(configs), configs
+
+
+def _cmd_serve_discovered(
+    args: argparse.Namespace,
+    names: list[str],
+    configs: dict[str, dict],
+) -> int:
+    """Start the BEF-2 entry-point path; legacy ``--backend mock`` is separate."""
+    from lab_executor.backends import select_backend
+    from lab_executor.backends.discovery import _discover_backends
+    from lab_executor.server import compose_server, list_registered_tools
+
+    registrations = _discover_backends(names, configs=configs)
+    try:
+        backend = select_backend(registrations)
+    except ValueError as exc:
+        print(f"backend composition failed: {exc}", file=sys.stderr)
+        return 1
+
+    state_db = getattr(args, "state_db", None)
+    try:
+        server, job_mgr = compose_server(
+            backend=backend, name="lab-executor", store_path=state_db,
+        )
+    except ValueError as exc:
+        print(f"backend composition failed: {exc}", file=sys.stderr)
+        return 1
+    tools = list_registered_tools(server)
+    selection = ",".join(names)
+    if args.dry_run:
+        print(
+            f"lab-executor MCP server (backends={selection}) composed OK\n"
+            f"  registered tools: {len(tools)}\n"
+            f"  backend_id: {backend.backend_id}",
+        )
+        for tool in sorted(tools):
+            print(f"  - {tool}")
+        return 0
+
+    control_port = _resolve_control_port(args)
+    if control_port is None:
+        print(
+            f"lab-executor MCP server starting (backends={selection}, "
+            f"tools={len(tools)})...",
+            file=sys.stderr,
+        )
+        try:
+            server.run()
+        except KeyboardInterrupt:
+            return 0
+        return 0
+
+    try:
+        import uvicorn  # noqa: F401
+        from lab_executor import control_plane  # noqa: F401
+        from starlette.applications import Starlette  # noqa: F401
+    except ImportError:
+        if args.control_port is not None:
+            print(
+                "lab-executor serve --control-port は [ui] extra が必要です: "
+                "pip install lab-executor-mcp[ui]",
+                file=sys.stderr,
+            )
+            return 1
+        print(
+            "WARNING: LAB_EXECUTOR_CONTROL_PORT が指定されましたが [ui] extra "
+            "が未インストールのためコントロールプレーンは無効です "
+            "(pip install lab-executor-mcp[ui])。",
+            file=sys.stderr,
+        )
+        print(
+            f"lab-executor MCP server starting (backends={selection}, "
+            f"tools={len(tools)})...",
+            file=sys.stderr,
+        )
+        try:
+            server.run()
+        except KeyboardInterrupt:
+            return 0
+        return 0
+
+    print(
+        f"lab-executor MCP server starting (backends={selection}, "
+        f"tools={len(tools)}, control-port={control_port})...",
+        file=sys.stderr,
+    )
+    try:
+        import asyncio
+        asyncio.run(
+            _serve_with_control(
+                server, job_mgr, control_port, backend_id=backend.backend_id,
+            )
+        )
+    except KeyboardInterrupt:
+        return 0
+    return 0
 
 
 def _resolve_control_port(args: argparse.Namespace) -> int | None:

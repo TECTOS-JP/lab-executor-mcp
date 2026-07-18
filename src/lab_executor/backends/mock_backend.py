@@ -40,10 +40,8 @@ class MockBackend:
             mock_visa = _MVM()
         self._mock: "MockVisaManager" = mock_visa
 
-    async def list_resources(
-        self, query: str = "?*::INSTR"
-    ) -> list[str]:
-        return await self._mock.list_resources(query)
+    async def list_resources(self) -> list[str]:
+        return await self._mock.list_resources()
 
     async def query(
         self,

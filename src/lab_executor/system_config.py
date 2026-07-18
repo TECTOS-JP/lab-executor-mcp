@@ -86,6 +86,7 @@ class SystemConfig(BaseModel):
     buses: dict[str, BusConfig] = Field(default_factory=dict)
     instrument_groups: dict[str, InstrumentGroup] = Field(default_factory=dict)
     experiment_units: dict[str, ExperimentUnit] = Field(default_factory=dict)
+    backends: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
     # ---------- public helpers ----------
 
@@ -126,6 +127,8 @@ class SystemConfig(BaseModel):
         if not path.exists():
             return cls()
         raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        if not isinstance(raw, dict):
+            raise ValueError("system configuration root must be a mapping")
 
         # experiment_units の特殊解釈 (bindings は flat dict)
         units_raw = raw.get("experiment_units") or {}
@@ -148,6 +151,7 @@ class SystemConfig(BaseModel):
                 for k, v in (raw.get("instrument_groups") or {}).items()
             },
             experiment_units=units,
+            backends=_parse_backend_configs(raw.get("backends")),
         )
 
         # GPIB が members に含まれており bus 設定が無ければ GPIBn default を足す
@@ -167,8 +171,54 @@ class SystemConfig(BaseModel):
                     )
 
         logger.info(
-            "SystemConfig loaded: instruments=%d, buses=%d, groups=%d, units=%d",
+            "SystemConfig loaded: instruments=%d, buses=%d, groups=%d, "
+            "units=%d, backends=%d",
             len(cfg.instruments), len(cfg.buses),
             len(cfg.instrument_groups), len(cfg.experiment_units),
+            len(cfg.backends),
         )
         return cfg
+
+
+def _parse_backend_configs(raw: Any) -> dict[str, dict[str, Any]]:
+    """Normalize the optional ``backends:`` declaration.
+
+    The compact mapping form is preferred::
+
+        backends:
+          modbus: {port: COM3}
+
+    A list form is also accepted for authoring tools that preserve explicit
+    ``name`` / ``config`` objects.
+    """
+    if raw is None:
+        return {}
+    result: dict[str, dict[str, Any]] = {}
+    if isinstance(raw, dict):
+        items = raw.items()
+    elif isinstance(raw, list):
+        normalized: list[tuple[Any, Any]] = []
+        for item in raw:
+            if isinstance(item, str):
+                normalized.append((item, {}))
+            elif isinstance(item, dict) and isinstance(item.get("name"), str):
+                normalized.append((item["name"], item.get("config") or {}))
+            else:
+                raise ValueError(
+                    "backends list entries must be names or {name, config} mappings"
+                )
+        items = normalized
+    else:
+        raise ValueError("backends must be a mapping or list")
+
+    for name, config in items:
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError("backend names must be non-empty strings")
+        if config is None:
+            config = {}
+        if not isinstance(config, dict):
+            raise ValueError(f"backend {name!r} config must be a mapping")
+        if name in result:
+            raise ValueError(f"duplicate backend declaration: {name!r}")
+        result[name] = dict(config)
+    return result
