@@ -24,12 +24,24 @@ from .experiment_ir import (
     PyStep, DllStep, CallStep,
 )
 from .step_executor import execute_command_step
+from .session import SessionResolver
 from .utils.seq_expression import SeqExpressionError, evaluate, evaluate_condition
 
 # emit_event(event_type, payload) -- timeline へ流す (None なら記録しない)
 EmitEvent = Callable[[str, dict], None]
 # safe_shutdown を実行する async callable。dict (実行サマリ) を返す
 SafeShutdown = Callable[[], Awaitable[dict]]
+RecordWrite = Callable[[str], None]
+
+
+def _primary_only_resolver(session: Any) -> SessionResolver:
+    """既定の fail-closed resolver。主装置以外は決して解決しない。"""
+    primary_resource = session.resource_name
+
+    def _resolve(resource: str) -> Any | None:
+        return session if resource == primary_resource else None
+
+    return _resolve
 
 
 def _as_scalar(value: Any) -> Any | None:
@@ -108,8 +120,44 @@ async def process_command_step(
     source_step_path: str = "",
     emit_event: EmitEvent | None = None,
     safe_shutdown: SafeShutdown | None = None,
+    session_resolver: SessionResolver | None = None,
+    record_write: RecordWrite | None = None,
 ) -> dict:
     """CommandStep を deferred 解決 + 範囲執行 + capture 付きで実行する。"""
+    primary_resource = session.resource_name
+    target_resource = step.instrument or primary_resource
+    resolve = session_resolver or _primary_only_resolver(session)
+    target = resolve(target_resource)
+    if target is None:
+        return {
+            "command": step.command,
+            "instrument": target_resource,
+            "success": False,
+            "error": "InstrumentNotAvailable",
+            "message": (
+                f"指定装置 {target_resource!r} を解決できません "
+                f"(主装置={primary_resource!r})"
+            ),
+        }
+    if target.definition is None:
+        return {
+            "command": step.command,
+            "instrument": target_resource,
+            "success": False,
+            "error": "NoDefinitionFound",
+            "message": f"送信先装置 {target_resource!r} に機器定義がありません",
+        }
+    if step.command not in target.definition.commands:
+        return {
+            "command": step.command,
+            "instrument": target_resource,
+            "success": False,
+            "error": "CommandNotFound",
+            "message": (
+                f"コマンド {step.command!r} は送信先装置 "
+                f"{target_resource!r} の定義にありません"
+            ),
+        }
     resolved_args = dict(step.args)
 
     # --- 1. ${...} 実行時引数の解決 + 範囲執行 ---
@@ -118,7 +166,8 @@ async def process_command_step(
             resolved, infos = resolve_deferred(step, store)
         except SeqExpressionError as e:
             return {
-                "command": step.command, "success": False,
+                "command": step.command, "instrument": target_resource,
+                "success": False,
                 "error": "deferred_resolve_failed", "message": str(e),
             }
         resolved_args.update(resolved)
@@ -130,7 +179,8 @@ async def process_command_step(
         if violated:
             shutdown = await safe_shutdown() if safe_shutdown else None
             return {
-                "command": step.command, "success": False,
+                "command": step.command, "instrument": target_resource,
+                "success": False,
                 "error": "range_violation",
                 "message": (
                     "実行時解決値が範囲外です: "
@@ -147,10 +197,16 @@ async def process_command_step(
         call_step = step
 
     # --- 2. コマンド実行 ---
+    # A transport error does not prove that a write failed to reach hardware.
+    # Register before I/O so emergency shutdown conservatively includes it.
+    if target.definition.commands[step.command].type != "query" and record_write:
+        record_write(target_resource)
+
     result = await execute_command_step(
-        visa, session, call_step,
+        visa, target, call_step,
         override_safety=override_safety, override_reason=override_reason,
     )
+    result = {**result, "instrument": target_resource}
 
     # --- 3. capture (result_as) ---
     if result.get("success") and step.result_as:

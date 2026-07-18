@@ -8,7 +8,20 @@ maintainer がリリース時にこの見出しを `## vX.Y.Z — <タイトル>
 
 ## Unreleased
 
-(なし)
+### 機能
+
+- **SP-8 クロス装置ルーティング**: recipe / sequence の `instrument` と
+  `call.bind` を session resolver で解決し、同期実行と Recipe Job の双方で
+  複数の VISA 装置へ正しくルーティングする。送信先装置自身のコマンド定義・
+  パラメータ範囲・capability を使用し、required resource lock にも含める。
+- safe shutdown はシーケンスが書き込みを試行した全装置へ、それぞれの装置定義で
+  独立に実行する。1 台の失敗後も残りを継続し、装置別結果を返す。
+- 実行結果・Job timeline・dry-run に実際の送信先 resource を表示する。
+
+### 安全性
+
+- resolver 未指定・未知の装置・定義なし・送信先にコマンドなしを fail-closed にし、
+  主装置への暗黙フォールバックと誤送信を防止する。
 
 ## v2.34.1 — シーケンス処理拡張 独立レビュー指摘の修正 (Codex レビュー + Codex 修正 + Opus 独立検証)
 
