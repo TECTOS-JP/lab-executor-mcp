@@ -1,0 +1,106 @@
+name: Publish to PyPI
+
+# タグ push で PyPI へ公開する。認証は Trusted Publishing (OIDC)。
+# 長期 API トークンをリポジトリに保存しない。
+#
+# 初回のみ PyPI 側で Trusted Publisher の登録が必要:
+#   PyPI → プロジェクト (または Publishing) → Add a new publisher
+#     Owner: TECTOS-JP / Repository: lab-executor-mcp
+#     Workflow: publish.yml / Environment: pypi
+on:
+  push:
+    tags:
+      - "v*"
+  # 手動実行 (TestPyPI 検証や再実行用)
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "公開先"
+        required: true
+        default: testpypi
+        type: choice
+        options: [testpypi, pypi]
+
+jobs:
+  build:
+    name: Build distributions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build tooling
+        run: python -m pip install --upgrade build twine
+
+      - name: Build sdist and wheel
+        run: python -m build
+
+      - name: Verify metadata renders on PyPI
+        run: python -m twine check dist/*
+
+      # sdist へローカルキャッシュ等が再混入していないかを機械で守る。
+      # (v2.35.1 で .uv-cache が 6,111 ファイル紛れ込んでいた事故の再発防止)
+      - name: Guard sdist contents
+        run: |
+          python - <<'PY'
+          import glob, sys, tarfile
+
+          sdist = glob.glob("dist/*.tar.gz")[0]
+          names = [m.name for m in tarfile.open(sdist).getmembers() if m.isfile()]
+          leaked = [
+              n for n in names
+              if any(bad in n for bad in (".uv-cache", ".venv", "site-packages",
+                                          ".mypy_cache", ".ruff_cache"))
+          ]
+          if leaked:
+              print(f"sdist に配布してはいけないファイルが {len(leaked)} 件あります:")
+              for n in leaked[:20]:
+                  print("  ", n)
+              sys.exit(1)
+          if len(names) > 2000:
+              print(f"sdist のファイル数が異常です: {len(names)}")
+              sys.exit(1)
+          print(f"sdist OK: {len(names)} files")
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish-testpypi:
+    name: Publish to TestPyPI
+    needs: build
+    if: github.event_name == 'workflow_dispatch' && inputs.target == 'testpypi'
+    runs-on: ubuntu-latest
+    environment: testpypi
+    permissions:
+      id-token: write        # Trusted Publishing (OIDC) に必須
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+  publish-pypi:
+    name: Publish to PyPI
+    needs: build
+    if: >-
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && inputs.target == 'pypi')
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write        # Trusted Publishing (OIDC) に必須
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1

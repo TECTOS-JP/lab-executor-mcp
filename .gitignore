@@ -10,9 +10,18 @@ build/
 dist/
 .venv/
 venv/
+.venv-*/
+venv-*/
 .env
 .idea/
 .vscode/
 .DS_Store
 *.log
 tmp/
+
+# パッケージマネージャ / ツールのローカルキャッシュ
+# (sdist へ third-party バイナリが混入するのを防ぐ)
+.uv-cache/
+.uv/
+.ruff_cache/
+.mypy_cache/

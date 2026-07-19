@@ -10,6 +10,22 @@ maintainer がリリース時にこの見出しを `## vX.Y.Z — <タイトル>
 
 (なし)
 
+## v2.35.1 — PyPI 公開のためのパッケージング修正
+
+合言葉: **「配るものに、配ってはいけないものを混ぜない」**
+
+初回 PyPI 公開に向けた packaging 整備。**コードの変更はなし**。
+
+- **sdist に `.uv-cache/` が丸ごと混入していた問題を修正** (6,770 ファイル /
+  30.9MB のうち 6,111 ファイルがローカルの uv キャッシュだった)。numpy の
+  OpenBLAS DLL・PyWin32.chm 等 third-party バイナリを再配布しかねない状態
+  だったため、`[tool.hatch.build.targets.sdist]` で必要物のみを allowlist 指定。
+  `.gitignore` にも `.uv-cache/` 等を追加。
+- **LICENSE ファイルを追加** (MIT)。`pyproject.toml` は以前から MIT を宣言して
+  いたが実体が無かった。`license-files` も指定。
+- `[project.urls]` (Homepage / Repository / Changelog / Issues) を追加。
+- Trusted Publishing (GitHub Actions OIDC) 用の publish workflow を追加。
+
 ## v2.35.0 — 複数装置の閉ループと機器拡張の足場 (SP-8 / SP-9 / BEF)
 
 合言葉: **「電源と計測器が会話し、失敗すれば安全に止まり、新しいプロトコルは backend 1 個で増える」**
