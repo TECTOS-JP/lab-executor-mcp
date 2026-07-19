@@ -26,9 +26,9 @@ jobs:
     name: Build distributions
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
@@ -66,7 +66,7 @@ jobs:
           print(f"sdist OK: {len(names)} files")
           PY
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: dist
           path: dist/
@@ -80,7 +80,7 @@ jobs:
     permissions:
       id-token: write        # Trusted Publishing (OIDC) に必須
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         with:
           name: dist
           path: dist/
@@ -99,7 +99,7 @@ jobs:
     permissions:
       id-token: write        # Trusted Publishing (OIDC) に必須
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         with:
           name: dist
           path: dist/
