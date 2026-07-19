@@ -4,10 +4,11 @@ build-backend = "hatchling.build"
 
 [project]
 name = "lab-executor-mcp"
-version = "2.35.0"
+version = "2.35.1"
 description = "Backend-independent experiment execution runtime for AI agents (split from visa-mcp v1.11)"
 readme = "README.md"
 license = { text = "MIT" }
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
 keywords = [
     "mcp", "experiment-automation", "laboratory-automation",
@@ -34,6 +35,12 @@ dependencies = [
     "numpy>=1.24",
 ]
 
+[project.urls]
+Homepage = "https://github.com/TECTOS-JP/lab-executor-mcp"
+Repository = "https://github.com/TECTOS-JP/lab-executor-mcp"
+Changelog = "https://github.com/TECTOS-JP/lab-executor-mcp/blob/main/CHANGELOG.md"
+Issues = "https://github.com/TECTOS-JP/lab-executor-mcp/issues"
+
 [project.optional-dependencies]
 pdf = ["pdfplumber"]
 # Web UI M1 (読み取り専用モニタ)。必須依存には入れない。
@@ -50,6 +57,24 @@ lab-executor = "lab_executor.cli:main"
 
 [project.entry-points."lab_executor.backends"]
 mock = "lab_executor.backends.discovery:make_mock_backend"
+
+[tool.hatch.build.targets.sdist]
+# 既定では作業ディレクトリの全てが入り、ローカルの uv キャッシュ等
+# (third-party バイナリを含む) まで再配布してしまう。必要物だけを明示する。
+# 先頭 "/" でプロジェクトルートに固定する。裸の "LICENSE" 等はどの階層にも
+# マッチするため、venv 配下の site-packages まで巻き込む (実際に混入した)。
+include = [
+    "/src/lab_executor",
+    "/tests",
+    "/docs",
+    "/schemas",
+    "/README.md",
+    "/CHANGELOG.md",
+    "/CONTRIBUTING.md",
+    "/LICENSE",
+    "/pyproject.toml",
+    "/conftest.py",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/lab_executor"]
