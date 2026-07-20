@@ -80,6 +80,12 @@ class ExperimentUnit(BaseModel):
         return cls(bindings=bindings, description=description)
 
 
+class ArtifactsConfig(BaseModel):
+    """Runtime ingestion settings for backend-produced artifact files."""
+    root: Path | None = None
+    embed_max_bytes: int = Field(default=33554432, ge=0)
+
+
 class SystemConfig(BaseModel):
     """system_config root"""
     instruments: dict[str, InstrumentBinding] = Field(default_factory=dict)
@@ -87,6 +93,7 @@ class SystemConfig(BaseModel):
     instrument_groups: dict[str, InstrumentGroup] = Field(default_factory=dict)
     experiment_units: dict[str, ExperimentUnit] = Field(default_factory=dict)
     backends: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    artifacts: ArtifactsConfig = Field(default_factory=ArtifactsConfig)
 
     # ---------- public helpers ----------
 
@@ -152,6 +159,7 @@ class SystemConfig(BaseModel):
             },
             experiment_units=units,
             backends=_parse_backend_configs(raw.get("backends")),
+            artifacts=raw.get("artifacts") or {},
         )
 
         # GPIB が members に含まれており bus 設定が無ければ GPIBn default を足す

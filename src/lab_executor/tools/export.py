@@ -28,6 +28,7 @@ from typing import Any
 from fastmcp import FastMCP
 
 from lab_executor.job import JobManager
+from lab_executor.artifact import ArtifactReferenceError, parse_artifact_reference
 from lab_executor.response_envelope import make_envelope, make_error
 from lab_executor.tools.observation import _value_numeric_from_result
 
@@ -483,6 +484,67 @@ def build_bundle_files(
         writer.writerow({k: r.get(k, "") for k in RESULT_COLUMNS})
     files["results.csv"] = buf.getvalue().encode("utf-8")
 
+    # Backend-produced bulk artifacts. Invalid artifact-looking values are
+    # fail-closed (never read), but do not make an otherwise useful bundle fail.
+    artifact_index: list[dict[str, Any]] = []
+    artifact_content_entries: list[dict[str, str]] = []
+    artifact_cfg = None
+    for row in rows:
+        value = row.get("value")
+        try:
+            ref = parse_artifact_reference(value) if isinstance(value, str) else None
+        except ArtifactReferenceError as exc:
+            logger.warning("Rejected invalid artifact reference: %s", exc)
+            continue
+        if ref is None:
+            continue
+
+        if artifact_cfg is None:
+            artifact_cfg = job_mgr.system_config.artifacts
+        entry = {**ref.to_dict(), "embedded": False, "status": "unresolved"}
+        root = artifact_cfg.root
+        if root is None:
+            entry["reason"] = "artifact root is not configured"
+            artifact_index.append(entry)
+            continue
+        try:
+            resolved_root = root.expanduser().resolve()
+            artifact_path = (resolved_root / ref.name).resolve()
+            artifact_path.relative_to(resolved_root)
+        except (OSError, RuntimeError, ValueError) as exc:
+            entry["reason"] = f"artifact path is outside configured root: {exc}"
+            artifact_index.append(entry)
+            continue
+        try:
+            blob = artifact_path.read_bytes()
+        except OSError as exc:
+            entry["reason"] = f"artifact file is missing or unreadable: {exc}"
+            artifact_index.append(entry)
+            continue
+        actual_sha256 = hashlib.sha256(blob).hexdigest()
+        if actual_sha256 != ref.sha256:
+            entry["reason"] = "artifact sha256 mismatch"
+            artifact_index.append(entry)
+            continue
+        if len(blob) <= artifact_cfg.embed_max_bytes:
+            bundle_path = f"artifacts/{ref.name}"
+            files[bundle_path] = blob
+            entry["embedded"] = True
+            entry["status"] = "embedded"
+            artifact_content_entries.append({
+                "path": bundle_path,
+                "sha256": actual_sha256,
+                "kind": "results",
+            })
+        else:
+            entry["status"] = "referenced"
+        artifact_index.append(entry)
+
+    if artifact_index:
+        files["artifacts/index.json"] = json.dumps(
+            artifact_index, ensure_ascii=False, indent=2,
+        ).encode("utf-8")
+
     # monitor_data (optional)
     if include_monitor_data:
         try:
@@ -529,7 +591,7 @@ def build_bundle_files(
         ),
         "include_monitor_data": include_monitor_data,
         "include_audit": include_audit,
-        "contents": sorted(files.keys()),
+        "contents": sorted(files.keys()) + artifact_content_entries,
         "checksums": checksums,
         "note": (
             "再検証 / 共有 / 監査 / 記事化用パッケージ。"
