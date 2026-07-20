@@ -8,7 +8,53 @@ maintainer がリリース時にこの見出しを `## vX.Y.Z — <タイトル>
 
 ## Unreleased
 
-(なし)
+### バルク取得成果物のバンドル取り込み (P1)
+
+波形のような大量データは凍結された `query() -> str` を通れず、bundle も
+`results.jsonl` / `results.csv` の行指向で外部ファイルを持てなかった。backend
+が自分でファイルを書き、`query` は参照文字列を返し、runtime が取り込む形にした。
+
+- **`InstrumentBackend` protocol は変更なし**。`backends/` に一切触れていない
+  ため、既存 backend (visa / modbus / ble / nidaq) は影響を受けない。
+- `artifact.py` を追加。参照 JSON を fail-closed で検証する。`name` は
+  **相対ファイル名のみ**許可 — 参照は backend 由来の文字列であり、runtime が
+  配置ルート外のファイルを読まされる経路を作ってはならない。区切り文字・
+  `..`・絶対パス・ドライブレター・NUL・ファイルを指さない名前を拒否する。
+- bundle 側は解決後に `resolve()` + `relative_to()` で封じ込めを再確認する
+  (多層防御)。`artifacts/index.json` と `manifest.contents` へ登録する。
+- **成果物が欠落・破損・ルート未設定でも bundle 生成は失敗させない**。欠落を
+  正直に記録した bundle のほうが、export 自体が落ちるより有用である。
+- `artifacts.embed_max_bytes` (既定 32 MiB) で同梱と外部参照を切り替える。
+- `results.jsonl` / `results.csv` は不変。参照文字列は結果行にそのまま残るため
+  `judge_l0` (`results_row_count >= 1`) は従来どおり成立する。
+- 新規依存なし。runtime はバイト列を運びハッシュを検証するだけで、配列を
+  解釈しない (numpy は artifact を作る backend 側の依存)。
+
+### 監視のしきい値成立時に機器を安全側へ戻せるようにする (P2)
+
+`start_monitor` は以前からポーリングと `stop_condition` の評価を行っていたが、
+条件成立時はイベントを記録して `break` するだけだった。つまり「監視」は止まる
+が「機器」は止まらず、出力は最後の値のまま残っていた。しきい値検知で実験を
+止める・安全側へ戻すという用途に対し、機能が目的を果たしていなかった。
+`_best_effort_safe_shutdown` は以前から存在し監視ループも `session` を持って
+いたので、両者が接続されていなかっただけである。
+
+- `start_monitor` / `start_monitor_job` に `on_stop_condition` を追加。
+  - `record_only` (既定): 従来と完全に同一。既存呼び出しは無影響。
+  - `safe_shutdown`: 条件成立時に安全停止シーケンスを実行してから停止する。
+- **開始時に検証する**。安全停止シーケンスを持たず fallback も適用されない
+  機器に `safe_shutdown` を要求した場合、監視の開始自体を拒否する。該当機器
+  では `_best_effort_safe_shutdown` が `skipped_reason` を付けて何もせず返る
+  ため、それがしきい値超過の瞬間に判明するのは最悪のタイミングである。
+- fail-closed: 安全停止が失敗した場合も例外を投げた場合も、構造化結果を
+  イベントに記録したうえで job を FAILED にする。失敗した安全動作が正常停止
+  として報告されてはならない。
+- `cancel_job` は意図的に未実装とし、理由付きで拒否する。monitor job と
+  experiment job は別物で「どの job を止めるか」の定義が無く、要件も無い状態
+  で機構を推測で作るべきでないため。
+- **限界を明記**: `interval_s` の下限は 1.0 秒であり、検知は最短でも1ポーリング
+  周期遅れる。これは supervisory monitoring であって safety instrumented
+  system ではない。即座の危険への保護はハードウェアのインターロックに置く。
 
 ## v2.35.1 — PyPI 公開のためのパッケージング修正
 
