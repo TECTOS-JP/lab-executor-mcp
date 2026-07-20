@@ -25,6 +25,7 @@ def register_tools(mcp: FastMCP, job_mgr: JobManager) -> None:
         interval_s: float = 5.0,
         duration_s: float = 600.0,
         stop_condition: str = "",
+        on_stop_condition: str = "record_only",
         value_path: str = "",
         args: dict | None = None,
         owner: str = "",
@@ -37,6 +38,11 @@ def register_tools(mcp: FastMCP, job_mgr: JobManager) -> None:
         interval_s: poll 間隔 (>=1.0)
         duration_s: 全体制限 (<=86400=24h)
         stop_condition: 条件式 ("value > 80" 等)。空なら duration まで継続
+        on_stop_condition: record_only (既定; 記録して監視終了) または
+          safe_shutdown (条件成立時に機器の安全停止を実行)。これは supervisory
+          monitoring であり safety instrumented system ではありません。検出は poll
+          間隔 (最小 1 秒) だけ遅れ得ます。即時の危険には hardware interlock を
+          使用してください。cancel_job は対象 experiment job を定義できないため未実装です。
         value_path: parsed response の数値フィールド名 (任意)
         args: command への引数
 
@@ -58,6 +64,7 @@ def register_tools(mcp: FastMCP, job_mgr: JobManager) -> None:
                 interval_s=interval_s,
                 duration_s=duration_s,
                 stop_condition_expr=(stop_condition or None),
+                on_stop_condition=on_stop_condition,
                 value_path=(value_path or None),
                 args=args or {},
                 owner=owner,
