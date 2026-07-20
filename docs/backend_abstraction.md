@@ -95,6 +95,7 @@ backend_capabilities:
   supports_write: true
   supports_binary_transfer: false
   supports_streaming: false
+  supports_bulk_acquisition: false
   supports_replay: false
   supports_safe_shutdown: true
   deterministic: false        # replay backend は true
