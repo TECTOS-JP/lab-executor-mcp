@@ -1345,6 +1345,7 @@ class JobManager:
         interval_s: float = 5.0,
         duration_s: float = 600.0,
         stop_condition_expr: str | None = None,
+        on_stop_condition: str = "record_only",
         value_path: str | None = None,
         args: dict[str, Any] | None = None,
         owner: str = "",
@@ -1354,6 +1355,11 @@ class JobManager:
 
         各 poll の値は SQLite `monitor_data` に保存され、`get_monitor_data` で
         取得可能。`stop_condition_expr` が指定された場合は条件成立で早期終了。
+
+        ``on_stop_condition="safe_shutdown"`` は条件成立時に安全停止を実行する。
+        これは supervisory monitoring であり safety instrumented system ではない。
+        検出は少なくとも poll 間隔分遅れ得るため、即時の危険に対する保護には
+        hardware interlock を使用すること。
 
         interval_s >= 1.0 / duration_s <= 86400 / 最大 100k サンプル
         """
@@ -1378,6 +1384,22 @@ class JobManager:
                     f"の範囲: {duration_s}"
                 ),
             )
+        if on_stop_condition not in ("record_only", "safe_shutdown"):
+            cancel_note = (
+                " cancel_job は monitor job と experiment job が別であり、"
+                "どの job を cancel するか定義されていないため未実装です。"
+                if on_stop_condition == "cancel_job" else ""
+            )
+            return self._record_immediate_failure(
+                resource_name=instrument, recipe_name=f"<monitor:{command_name}>",
+                parameters={"on_stop_condition": on_stop_condition},
+                error_class="validation",
+                summary=(
+                    f"on_stop_condition='{on_stop_condition}' は無効です。"
+                    "record_only または safe_shutdown を指定してください。"
+                    f"{cancel_note}"
+                ),
+            )
 
         # alias を resource に解決
         resource = self._system_config.resolve_alias(instrument) or instrument
@@ -1388,6 +1410,21 @@ class JobManager:
                 parameters={"instrument": instrument},
                 error_class="not_found",
                 summary=f"{instrument} (→ {resource}) は未識別です",
+            )
+        if (
+            on_stop_condition == "safe_shutdown"
+            and not self._has_safe_shutdown_capability(session)
+        ):
+            category = session.definition.metadata.category
+            return self._record_immediate_failure(
+                resource_name=resource, recipe_name=f"<monitor:{command_name}>",
+                parameters={"on_stop_condition": on_stop_condition},
+                error_class="validation",
+                summary=(
+                    "on_stop_condition='safe_shutdown' を使用できません: "
+                    "instrument definition に safe_shutdown sequence がなく、"
+                    f"category='{category}' は安全停止 fallback の対象外です"
+                ),
             )
         cmd_def = session.definition.commands.get(command_name)
         if cmd_def is None or cmd_def.type != "query":
@@ -1414,6 +1451,10 @@ class JobManager:
                 "stop_condition": stop_condition_expr,
                 "value_path": value_path,
                 "args": args,
+                **(
+                    {"on_stop_condition": on_stop_condition}
+                    if on_stop_condition != "record_only" else {}
+                ),
             },
         )
 
@@ -1440,6 +1481,7 @@ class JobManager:
             self._run_monitor(
                 rec, session, command_name, args,
                 interval_s, duration_s, stop_condition_expr, value_path,
+                on_stop_condition=on_stop_condition,
                 required_resources=required_resources,
                 start_immediately=immediate,
             ),
@@ -1464,6 +1506,7 @@ class JobManager:
         stop_condition_expr: str | None,
         value_path: str | None,
         *,
+        on_stop_condition: str,
         required_resources: list[str],
         start_immediately: bool,
     ) -> None:
@@ -1549,6 +1592,66 @@ class JobManager:
                                 stop_condition_expr, {"value": value},
                             ):
                                 stopped_by_condition = True
+                                if on_stop_condition == "safe_shutdown":
+                                    try:
+                                        shutdown = await self._best_effort_safe_shutdown(
+                                            session,
+                                        )
+                                    except Exception as e:
+                                        shutdown = {
+                                            "attempted": True,
+                                            "source": "exception",
+                                            "success": False,
+                                            "steps": [],
+                                            "skipped_reason": None,
+                                            "error": type(e).__name__,
+                                            "message": str(e),
+                                        }
+                                    self._store.record_event(
+                                        job_id, "monitor_stop_condition_met",
+                                        payload={
+                                            "value": value,
+                                            "condition_expr": stop_condition_expr,
+                                            "safe_shutdown": shutdown,
+                                        },
+                                    )
+                                    if not shutdown.get("attempted") or not shutdown.get(
+                                        "success"
+                                    ):
+                                        failed_steps = [
+                                            str(
+                                                step.get("command")
+                                                or step.get("kind")
+                                                or step.get("step")
+                                            )
+                                            for step in shutdown.get("steps", [])
+                                            if not step.get("success")
+                                        ]
+                                        detail = (
+                                            ", ".join(failed_steps)
+                                            or shutdown.get("skipped_reason")
+                                            or shutdown.get("message")
+                                            or shutdown.get("error")
+                                            or "unknown failure"
+                                        )
+                                        self._store.transition_status(
+                                            job_id, JobStatus.FAILED,
+                                            error_class="hardware",
+                                            last_step_summary=(
+                                                "monitor stop condition met, but safe shutdown "
+                                                f"failed: {detail}"
+                                            ),
+                                            result={
+                                                "success": False,
+                                                "error": "SafeShutdownFailed",
+                                                "samples_recorded": samples,
+                                                "stopped_by_condition": True,
+                                                "last_value": last_value,
+                                                "safe_shutdown": shutdown,
+                                            },
+                                        )
+                                        return
+                                    break
                                 self._store.record_event(
                                     job_id, "monitor_stop_condition_met",
                                     payload={
@@ -3507,6 +3610,16 @@ class JobManager:
 
     # YAML safe_shutdown 内の各 wait step に許容する最大秒数 (v0.5.0.4)
     _SAFE_SHUTDOWN_WAIT_MAX_S = 10.0
+
+    def _has_safe_shutdown_capability(self, session) -> bool:
+        """Return whether shutdown would be attempted, without executing it."""
+        if session is None or session.definition is None:
+            return False
+        return bool(
+            session.definition.safe_shutdown
+            or session.definition.metadata.category
+            in self._SAFE_SHUTDOWN_FALLBACK_CATEGORIES
+        )
 
     async def _best_effort_safe_shutdown(self, session) -> dict:
         """安全停止を実行する。
