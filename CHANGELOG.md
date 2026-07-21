@@ -8,7 +8,28 @@ maintainer がリリース時にこの見出しを `## vX.Y.Z — <タイトル>
 
 ## Unreleased
 
-(なし)
+### CI が全テストを実行するようになった
+
+`test` job は v2.0.2 から v2.37.0 まで `tests/test_v200_split.py` の 1 ファイル
+(15 件) しか実行していなかった。「v2.1 で curated subset へ拡張予定」という
+暫定措置がそのまま 35 マイナーバージョン残っていたもので、**2100 件のうち CI が
+守っていたのは 15 件だった**。
+
+実際、v2.37.0 の改名作業では 44 件の収集エラーが CI で表面化せず、ローカルで
+気付いている。runtime は全 backend が依存する中心であり、ここが手薄だと壊れた
+ことに気付かないまま各 backend へ波及する。
+
+- `test` job を `pytest -q -m "not hardware"` へ変更 (2100 件)。
+- `dev` extra に `lab-visa-mcp>=2.8.1` を追加。44 個のテストモジュールが VISA
+  backend との統合を検証しており、これが無いと収集段階で落ちるため。runtime
+  自体は遅延 import なので必須依存にはしない。
+
+### 訂正: 移行 shim は公開されない
+
+v2.37.0 のエントリに「旧配布名 `visa-mcp` は最後に一度だけ更新され shim になる」
+と書いたが、**これは実現しない**。`visa-mcp` は PyPI から削除され、PyPI は削除
+された名前の再利用を許さないため、旧名で公開する手段が無い。該当箇所に訂正を
+追記した。VISA backend は `pip install lab-visa-mcp` を使うこと。
 
 ## v2.37.0 — backend パッケージの改名に追従する
 
@@ -27,6 +48,11 @@ VISA を使わない利用者には影響しない。
 移行のため、旧配布名 `visa-mcp` は最後に一度だけ更新され、`lab-visa-mcp` に
 依存して `visa_mcp` という名前を提供する shim になる。旧来の利用者はそれで
 動き続けるが、新規は `lab-visa-mcp` を直接使うこと。
+
+> **【2026-07-21 訂正】** 上記の移行 shim は公開されない。`visa-mcp` は
+> PyPI から削除され、PyPI は削除された名前の再利用を許さないため、旧名で
+> 公開する手段が無い。`pip install visa-mcp` は現在失敗する。VISA backend は
+> `pip install lab-visa-mcp` を使うこと。
 
 ### 改名時に保護したもの
 
