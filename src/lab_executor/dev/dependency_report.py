@@ -5,7 +5,7 @@ Usage:
     python -m lab_executor.dev.dependency_report
     python -m lab_executor.dev.dependency_report --json
 
-runtime 候補 module 群が visa_mcp.visa_manager や pyvisa を直接 import
+runtime 候補 module 群が lab_visa_mcp.visa_manager や pyvisa を直接 import
 していないことを確認する。v1.10 で `docs/separation/module_ownership.yaml`
 が確定すれば、それを基準にした厳密 check に置き換える。
 """
@@ -19,24 +19,24 @@ from typing import Any
 
 
 _THIS = Path(__file__).resolve()
-# .../src/visa_mcp/dev/dependency_report.py → repo root
+# .../src/lab_visa_mcp/dev/dependency_report.py → repo root
 REPO_ROOT = _THIS.parent.parent.parent.parent
 
 
 RUNTIME_CANDIDATE_PATHS = [
-    Path("src/visa_mcp/dsl"),
-    Path("src/visa_mcp/extension.py"),
-    Path("src/visa_mcp/extension_packaging.py"),
-    Path("src/visa_mcp/extension_install.py"),
-    Path("src/visa_mcp/extension_catalog.py"),
-    Path("src/visa_mcp/extension_authoring.py"),
-    Path("src/visa_mcp/extension_integrity.py"),
-    Path("src/visa_mcp/instrument_authoring.py"),
-    Path("src/visa_mcp/observation.py"),
-    Path("src/visa_mcp/testing"),
+    Path("src/lab_visa_mcp/dsl"),
+    Path("src/lab_visa_mcp/extension.py"),
+    Path("src/lab_visa_mcp/extension_packaging.py"),
+    Path("src/lab_visa_mcp/extension_install.py"),
+    Path("src/lab_visa_mcp/extension_catalog.py"),
+    Path("src/lab_visa_mcp/extension_authoring.py"),
+    Path("src/lab_visa_mcp/extension_integrity.py"),
+    Path("src/lab_visa_mcp/instrument_authoring.py"),
+    Path("src/lab_visa_mcp/observation.py"),
+    Path("src/lab_visa_mcp/testing"),
 ]
 
-FORBIDDEN_DIRECT_IMPORTS = {"visa_mcp.visa_manager"}
+FORBIDDEN_DIRECT_IMPORTS = {"lab_visa_mcp.visa_manager"}
 
 
 def _iter_runtime_python_files() -> list[Path]:

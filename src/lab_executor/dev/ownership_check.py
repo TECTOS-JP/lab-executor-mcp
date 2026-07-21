@@ -24,14 +24,14 @@ import yaml
 
 _THIS = Path(__file__).resolve()
 REPO_ROOT = _THIS.parent.parent.parent.parent
-SRC_ROOT = REPO_ROOT / "src" / "visa_mcp"
+SRC_ROOT = REPO_ROOT / "src" / "lab_visa_mcp"
 MANIFEST = REPO_ROOT / "docs" / "separation" / "module_ownership.yaml"
 
 # lab-executor 側 module が import してよい visa-mcp owner の例外
 # (lazy import / Protocol 経由化が v1.11 までに完了する予定)
 LAZY_EXCEPTIONS = {
     # mock_instruments が VISA timeout error 互換のため lazy import
-    ("lab_executor.testing.mock_instruments", "visa_mcp.visa_manager"),
+    ("lab_executor.testing.mock_instruments", "lab_visa_mcp.visa_manager"),
 }
 
 
@@ -45,8 +45,8 @@ KNOWN_V111_TO_RESOLVE: set[tuple[str, str]] = set()
 
 
 def _module_name_for_path(path: Path) -> str | None:
-    """src/visa_mcp/foo/bar.py → visa_mcp.foo.bar、
-    src/visa_mcp/foo/__init__.py → visa_mcp.foo"""
+    """src/lab_visa_mcp/foo/bar.py → lab_visa_mcp.foo.bar、
+    src/lab_visa_mcp/foo/__init__.py → lab_visa_mcp.foo"""
     try:
         rel = path.relative_to(REPO_ROOT / "src")
     except ValueError:
@@ -126,12 +126,12 @@ def collect_report() -> dict[str, Any]:
             continue
         top, lazy = _module_imports(path)
         for imp in top:
-            if imp.startswith("visa_mcp."):
+            if imp.startswith("lab_visa_mcp."):
                 edges.append({
                     "from": mod, "to": imp, "kind": "top_level",
                 })
         for imp in lazy:
-            if imp.startswith("visa_mcp."):
+            if imp.startswith("lab_visa_mcp."):
                 edges.append({
                     "from": mod, "to": imp, "kind": "lazy",
                 })

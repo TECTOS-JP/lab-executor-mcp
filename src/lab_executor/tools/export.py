@@ -577,7 +577,7 @@ def build_bundle_files(
         ).encode("utf-8")
 
     # manifest (checksums を計算)
-    from visa_mcp import __version__ as VMV
+    from lab_visa_mcp import __version__ as VMV
     checksums = {
         name: hashlib.sha256(blob).hexdigest()
         for name, blob in files.items()
@@ -680,8 +680,8 @@ def register_tools(mcp: FastMCP, job_mgr: JobManager) -> None:
                 "export_fix": "v2.13.3",
             }
             try:
-                import visa_mcp as _vm
-                _versions["visa_mcp"] = getattr(_vm, "__version__", "?")
+                import lab_visa_mcp as _vm
+                _versions["lab_visa_mcp"] = getattr(_vm, "__version__", "?")
             except Exception:
                 pass
         except Exception:

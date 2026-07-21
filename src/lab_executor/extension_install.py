@@ -853,7 +853,7 @@ def load_overlay_registry(
 
 def _current_visa_mcp_version() -> str:
     try:
-        from visa_mcp import __version__
+        from lab_visa_mcp import __version__
         return __version__
     except Exception:
         return "unknown"

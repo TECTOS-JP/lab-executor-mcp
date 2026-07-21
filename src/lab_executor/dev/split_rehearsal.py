@@ -10,7 +10,7 @@ release artifact にも含めない (テスト中に tmp で生成 → 検査 �
 
 確認項目 (テスト側で検証):
   1. candidate tree が import 可能 (但し import rewrite 後)
-  2. candidate 内 module が `import visa_mcp` していない (rewrite 後)
+  2. candidate 内 module が `import lab_visa_mcp` していない (rewrite 後)
   3. pyvisa 非依存で import できる
 
 v1.11 では candidate は **正式 namespace ではない** (v2.0 で
@@ -31,16 +31,16 @@ import yaml
 
 _THIS = Path(__file__).resolve()
 REPO_ROOT = _THIS.parent.parent.parent.parent
-SRC_ROOT = REPO_ROOT / "src" / "visa_mcp"
+SRC_ROOT = REPO_ROOT / "src" / "lab_visa_mcp"
 MANIFEST = REPO_ROOT / "docs" / "separation" / "module_ownership.yaml"
 SPLIT_MANIFEST = REPO_ROOT / "docs" / "separation" / "split_manifest.yaml"
 
 # import 文の rewrite ルール (lab-executor 候補 module 内のみ)
-#   visa_mcp.<lab-executor module>   → lab_executor_candidate.<...>
-#   visa_mcp.<backend / shared module> → そのまま (PyVisaBackend 等)
+#   lab_visa_mcp.<lab-executor module>   → lab_executor_candidate.<...>
+#   lab_visa_mcp.<backend / shared module> → そのまま (PyVisaBackend 等)
 # v1.11 では「book-keeping のみ」: 実際に書き換えると tests が
 # 二重に走るため、生成 candidate 内のみ rewrite する。
-REWRITE_PREFIX_FROM = "visa_mcp."
+REWRITE_PREFIX_FROM = "lab_visa_mcp."
 REWRITE_PREFIX_TO = "lab_executor_candidate."
 
 
@@ -49,8 +49,8 @@ def _load_manifest() -> dict[str, Any]:
 
 
 def _module_to_relpath(module: str) -> Path:
-    """visa_mcp.foo.bar → visa_mcp/foo/bar.py (file が存在しなければ
-    visa_mcp/foo/bar/__init__.py を返す)"""
+    """lab_visa_mcp.foo.bar → lab_visa_mcp/foo/bar.py (file が存在しなければ
+    lab_visa_mcp/foo/bar/__init__.py を返す)"""
     parts = module.split(".")
     file_path = SRC_ROOT.parent / Path(*parts).with_suffix(".py")
     if file_path.exists():
@@ -75,18 +75,18 @@ def _classify_lab_executor_modules(
 
 
 def _rewrite_import_text(src_text: str, lab_modules: set[str]) -> str:
-    """source code 内の `visa_mcp.<lab module>` を
+    """source code 内の `lab_visa_mcp.<lab module>` を
     `lab_executor_candidate.<lab module>` に置換。
     backend / shared / visa-mcp owner は維持。"""
     out_lines: list[str] = []
     pat = re.compile(
-        r"\b(visa_mcp(?:\.[A-Za-z_][A-Za-z0-9_]*)+)\b"
+        r"\b(lab_visa_mcp(?:\.[A-Za-z_][A-Za-z0-9_]*)+)\b"
     )
     for line in src_text.splitlines(keepends=True):
 
         def _sub(m):
             target = m.group(1)
-            # `visa_mcp.foo.bar` のうち、prefix が lab-executor module
+            # `lab_visa_mcp.foo.bar` のうち、prefix が lab-executor module
             # と一致するもの (or 子 module) を書き換える
             for lab in lab_modules:
                 if target == lab or target.startswith(lab + "."):
@@ -117,8 +117,8 @@ def generate_candidate(out_dir: Path) -> dict[str, Any]:
         if not src_path.exists():
             skipped.append(mod)
             continue
-        # `visa_mcp.foo.bar` → `lab_executor_candidate/foo/bar.py`
-        rel_parts = mod.split(".")[1:]  # drop `visa_mcp`
+        # `lab_visa_mcp.foo.bar` → `lab_executor_candidate/foo/bar.py`
+        rel_parts = mod.split(".")[1:]  # drop `lab_visa_mcp`
         if src_path.name == "__init__.py":
             dst_path = out_dir.joinpath(*rel_parts, "__init__.py")
         else:
@@ -162,11 +162,11 @@ def verify_candidate(out_dir: Path) -> dict[str, Any]:
     """v1.11.1 (P1-4): 生成 candidate を AST 検証する。
 
     - 全 *.py が `ast.parse` で構文エラー無く読める
-    - candidate 内に `visa_mcp.<lab module>` 文字列が残っていない
+    - candidate 内に `lab_visa_mcp.<lab module>` 文字列が残っていない
       (rewrite 漏れ検出。ただし visa-mcp / shared owner module の
-      `visa_mcp.<...>` は許容)
+      `lab_visa_mcp.<...>` は許容)
 
-    Returns: {"parse_ok_count", "parse_errors", "leftover_visa_mcp"}
+    Returns: {"parse_ok_count", "parse_errors", "leftover_lab_visa_mcp"}
     """
     out_dir = Path(out_dir).resolve()
     manifest = _load_manifest()
@@ -196,7 +196,7 @@ def verify_candidate(out_dir: Path) -> dict[str, Any]:
     return {
         "parse_ok_count": parse_ok,
         "parse_errors": parse_errors,
-        "leftover_visa_mcp": leftover,
+        "leftover_lab_visa_mcp": leftover,
         "ok": (not parse_errors) and (not leftover),
     }
 
@@ -216,7 +216,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--json", action="store_true")
     parser.add_argument(
         "--verify", action="store_true",
-        help="v1.11.1: AST parse + leftover visa_mcp.<lab> 検査",
+        help="v1.11.1: AST parse + leftover lab_visa_mcp.<lab> 検査",
     )
     args = parser.parse_args(argv)
 

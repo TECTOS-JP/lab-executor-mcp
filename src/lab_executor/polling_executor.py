@@ -30,11 +30,11 @@ from .utils.condition import safe_eval_condition, ConditionError
 # v2.0: backend layer は visa-mcp / shim 経由。型ヒント目的
 # は TYPE_CHECKING、VisaError は ImportError fallback。
 if TYPE_CHECKING:
-    from visa_mcp.session_manager import InstrumentSession
-    from visa_mcp.visa_manager import VisaManager
+    from lab_visa_mcp.session_manager import InstrumentSession
+    from lab_visa_mcp.visa_manager import VisaManager
 
 try:
-    from visa_mcp.visa_manager import VisaError
+    from lab_visa_mcp.visa_manager import VisaError
 except ImportError:
     class VisaError(Exception):  # type: ignore[no-redef]
         """visa-mcp 不在時の VisaError 代替"""

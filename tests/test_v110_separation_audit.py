@@ -22,14 +22,14 @@ ROOT = Path(__file__).parent.parent
 
 # 要人間判断 (test debt triage フェーズ1):
 # 以下 2 test は v1.10 当時「visa-mcp からの分割準備」を監査するもので、
-# v1.10 分割準備監査のうち、分割前の visa_mcp ツリーを前提とするテスト
+# v1.10 分割準備監査のうち、分割前の lab_visa_mcp ツリーを前提とするテスト
 # (test_module_ownership_manifest_complete / test_split_manifest_paths_exist)
 # は v2.0 分割完了に伴い 2026-07-04 に削除した (人間判断済み)。
 # 経緯: docs/test_debt_triage.md
 
 
 def test_version_is_1_10_or_later():
-    from visa_mcp import __version__
+    from lab_visa_mcp import __version__
     # v1.10.* or later (v1.11.* / v1.12.* / v2.0 等を許容)
     parts = [int(p) for p in __version__.split(".")[:2]]
     major, minor = parts[0], parts[1]
@@ -182,7 +182,7 @@ def test_review_report_cli(tmp_path):
     target = candidates[0]
     out = tmp_path / "review.md"
     res = subprocess.run(
-        [sys.executable, "-m", "visa_mcp.cli", "instrument",
+        [sys.executable, "-m", "lab_visa_mcp.cli", "instrument",
          "review-report", str(target), "--output", str(out)],
         cwd=str(ROOT),
         capture_output=True, text=True,
@@ -199,7 +199,7 @@ def test_review_report_cli_json(tmp_path):
     candidates = [c for c in candidates if "INDEX" not in c.name]
     target = candidates[0]
     res = subprocess.run(
-        [sys.executable, "-m", "visa_mcp.cli", "instrument",
+        [sys.executable, "-m", "lab_visa_mcp.cli", "instrument",
          "review-report", str(target), "--json"],
         cwd=str(ROOT),
         capture_output=True, text=True,

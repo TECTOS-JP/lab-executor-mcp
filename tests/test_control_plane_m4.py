@@ -31,7 +31,7 @@ from lab_executor.control_plane import (
 from lab_executor.job import JobManager, JobStore
 from lab_executor.job.state_machine import JobStatus
 from lab_executor.models.instrument_def import InstrumentDefinition
-from visa_mcp.session_manager import InstrumentSession
+from lab_visa_mcp.session_manager import InstrumentSession
 
 RESOURCE = "MOCK::INSTR"
 TOKEN = "a" * 64

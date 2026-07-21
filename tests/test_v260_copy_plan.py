@@ -285,12 +285,12 @@ def test_cli_migration_plan_copy_plan_blocked_on_duplicate(
 
 
 def test_no_pyvisa_visa_mcp_import_for_copy_plan():
-    """copy-plan は PyVISA / visa_mcp 非依存"""
+    """copy-plan は PyVISA / lab_visa_mcp 非依存"""
     script = (
         "import sys\n"
         "class B:\n"
         "    def find_spec(self, n, p=None, t=None):\n"
-        "        if n == 'visa_mcp' or n.startswith('visa_mcp.'):\n"
+        "        if n == 'lab_visa_mcp' or n.startswith('lab_visa_mcp.'):\n"
         "            raise ImportError('blocked')\n"
         "        if n == 'pyvisa' or n.startswith('pyvisa'):\n"
         "            raise ImportError('blocked')\n"
@@ -301,7 +301,7 @@ def test_no_pyvisa_visa_mcp_import_for_copy_plan():
         "plan = plan_extension_migration(copy_plan=True)\n"
         "assert hasattr(plan, 'copy_plan')\n"
         "assert 'pyvisa' not in sys.modules\n"
-        "assert 'visa_mcp' not in sys.modules\n"
+        "assert 'lab_visa_mcp' not in sys.modules\n"
         "print('OK')\n"
     )
     res = subprocess.run(

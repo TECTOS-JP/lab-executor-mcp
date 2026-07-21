@@ -20,7 +20,7 @@ from lab_executor.job.state_machine import JobStatus, is_terminal
 from lab_executor.models.instrument_def import (
     InstrumentDefinition, CommandDefinition, VerifyConfig,
 )
-from visa_mcp.session_manager import InstrumentSession
+from lab_visa_mcp.session_manager import InstrumentSession
 from lab_executor.step_executor import execute_command_step
 
 

@@ -7,7 +7,7 @@ v0.6.0: Group / Map execution
 - Resolver ($psu → resource_name 経由 system_config)
 
 v0.8.0 のリポジトリ分割時に experiment_mcp/group/ へそのまま移動できるよう、
-visa_mcp 本体への直接依存は最小化 (visa_manager, session_manager, experiment_ir,
+lab_visa_mcp 本体への直接依存は最小化 (visa_manager, session_manager, experiment_ir,
 system_config のみ)。
 """
 from lab_executor.group.target import TargetExecution, FailurePolicy

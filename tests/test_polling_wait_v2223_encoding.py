@@ -24,7 +24,7 @@ from lab_executor.job import JobManager, JobStore
 from lab_executor.job.state_machine import JobStatus, is_terminal
 from lab_executor.job.store import _dumps_utf8_safe
 from lab_executor.models.instrument_def import InstrumentDefinition
-from visa_mcp.session_manager import InstrumentSession
+from lab_visa_mcp.session_manager import InstrumentSession
 from unittest.mock import AsyncMock, MagicMock
 
 

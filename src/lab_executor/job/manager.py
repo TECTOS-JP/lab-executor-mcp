@@ -18,7 +18,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    # v2.3.0: lab-executor 側 Protocol へ置換 (v2.2 までは visa_mcp.*
+    # v2.3.0: lab-executor 側 Protocol へ置換 (v2.2 までは lab_visa_mcp.*
     # を参照していたが、TYPE_CHECKING 内からも分離後 repo の型を
     # 使う方向に整理)。実体は外部から inject されるので、Protocol
     # で構造的に表現すれば十分。

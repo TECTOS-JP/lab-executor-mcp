@@ -9,8 +9,8 @@ import pytest
 async def test_per_resource_lock_exists():
     """同一 VisaManager 内で resource_name ごとのロックが生成される"""
     # pyvisa が無くてもテスト可能にするため、import を回避する形でモック
-    with patch("visa_mcp.visa_manager._PYVISA_AVAILABLE", True):
-        from visa_mcp.visa_manager import VisaManager
+    with patch("lab_visa_mcp.visa_manager._PYVISA_AVAILABLE", True):
+        from lab_visa_mcp.visa_manager import VisaManager
         mgr = VisaManager.__new__(VisaManager)
         mgr._rm = None
         mgr._locks = {}
@@ -27,8 +27,8 @@ async def test_per_resource_lock_exists():
 @pytest.mark.asyncio
 async def test_same_resource_serializes():
     """同一 resource への複数 task は順次実行されることを確認"""
-    with patch("visa_mcp.visa_manager._PYVISA_AVAILABLE", True):
-        from visa_mcp.visa_manager import VisaManager
+    with patch("lab_visa_mcp.visa_manager._PYVISA_AVAILABLE", True):
+        from lab_visa_mcp.visa_manager import VisaManager
         mgr = VisaManager.__new__(VisaManager)
         mgr._rm = None
         mgr._locks = {}

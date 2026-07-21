@@ -9,7 +9,7 @@ lab_executor.job ── Job 実行基盤 (v0.5.0-rc2)
 - executor: バックグラウンドで recipe を実行
 
 v0.8.0 のリポジトリ分割時に experiment_mcp/job/ へそのまま移動できるよう、
-visa_mcp 本体への直接依存を最小化している。
+lab_visa_mcp 本体への直接依存を最小化している。
 """
 from lab_executor.job.state_machine import (
     JobStatus,

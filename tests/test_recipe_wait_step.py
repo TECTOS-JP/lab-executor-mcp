@@ -7,7 +7,7 @@ import pytest
 import yaml
 
 from lab_executor.models.instrument_def import InstrumentDefinition, RecipeStep
-from visa_mcp.session_manager import InstrumentSession
+from lab_visa_mcp.session_manager import InstrumentSession
 from lab_executor.recipe_executor import execute_recipe, recipe_to_plan
 from lab_executor.experiment_ir import CommandStep, WaitStep
 

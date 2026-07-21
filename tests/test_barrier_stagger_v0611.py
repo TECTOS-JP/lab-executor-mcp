@@ -17,7 +17,7 @@ from lab_executor.group import FailurePolicy, TargetExecution
 from lab_executor.group.barrier import BarrierCoordinator
 from lab_executor.group.executor import GroupExecutor
 from lab_executor.models.instrument_def import InstrumentDefinition
-from visa_mcp.session_manager import InstrumentSession
+from lab_visa_mcp.session_manager import InstrumentSession
 
 
 YAML_PSU = """

@@ -23,7 +23,7 @@ from pathlib import Path
 from datetime import datetime
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
-from visa_mcp.visa_manager import VisaManager
+from lab_visa_mcp.visa_manager import VisaManager
 
 # ===== 設定: 環境に合わせて書き換えてください =====
 PMX = "USB0::0x0B3E::0x1029::<SERIAL>::INSTR"   # Kikusui PMX (USB) — シリアル番号は実機のものに

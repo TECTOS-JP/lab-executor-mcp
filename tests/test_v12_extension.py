@@ -213,7 +213,7 @@ def test_extension_manifest_schema_status_experimental():
 
 
 def _run_cli(*args: str) -> tuple[int, dict]:
-    cmd = [sys.executable, "-m", "visa_mcp.cli", *args, "--json"]
+    cmd = [sys.executable, "-m", "lab_visa_mcp.cli", *args, "--json"]
     result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(ROOT))
     try:
         data = json.loads(result.stdout) if result.stdout.strip() else {}

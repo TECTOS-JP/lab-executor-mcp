@@ -235,7 +235,7 @@ class MockVisaManager:
                 "command": command, "result": "timeout",
             })
             # VisaTimeoutError 同等のエラーを上位に渡す
-            from visa_mcp.visa_manager import VisaTimeoutError
+            from lab_visa_mcp.visa_manager import VisaTimeoutError
             raise VisaTimeoutError(
                 f"mock timeout on {resource_name} command={command!r}",
             )
@@ -262,7 +262,7 @@ class MockVisaManager:
                 "type": "write", "resource": resource_name,
                 "command": command, "result": "timeout",
             })
-            from visa_mcp.visa_manager import VisaTimeoutError
+            from lab_visa_mcp.visa_manager import VisaTimeoutError
             raise VisaTimeoutError(
                 f"mock timeout on write {resource_name} command={command!r}",
             )

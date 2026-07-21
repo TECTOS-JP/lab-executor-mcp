@@ -9,7 +9,7 @@ import yaml
 from lab_executor.job import CancelMode, JobManager, JobStore
 from lab_executor.job.state_machine import JobStatus
 from lab_executor.models.instrument_def import InstrumentDefinition
-from visa_mcp.session_manager import InstrumentSession, SessionManager
+from lab_visa_mcp.session_manager import InstrumentSession, SessionManager
 
 
 SAMPLE_YAML = """

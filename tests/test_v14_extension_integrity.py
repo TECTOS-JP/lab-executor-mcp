@@ -418,7 +418,7 @@ def test_metadata_validation_evidence_accepts_dict():
 
 def _run_cli(*args: str, cwd: str | None = None) -> tuple[int, str, str]:
     result = subprocess.run(
-        [sys.executable, "-m", "visa_mcp.cli", *args],
+        [sys.executable, "-m", "lab_visa_mcp.cli", *args],
         capture_output=True, text=True,
         cwd=cwd or str(ROOT),
     )

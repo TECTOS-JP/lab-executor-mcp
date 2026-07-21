@@ -29,7 +29,7 @@ from lab_executor.recipe_executor import execute_recipe, recipe_to_plan
 from lab_executor.experiment_ir import DllStep, PyStep
 from lab_executor.utils.seq_expression import SeqExpressionError
 from lab_executor.ui.views import dryrun_view
-from visa_mcp.session_manager import InstrumentSession
+from lab_visa_mcp.session_manager import InstrumentSession
 
 RESOURCE = "TEST::INSTR"
 MSVCRT = "C:/Windows/System32/msvcrt.dll"

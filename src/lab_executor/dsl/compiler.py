@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     # v1.11: backend layer import を runtime 候補 module の top-level から
     # 排除 (KNOWN_V111_TO_RESOLVE 解消)。compiler は SessionManager を
     # 型ヒントとしてのみ参照し、実体は呼び出し側 (JobManager) が注入。
-    from visa_mcp.session_manager import SessionManager
+    from lab_visa_mcp.session_manager import SessionManager
 
 from lab_executor.dsl.schema import (
     ExperimentPlan, Step,

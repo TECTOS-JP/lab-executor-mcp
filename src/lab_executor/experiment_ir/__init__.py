@@ -5,7 +5,7 @@ v0.5.0 で導入。Recipe / Group / DSL の各 executor が共有する正規表
 ステップ単位の操作を Pydantic モデルで型安全に表現する。
 
 v0.8.0 のリポジトリ分割時に experiment_mcp/ir/ へそのまま移動できるよう、
-visa_mcp 本体の他モジュールへの直接依存を最小化している (疎結合設計)。
+lab_visa_mcp 本体の他モジュールへの直接依存を最小化している (疎結合設計)。
 """
 from lab_executor.experiment_ir.step import (
     CommandStep,

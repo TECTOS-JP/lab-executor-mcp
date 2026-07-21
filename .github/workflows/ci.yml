@@ -23,10 +23,14 @@ jobs:
         run: |
           lab-executor --version
           lab-executor --help
-      - name: no top-level visa_mcp import in lab_executor
+      - name: no top-level lab_visa_mcp import in lab_executor
+        # The backend package was renamed visa_mcp -> lab_visa_mcp. Both names
+        # are checked: the new one is what the code uses, and the old one must
+        # never come back, so this guard cannot pass vacuously after a rename.
         run: |
           python - <<'PY'
           import ast, pathlib
+          watched = ("lab_visa_mcp", "visa_mcp")
           bad = []
           for p in pathlib.Path("src/lab_executor").rglob("*.py"):
               text = p.read_text(encoding="utf-8")
@@ -36,14 +40,14 @@ jobs:
                   continue
               for node in tree.body:
                   if isinstance(node, ast.ImportFrom) and node.module:
-                      if node.module.startswith("visa_mcp"):
+                      if node.module.startswith(watched):
                           bad.append((str(p), node.module))
                   elif isinstance(node, ast.Import):
                       for alias in node.names:
-                          if alias.name.startswith("visa_mcp"):
+                          if alias.name.startswith(watched):
                               bad.append((str(p), alias.name))
-          assert not bad, f"top-level visa_mcp imports detected: {bad}"
-          print("OK: no top-level visa_mcp imports")
+          assert not bad, f"top-level backend imports detected: {bad}"
+          print("OK: no top-level lab_visa_mcp / visa_mcp imports")
           PY
       - name: pytest (v2.0 smoke + adapted tests)
         # v2.0.2: 152 個 inherited visa-mcp tests のうち、v2.0 split

@@ -25,7 +25,7 @@ from lab_executor.utils.seq_expression import (
     SeqExpressionError, evaluate, evaluate_condition, referenced_names, parse_deferred,
 )
 from lab_executor.ui.views import dryrun_view
-from visa_mcp.session_manager import InstrumentSession
+from lab_visa_mcp.session_manager import InstrumentSession
 
 
 # ============================================================

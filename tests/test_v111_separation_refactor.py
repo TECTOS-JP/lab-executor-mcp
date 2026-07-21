@@ -6,7 +6,7 @@
 - runtime 候補 module が visa_manager / session_manager を top-level
   import していない (KNOWN_V111_TO_RESOLVE = 0)
 - split rehearsal: lab_executor_candidate ツリー生成
-- candidate が `import visa_mcp` を含まない (rewrite 後)
+- candidate が `import lab_visa_mcp` を含まない (rewrite 後)
 - docs/raw_visa.md が存在 (visa-mcp 側 v2.0 用)
 - Stable 43 / Experimental 7 / 計 50 不変
 """
@@ -21,14 +21,14 @@ import pytest
 ROOT = Path(__file__).parent.parent
 
 # 要人間判断 (test debt triage フェーズ1):
-# 以下の test は v1.11 当時の「split rehearsal (visa_mcp → lab_executor
+# 以下の test は v1.11 当時の「split rehearsal (lab_visa_mcp → lab_executor
 # 移行リハーサル)」を検証するものだったが、v2.0 で分割が完了し役目を
 # 終えたため、split_rehearsal 監査テスト群 8 件は 2026-07-04 に削除した
 # (人間判断済み)。経緯: docs/test_debt_triage.md
 
 
 def test_instrument_backend_protocol_runtime_checkable():
-    from visa_mcp.backends import InstrumentBackend
+    from lab_visa_mcp.backends import InstrumentBackend
     from typing import get_origin
     # runtime_checkable Protocol
     assert hasattr(InstrumentBackend, "_is_runtime_protocol")
@@ -41,13 +41,13 @@ def test_pyvisa_backend_module_imports_without_instantiating():
     (型注釈は TYPE_CHECKING 内、内部の VisaManager 生成は __init__
     で初めて起こる)。"""
     import importlib
-    mod = importlib.import_module("visa_mcp.backends.pyvisa_backend")
+    mod = importlib.import_module("lab_visa_mcp.backends.pyvisa_backend")
     assert hasattr(mod, "PyVisaBackend")
 
 
 def test_pyvisa_backend_class_satisfies_protocol_shape():
     """class level の structural shape check (instance を作らない)"""
-    from visa_mcp.backends import PyVisaBackend
+    from lab_visa_mcp.backends import PyVisaBackend
     for name in ("backend_id", "list_resources", "query", "write",
                   "close"):
         assert hasattr(PyVisaBackend, name), (
@@ -55,7 +55,7 @@ def test_pyvisa_backend_class_satisfies_protocol_shape():
 
 
 def test_mock_backend_satisfies_protocol():
-    from visa_mcp.backends import InstrumentBackend, MockBackend
+    from lab_visa_mcp.backends import InstrumentBackend, MockBackend
     for name in ("backend_id", "list_resources", "query", "write",
                   "close"):
         assert hasattr(MockBackend, name), (
@@ -65,14 +65,14 @@ def test_mock_backend_satisfies_protocol():
 def test_pyvisa_backend_constructible_without_explicit_visa(monkeypatch):
     """PyVisaBackend() が VisaManager を内部生成できる
     (PyVISA が install 済みの環境で動く)"""
-    from visa_mcp.backends import PyVisaBackend
+    from lab_visa_mcp.backends import PyVisaBackend
     b = PyVisaBackend()
     assert b.backend_id == "pyvisa"
     assert b.visa_manager is not None
 
 
 def test_mock_backend_constructible_without_explicit_visa():
-    from visa_mcp.backends import MockBackend
+    from lab_visa_mcp.backends import MockBackend
     b = MockBackend()
     assert b.backend_id == "mock"
     assert b.mock_visa is not None
@@ -96,7 +96,7 @@ def test_runtime_modules_no_toplevel_visa_manager_import():
     """lab-executor owner module の top-level に
     visa_manager / session_manager / pyvisa が無いこと"""
     forbidden = {
-        "visa_mcp.visa_manager", "visa_mcp.session_manager",
+        "lab_visa_mcp.visa_manager", "lab_visa_mcp.session_manager",
         "pyvisa",
     }
     # 例外: lazy import が許容される module
@@ -145,7 +145,7 @@ def test_runtime_modules_no_toplevel_visa_manager_import():
 def test_stable_tool_count_unchanged():
     """Stable 43 / Experimental 7 / 計 50 が v1.11 でも不変
     (stability.STABLE_TOOLS は category -> list なので flatten で count)"""
-    from visa_mcp import stability
+    from lab_visa_mcp import stability
     stable_flat = [t for ts in stability.STABLE_TOOLS.values() for t in ts]
     exp_flat = [
         t for ts in stability.EXPERIMENTAL_TOOLS.values() for t in ts
@@ -157,7 +157,7 @@ def test_stable_tool_count_unchanged():
 
 
 def test_backends_init_exposes_adapters():
-    from visa_mcp import backends
+    from lab_visa_mcp import backends
     assert hasattr(backends, "InstrumentBackend")
     assert hasattr(backends, "PyVisaBackend")
     assert hasattr(backends, "MockBackend")

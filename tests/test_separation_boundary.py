@@ -36,21 +36,21 @@ RUNTIME_CANDIDATE_MODULES = [
 # 上記 module 群が **直接 import してはいけない** modules
 # (visa-mcp 側 / PyVISA 透過 layer)
 FORBIDDEN_DIRECT_IMPORTS = {
-    "visa_mcp.visa_manager",
+    "lab_visa_mcp.visa_manager",
 }
 
 # AST 走査対象 path (RUNTIME_CANDIDATE_MODULES に対応)
 RUNTIME_CANDIDATE_PATHS = [
-    Path("src/visa_mcp/dsl"),
-    Path("src/visa_mcp/extension.py"),
-    Path("src/visa_mcp/extension_packaging.py"),
-    Path("src/visa_mcp/extension_install.py"),
-    Path("src/visa_mcp/extension_catalog.py"),
-    Path("src/visa_mcp/extension_authoring.py"),
-    Path("src/visa_mcp/extension_integrity.py"),
-    Path("src/visa_mcp/instrument_authoring.py"),
-    Path("src/visa_mcp/observation.py"),
-    Path("src/visa_mcp/testing"),
+    Path("src/lab_visa_mcp/dsl"),
+    Path("src/lab_visa_mcp/extension.py"),
+    Path("src/lab_visa_mcp/extension_packaging.py"),
+    Path("src/lab_visa_mcp/extension_install.py"),
+    Path("src/lab_visa_mcp/extension_catalog.py"),
+    Path("src/lab_visa_mcp/extension_authoring.py"),
+    Path("src/lab_visa_mcp/extension_integrity.py"),
+    Path("src/lab_visa_mcp/instrument_authoring.py"),
+    Path("src/lab_visa_mcp/observation.py"),
+    Path("src/lab_visa_mcp/testing"),
 ]
 
 
@@ -135,8 +135,8 @@ def _top_level_imports(source: str) -> list[str]:
 
 def test_runtime_modules_do_not_directly_import_visa_manager():
     """runtime 候補 module の **top-level** で
-    `from visa_mcp.visa_manager import ...` / `import
-    visa_mcp.visa_manager` が無いことを AST で確認する。
+    `from lab_visa_mcp.visa_manager import ...` / `import
+    lab_visa_mcp.visa_manager` が無いことを AST で確認する。
 
     関数 / メソッド内の lazy import は許容 (mock backend が VISA timeout
     error 互換を投げるためなど)。v1.11 で `InstrumentBackend` Protocol

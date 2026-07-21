@@ -24,7 +24,7 @@ from lab_executor.observation import (
     compute_current_phase, compute_job_outcome, event_severity,
     build_run_summary,
 )
-from visa_mcp.session_manager import InstrumentSession
+from lab_visa_mcp.session_manager import InstrumentSession
 from lab_executor.system_config import SystemConfig, InstrumentBinding
 
 

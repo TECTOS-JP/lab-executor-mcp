@@ -199,7 +199,7 @@ def test_lint_verified_clean_definition_has_no_lint_warnings(tmp_path):
 
 def _run_cli(*args: str) -> tuple[int, dict]:
     """visa-mcp CLI を subprocess で呼び出し、JSON 出力 (--json 必須) を返す"""
-    cmd = [sys.executable, "-m", "visa_mcp.cli", *args, "--json"]
+    cmd = [sys.executable, "-m", "lab_visa_mcp.cli", *args, "--json"]
     result = subprocess.run(
         cmd, capture_output=True, text=True, cwd=str(ROOT),
     )

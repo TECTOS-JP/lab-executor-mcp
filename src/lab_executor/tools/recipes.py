@@ -6,7 +6,7 @@ from lab_executor.recipe_executor import execute_recipe as _execute_recipe
 
 if TYPE_CHECKING:
     # v1.11: backend layer top-level import 排除 (型ヒントのみ)
-    from visa_mcp.session_manager import SessionManager
+    from lab_visa_mcp.session_manager import SessionManager
 
 
 def register_tools(mcp: FastMCP, session_mgr: SessionManager) -> None:
