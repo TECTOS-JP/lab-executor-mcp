@@ -342,7 +342,7 @@ _DRAFT_HEADER = """\
 
 # v2.2.0: template は外部 YAML file (importlib.resources で読み込み)
 # 配置: src/lab_executor/templates/instruments/<category>.yaml
-# (v2.0 で visa_mcp -> lab_executor へ移送、bootstrap script の rewrite
+# (v2.0 で lab_visa_mcp -> lab_executor へ移送、bootstrap script の rewrite
 # 漏れを修正)
 def _load_template(category: str) -> str:
     try:
@@ -355,7 +355,7 @@ def _load_template(category: str) -> str:
         # 互換 fallback: lab-executor-mcp に templates が無く、
         # visa-mcp が install 済みなら旧 path を試す
         return (
-            files("visa_mcp.templates.instruments")
+            files("lab_visa_mcp.templates.instruments")
             .joinpath(f"{category}.yaml")
             .read_text(encoding="utf-8")
         )

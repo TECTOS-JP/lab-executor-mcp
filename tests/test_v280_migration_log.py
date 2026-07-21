@@ -357,7 +357,7 @@ def test_no_pyvisa_visa_mcp_import_for_migration_log():
         "import sys\n"
         "class B:\n"
         "    def find_spec(self, n, p=None, t=None):\n"
-        "        if n == 'visa_mcp' or n.startswith('visa_mcp.'):\n"
+        "        if n == 'lab_visa_mcp' or n.startswith('lab_visa_mcp.'):\n"
         "            raise ImportError('blocked')\n"
         "        if n == 'pyvisa' or n.startswith('pyvisa'):\n"
         "            raise ImportError('blocked')\n"
@@ -371,7 +371,7 @@ def test_no_pyvisa_visa_mcp_import_for_migration_log():
         "logs = list_extension_migration_logs()\n"
         "assert isinstance(logs, list)\n"
         "assert 'pyvisa' not in sys.modules\n"
-        "assert 'visa_mcp' not in sys.modules\n"
+        "assert 'lab_visa_mcp' not in sys.modules\n"
         "print('OK')\n"
     )
     res = subprocess.run(

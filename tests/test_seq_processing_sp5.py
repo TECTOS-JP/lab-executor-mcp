@@ -28,7 +28,7 @@ from lab_executor.utils.seq_expression import (
     evaluate, evaluate_condition, referenced_names,
 )
 from lab_executor.ui.views import dryrun_view
-from visa_mcp.session_manager import InstrumentSession
+from lab_visa_mcp.session_manager import InstrumentSession
 
 RESOURCE = "TEST::INSTR"
 

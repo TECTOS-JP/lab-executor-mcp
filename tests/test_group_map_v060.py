@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 import yaml
 
-from visa_mcp.bus_manager import BusManager
+from lab_visa_mcp.bus_manager import BusManager
 from lab_executor.group import (
     FailurePolicy, TargetExecution,
     resolve_resource, resolve_unit_bindings, collect_target_resources,
@@ -26,7 +26,7 @@ from lab_executor.experiment_ir import CommandStep, Plan
 from lab_executor.job import JobManager, JobStore
 from lab_executor.job.state_machine import JobStatus, is_terminal
 from lab_executor.models.instrument_def import InstrumentDefinition
-from visa_mcp.session_manager import InstrumentSession
+from lab_visa_mcp.session_manager import InstrumentSession
 from lab_executor.system_config import (
     SystemConfig, InstrumentBinding, BusConfig,
     InstrumentGroup, ExperimentUnit,
@@ -232,7 +232,7 @@ async def test_group_executor_all_success():
 @pytest.mark.asyncio
 async def test_group_executor_partial_failure_continue():
     """実装方針必須テスト: 一部 timeout でも partial_failure で成功分を返す"""
-    from visa_mcp.visa_manager import VisaError
+    from lab_visa_mcp.visa_manager import VisaError
 
     visa = MagicMock()
 
@@ -270,7 +270,7 @@ async def test_group_executor_partial_failure_continue():
 
 @pytest.mark.asyncio
 async def test_group_executor_stop_on_first_error():
-    from visa_mcp.visa_manager import VisaError
+    from lab_visa_mcp.visa_manager import VisaError
     visa = MagicMock()
 
     async def q(res, *args, **kwargs):
@@ -304,7 +304,7 @@ async def test_group_executor_retry_target():
     """failure_policy.retry で target 全体 retry"""
     visa = MagicMock()
     calls = {"n": 0}
-    from visa_mcp.visa_manager import VisaError
+    from lab_visa_mcp.visa_manager import VisaError
 
     async def q(*a, **kw):
         calls["n"] += 1

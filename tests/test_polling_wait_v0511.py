@@ -19,7 +19,7 @@ from lab_executor.polling_executor import (
     execute_wait_for_condition,
     execute_wait_until,
 )
-from visa_mcp.session_manager import InstrumentSession
+from lab_visa_mcp.session_manager import InstrumentSession
 
 
 # === wait_for_condition の polling_safe_warning ===
@@ -167,7 +167,7 @@ commands:
         resource_name="TEMP::INSTR", idn_response="<x>",
         idn_parsed={}, definition=d,
     )
-    from visa_mcp.visa_manager import VisaError
+    from lab_visa_mcp.visa_manager import VisaError
 
     visa = MagicMock()
     calls = {"n": 0}

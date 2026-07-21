@@ -20,11 +20,11 @@ VISA_SRC = ROOT.parent / "visa-mcp" / "src"
 sys.path.insert(0, str(VISA_SRC))
 
 import lab_executor  # noqa
-import visa_mcp  # noqa
+import lab_visa_mcp  # noqa
 
-from visa_mcp.visa_manager import VisaManager
-from visa_mcp.session_manager import SessionManager
-from visa_mcp.instrument_registry import InstrumentRegistry
+from lab_visa_mcp.visa_manager import VisaManager
+from lab_visa_mcp.session_manager import SessionManager
+from lab_visa_mcp.instrument_registry import InstrumentRegistry
 from lab_executor.job.manager import JobManager
 from lab_executor.job.store import JobStore
 from lab_executor.dsl.compiler import validate_and_compile
@@ -35,7 +35,7 @@ from lab_executor.tools.export import _extract_result_rows
 
 async def main() -> int:
     print(f"[versions] lab_executor={lab_executor.__version__} "
-          f"visa_mcp={visa_mcp.__version__}")
+          f"lab_visa_mcp={lab_visa_mcp.__version__}")
     tmpdb = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
     tmpdb.close()
 

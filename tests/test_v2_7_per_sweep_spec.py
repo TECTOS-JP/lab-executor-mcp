@@ -254,7 +254,7 @@ async def test_dsl_sweep_persists_sweep_context_in_step_result(tmp_path):
     from lab_executor.job.state_machine import is_terminal, JobStatus
     from lab_executor.models.instrument_def import InstrumentDefinition
     from lab_executor.system_config import SystemConfig, InstrumentBinding
-    from visa_mcp.session_manager import InstrumentSession
+    from lab_visa_mcp.session_manager import InstrumentSession
 
     res = "GPIB0::1::INSTR"
     yaml_psu = """

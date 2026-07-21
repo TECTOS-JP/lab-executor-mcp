@@ -22,7 +22,7 @@ class SessionFacade(Protocol):
 
     実装候補:
       - `lab_executor.server._SessionFacade` (内部 Mock 用)
-      - `visa_mcp.session_manager.SessionManager` (実機 backend)
+      - `lab_visa_mcp.session_manager.SessionManager` (実機 backend)
 
     runtime / tools は `get_session(name)` 経由で session を取得し、
     必要に応じて backend (`InstrumentBackend`) と組み合わせて

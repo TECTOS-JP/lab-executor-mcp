@@ -100,7 +100,7 @@ def _sha256_file(p: Path) -> str:
 
 def _current_version() -> str:
     try:
-        from visa_mcp import __version__
+        from lab_visa_mcp import __version__
         return __version__
     except Exception:
         return "unknown"

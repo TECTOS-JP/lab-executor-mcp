@@ -10,7 +10,7 @@ import yaml
 from lab_executor.job import JobManager, JobStore
 from lab_executor.job.state_machine import JobStatus
 from lab_executor.models.instrument_def import InstrumentDefinition
-from visa_mcp.session_manager import InstrumentSession
+from lab_visa_mcp.session_manager import InstrumentSession
 from lab_executor.system_config import SystemConfig, InstrumentBinding
 from lab_executor.testing.benchmark_task import (
     BenchmarkTask, ExpectedFailure, ExpectedRepair, load_benchmark_task,

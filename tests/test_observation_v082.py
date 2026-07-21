@@ -20,7 +20,7 @@ from lab_executor.observation import (
     PHASE_ENUM, compute_current_phase, event_kind, event_severity,
     normalize_event, build_run_summary,
 )
-from visa_mcp.session_manager import InstrumentSession
+from lab_visa_mcp.session_manager import InstrumentSession
 from lab_executor.system_config import SystemConfig, InstrumentBinding
 
 

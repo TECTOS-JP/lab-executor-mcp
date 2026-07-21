@@ -138,7 +138,7 @@ def test_session_facade_runtime_checkable():
 
 def test_job_manager_type_checking_no_visa_mcp_reference():
     """v2.3.0: job/manager.py の TYPE_CHECKING block 内に
-    `visa_mcp.*` 参照が残っていないこと (lab_executor 側 Protocol
+    `lab_visa_mcp.*` 参照が残っていないこと (lab_executor 側 Protocol
     へ置換済)"""
     p = ROOT / "src" / "lab_executor" / "job" / "manager.py"
     text = p.read_text(encoding="utf-8")
@@ -153,10 +153,10 @@ def test_job_manager_type_checking_no_visa_mcp_reference():
             continue
         for sub in ast.walk(node):
             if isinstance(sub, ast.ImportFrom) and sub.module:
-                if sub.module.startswith("visa_mcp"):
+                if sub.module.startswith("lab_visa_mcp"):
                     visa_mcp_in_type_checking.append(sub.module)
     assert not visa_mcp_in_type_checking, (
-        f"TYPE_CHECKING block still references visa_mcp: "
+        f"TYPE_CHECKING block still references lab_visa_mcp: "
         f"{visa_mcp_in_type_checking}")
 
 
@@ -172,12 +172,12 @@ def test_v23_version():
 
 
 def test_no_pyvisa_for_extension_paths_subprocess():
-    """`extension paths` は PyVISA / visa_mcp なしで動く"""
+    """`extension paths` は PyVISA / lab_visa_mcp なしで動く"""
     script = (
         "import sys\n"
         "class B:\n"
         "    def find_spec(self, n, p=None, t=None):\n"
-        "        if n == 'visa_mcp' or n.startswith('visa_mcp.'):\n"
+        "        if n == 'lab_visa_mcp' or n.startswith('lab_visa_mcp.'):\n"
         "            raise ImportError('blocked')\n"
         "        return None\n"
         "sys.meta_path.insert(0, B())\n"
@@ -185,7 +185,7 @@ def test_no_pyvisa_for_extension_paths_subprocess():
         "paths = get_extension_paths()\n"
         "assert paths.migration_required is False\n"
         "assert 'pyvisa' not in sys.modules\n"
-        "assert 'visa_mcp' not in sys.modules\n"
+        "assert 'lab_visa_mcp' not in sys.modules\n"
         "print('OK')\n"
     )
     res = subprocess.run(

@@ -43,9 +43,9 @@ YOK_RESOURCE = "GPIB0::2::INSTR"
 
 @pytest.fixture(scope="module")
 async def session_mgr():
-    from visa_mcp.visa_manager import VisaManager
+    from lab_visa_mcp.visa_manager import VisaManager
     from lab_executor.instrument_registry import InstrumentRegistry
-    from visa_mcp.session_manager import SessionManager
+    from lab_visa_mcp.session_manager import SessionManager
 
     visa = VisaManager()
     registry = InstrumentRegistry(INSTRUMENTS_DIR)
@@ -135,7 +135,7 @@ def test_pmx_output_on_blocked_without_protection(session_mgr):
     OVP/OCP を設定せずに output ON を試みると precondition 違反が返る。
     実際にコマンドは送信しない（sf.validate のみ）。
     """
-    from visa_mcp import safety as sf
+    from lab_visa_mcp import safety as sf
 
     session = session_mgr.get_session(PMX_RESOURCE)
     assert session is not None, "PMX セッションが未確立"
@@ -160,7 +160,7 @@ def test_pmx_output_on_allowed_after_protection(session_mgr):
     """
     OVP/OCP 設定済み履歴があれば output ON の precondition が通る。
     """
-    from visa_mcp import safety as sf
+    from lab_visa_mcp import safety as sf
 
     session = session_mgr.get_session(PMX_RESOURCE)
     assert session is not None

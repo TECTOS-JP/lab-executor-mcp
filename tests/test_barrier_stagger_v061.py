@@ -20,7 +20,7 @@ from lab_executor.group import FailurePolicy, TargetExecution
 from lab_executor.group.barrier import BarrierCoordinator
 from lab_executor.group.executor import GroupExecutor
 from lab_executor.models.instrument_def import InstrumentDefinition
-from visa_mcp.session_manager import InstrumentSession
+from lab_visa_mcp.session_manager import InstrumentSession
 
 
 YAML_PSU = """
@@ -317,7 +317,7 @@ async def test_partial_failure_with_barrier_continue(monkeypatch):
     barrier 成立。Job 全体は partial_failure。
     """
     monkeypatch.setenv("VISA_MCP_SAFETY_MODE", "permissive")
-    from visa_mcp.visa_manager import VisaError
+    from lab_visa_mcp.visa_manager import VisaError
 
     visa = MagicMock()
 

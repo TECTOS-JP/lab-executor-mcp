@@ -14,7 +14,7 @@ import yaml
 from lab_executor.dsl.template import apply_template_override
 from lab_executor.job import JobManager, JobStore
 from lab_executor.models.instrument_def import InstrumentDefinition
-from visa_mcp.session_manager import InstrumentSession
+from lab_visa_mcp.session_manager import InstrumentSession
 from lab_executor.system_config import (
     SystemConfig, InstrumentBinding, ExperimentUnit,
 )

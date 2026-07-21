@@ -17,7 +17,7 @@ from unittest.mock import AsyncMock, MagicMock
 from lab_executor.job import JobManager, JobStore
 from lab_executor.job.state_machine import is_terminal
 from lab_executor.models.instrument_def import InstrumentDefinition
-from visa_mcp.session_manager import InstrumentSession
+from lab_visa_mcp.session_manager import InstrumentSession
 
 
 DEFINITION_WITH_SHUTDOWN = """

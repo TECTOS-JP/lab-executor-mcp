@@ -27,8 +27,8 @@ from lab_executor.observation import build_run_summary, compute_job_outcome
 if TYPE_CHECKING:
     # v1.11: 型ヒント目的。実体 (`InstrumentSession(...)`) は内部関数で
     # lazy import する (`_build_sessions` 内で `from
-    # visa_mcp.session_manager import InstrumentSession`)。
-    from visa_mcp.session_manager import InstrumentSession
+    # lab_visa_mcp.session_manager import InstrumentSession`)。
+    from lab_visa_mcp.session_manager import InstrumentSession
 
 from lab_executor.system_config import (
     SystemConfig, InstrumentBinding, ExperimentUnit,
@@ -115,7 +115,7 @@ def _build_session_manager(
     """各 resource に definition を bind した SessionManager 互換オブジェクト"""
     # v1.11: lazy import (lab-executor 候補 module の top-level に
     # session_manager を載せない、KNOWN_V111_TO_RESOLVE 解消)
-    from visa_mcp.session_manager import InstrumentSession
+    from lab_visa_mcp.session_manager import InstrumentSession
     sessions: dict[str, InstrumentSession] = {}
     # bindings の resource → 同名 definition (基本的に 1:1 で対応する fixture 想定)
     for alias, binding in sys_cfg.instruments.items():

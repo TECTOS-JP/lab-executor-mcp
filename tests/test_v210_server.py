@@ -62,25 +62,25 @@ def test_stability_declarations_unchanged():
 
 
 # ============================================================
-# Backend-independence (PyVISA / visa_mcp 非依存)
+# Backend-independence (PyVISA / lab_visa_mcp 非依存)
 # ============================================================
 
 
 def test_server_module_imports_without_pyvisa():
-    """`import lab_executor.server` 自体は PyVISA / visa_mcp に
+    """`import lab_executor.server` 自体は PyVISA / lab_visa_mcp に
     依存しない"""
     import lab_executor.server  # noqa: F401
     # backends は遅延 import される設計
 
 
 def test_server_creates_without_visa_mcp_installed():
-    """visa_mcp を import 経路から block しても create_server() が
+    """lab_visa_mcp を import 経路から block しても create_server() が
     動く"""
     import sys as _sys
 
     class _Blocker:
         def find_spec(self, name, path=None, target=None):
-            if name == "visa_mcp" or name.startswith("visa_mcp."):
+            if name == "lab_visa_mcp" or name.startswith("lab_visa_mcp."):
                 raise ImportError(f"blocked for test: {name}")
             return None
 
@@ -89,7 +89,7 @@ def test_server_creates_without_visa_mcp_installed():
     try:
         # キャッシュ済みは削除
         for k in list(_sys.modules):
-            if k.startswith("visa_mcp") or k == "lab_executor.server":
+            if k.startswith("lab_visa_mcp") or k == "lab_executor.server":
                 del _sys.modules[k]
         from lab_executor.server import create_server
         server = create_server()
@@ -111,7 +111,7 @@ def test_no_pyvisa_when_visa_mcp_blocked_subprocess():
         "import sys\n"
         "class B:\n"
         "    def find_spec(self, n, p=None, t=None):\n"
-        "        if n == 'visa_mcp' or n.startswith('visa_mcp.'):\n"
+        "        if n == 'lab_visa_mcp' or n.startswith('lab_visa_mcp.'):\n"
         "            raise ImportError('blocked')\n"
         "        return None\n"
         "sys.meta_path.insert(0, B())\n"
@@ -119,7 +119,7 @@ def test_no_pyvisa_when_visa_mcp_blocked_subprocess():
         "create_server()\n"
         "assert 'pyvisa' not in sys.modules, f'leak: "
         "{[k for k in sys.modules if \"pyvisa\" in k]}'\n"
-        "assert 'visa_mcp' not in sys.modules\n"
+        "assert 'lab_visa_mcp' not in sys.modules\n"
         "print('OK')\n"
     )
     result = subprocess.run(
@@ -235,7 +235,7 @@ def test_diagnose_tool_surface():
 
 def test_no_top_level_visa_mcp_import_added():
     """v2.1 で新規追加した src/lab_executor/server.py 等が
-    top-level で visa_mcp.* を import していないこと"""
+    top-level で lab_visa_mcp.* を import していないこと"""
     src_root = ROOT / "src" / "lab_executor"
     forbidden: list[tuple[str, str]] = []
     for py in src_root.rglob("*.py"):
@@ -246,14 +246,14 @@ def test_no_top_level_visa_mcp_import_added():
             continue
         for node in tree.body:
             if isinstance(node, ast.ImportFrom) and node.module:
-                if node.module.startswith("visa_mcp"):
+                if node.module.startswith("lab_visa_mcp"):
                     forbidden.append(
                         (str(py.relative_to(src_root)), node.module))
             elif isinstance(node, ast.Import):
                 for alias in node.names:
-                    if alias.name.startswith("visa_mcp"):
+                    if alias.name.startswith("lab_visa_mcp"):
                         forbidden.append(
                             (str(py.relative_to(src_root)),
                              alias.name))
     assert not forbidden, (
-        f"top-level visa_mcp imports: {forbidden}")
+        f"top-level lab_visa_mcp imports: {forbidden}")

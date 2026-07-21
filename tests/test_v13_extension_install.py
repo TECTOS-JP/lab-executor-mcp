@@ -311,7 +311,7 @@ def test_overlay_registry_no_extensions_works(temp_env):
 
 def test_cli_extension_help_includes_install_list_uninstall():
     result = subprocess.run(
-        [sys.executable, "-m", "visa_mcp.cli", "extension", "--help"],
+        [sys.executable, "-m", "lab_visa_mcp.cli", "extension", "--help"],
         capture_output=True, text=True, cwd=str(ROOT),
     )
     out = result.stdout + result.stderr

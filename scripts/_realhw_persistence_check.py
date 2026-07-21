@@ -31,13 +31,13 @@ VISA_SRC = ROOT.parent / "visa-mcp" / "src"
 sys.path.insert(0, str(VISA_SRC))
 
 import lab_executor  # noqa
-import visa_mcp  # noqa
+import lab_visa_mcp  # noqa
 print(f"[versions] lab_executor={lab_executor.__version__}, "
-      f"visa_mcp={visa_mcp.__version__}")
+      f"lab_visa_mcp={lab_visa_mcp.__version__}")
 
-from visa_mcp.visa_manager import VisaManager
-from visa_mcp.session_manager import SessionManager
-from visa_mcp.instrument_registry import InstrumentRegistry
+from lab_visa_mcp.visa_manager import VisaManager
+from lab_visa_mcp.session_manager import SessionManager
+from lab_visa_mcp.instrument_registry import InstrumentRegistry
 from lab_executor.job.manager import JobManager
 from lab_executor.job.store import JobStore
 

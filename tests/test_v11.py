@@ -20,7 +20,7 @@ from lab_executor import stability
 from lab_executor.job import JobManager, JobStore
 from lab_executor.job.state_machine import JobStatus
 from lab_executor.models.instrument_def import InstrumentDefinition
-from visa_mcp.session_manager import InstrumentSession
+from lab_visa_mcp.session_manager import InstrumentSession
 from lab_executor.system_config import SystemConfig, InstrumentBinding
 
 
@@ -56,7 +56,7 @@ def test_backend_abstraction_doc_exists():
 
 
 def test_instrument_backend_protocol_importable():
-    from visa_mcp.backends import InstrumentBackend
+    from lab_visa_mcp.backends import InstrumentBackend
     assert hasattr(InstrumentBackend, "__call__") or True
     # Protocol の代表 method が定義されている
     assert "list_resources" in InstrumentBackend.__dict__ or \

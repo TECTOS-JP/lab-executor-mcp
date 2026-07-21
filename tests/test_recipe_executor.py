@@ -6,7 +6,7 @@ import pytest
 import yaml
 
 from lab_executor.models.instrument_def import InstrumentDefinition
-from visa_mcp.session_manager import InstrumentSession
+from lab_visa_mcp.session_manager import InstrumentSession
 from lab_executor.recipe_executor import execute_recipe
 
 
@@ -105,7 +105,7 @@ async def test_recipe_missing_parameter():
 @pytest.mark.asyncio
 async def test_recipe_halts_on_step_failure(monkeypatch):
     """途中ステップが失敗したら以降は実行されない"""
-    from visa_mcp.visa_manager import VisaError
+    from lab_visa_mcp.visa_manager import VisaError
 
     visa = MagicMock()
     visa.write = AsyncMock(side_effect=[None, VisaError("simulated"), None, None])

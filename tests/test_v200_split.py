@@ -53,7 +53,7 @@ def test_stable_tools_unchanged():
 
 
 def test_no_visa_mcp_top_level_import_in_runtime_modules():
-    """lab-executor runtime module の top-level に visa_mcp.* が無い
+    """lab-executor runtime module の top-level に lab_visa_mcp.* が無い
     (TYPE_CHECKING / try-ImportError fallback は許容)"""
     src_root = ROOT / "src" / "lab_executor"
     forbidden_top_level: list[tuple[str, str]] = []
@@ -65,16 +65,16 @@ def test_no_visa_mcp_top_level_import_in_runtime_modules():
             continue
         for node in tree.body:
             if isinstance(node, ast.ImportFrom) and node.module:
-                if node.module.startswith("visa_mcp"):
+                if node.module.startswith("lab_visa_mcp"):
                     forbidden_top_level.append(
                         (str(py.relative_to(src_root)), node.module))
             elif isinstance(node, ast.Import):
                 for alias in node.names:
-                    if alias.name.startswith("visa_mcp"):
+                    if alias.name.startswith("lab_visa_mcp"):
                         forbidden_top_level.append(
                             (str(py.relative_to(src_root)), alias.name))
     assert not forbidden_top_level, (
-        f"top-level visa_mcp imports detected: {forbidden_top_level}")
+        f"top-level lab_visa_mcp imports detected: {forbidden_top_level}")
 
 
 # ============================================================

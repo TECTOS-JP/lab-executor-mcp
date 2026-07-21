@@ -22,7 +22,7 @@ from lab_executor.response_envelope import make_envelope, make_error
 
 if TYPE_CHECKING:
     # v1.11: backend layer top-level import 排除
-    from visa_mcp.session_manager import SessionManager
+    from lab_visa_mcp.session_manager import SessionManager
 
 logger = logging.getLogger(__name__)
 

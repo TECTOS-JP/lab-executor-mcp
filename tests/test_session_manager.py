@@ -1,5 +1,5 @@
 from unittest.mock import MagicMock
-from visa_mcp.session_manager import SessionManager
+from lab_visa_mcp.session_manager import SessionManager
 from lab_executor.instrument_registry import InstrumentRegistry
 
 

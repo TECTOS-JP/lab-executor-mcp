@@ -287,7 +287,7 @@ async def test_dsl_execution_persists_instrument_in_step_result(tmp_path):
     from lab_executor.job.state_machine import is_terminal
     from lab_executor.models.instrument_def import InstrumentDefinition
     from lab_executor.system_config import SystemConfig, InstrumentBinding
-    from visa_mcp.session_manager import InstrumentSession
+    from lab_visa_mcp.session_manager import InstrumentSession
 
     yaml_psu = """
 metadata: { manufacturer: T, model: PSU, category: power_supply }
@@ -369,7 +369,7 @@ async def test_recipe_execution_persists_instrument_in_step_result(
     from lab_executor.job import JobManager, JobStore
     from lab_executor.job.state_machine import is_terminal, JobStatus
     from lab_executor.models.instrument_def import InstrumentDefinition
-    from visa_mcp.session_manager import InstrumentSession
+    from lab_visa_mcp.session_manager import InstrumentSession
     from lab_executor.tools.observation import _extract_instrument_views
 
     monkeypatch.setenv("VISA_MCP_SAFETY_MODE", "permissive")

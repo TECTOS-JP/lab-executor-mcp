@@ -199,13 +199,13 @@ def test_v22_version():
 
 def test_authoring_cli_no_pyvisa_subprocess(tmp_path):
     """authoring CLI (extension init / instrument scaffold) が
-    PyVISA / visa_mcp なしで動く"""
+    PyVISA / lab_visa_mcp なしで動く"""
     out = tmp_path / "dmm.yaml"
     script = (
         "import sys\n"
         "class B:\n"
         "    def find_spec(self, n, p=None, t=None):\n"
-        "        if n == 'visa_mcp' or n.startswith('visa_mcp.'):\n"
+        "        if n == 'lab_visa_mcp' or n.startswith('lab_visa_mcp.'):\n"
         "            raise ImportError('blocked')\n"
         "        return None\n"
         "sys.meta_path.insert(0, B())\n"

@@ -18,7 +18,7 @@ from lab_executor.polling_executor import (
     execute_wait_until,
     extract_value,
 )
-from visa_mcp.session_manager import InstrumentSession
+from lab_visa_mcp.session_manager import InstrumentSession
 from lab_executor.utils.condition import safe_eval_condition, ConditionError
 
 
@@ -312,7 +312,7 @@ commands:
     )
     visa = MagicMock()
     calls = {"n": 0}
-    from visa_mcp.visa_manager import VisaError
+    from lab_visa_mcp.visa_manager import VisaError
 
     async def q(*a, **kw):
         calls["n"] += 1
@@ -348,7 +348,7 @@ commands:
         resource_name="TEST::INSTR", idn_response="<x>",
         idn_parsed={}, definition=d,
     )
-    from visa_mcp.visa_manager import VisaError
+    from lab_visa_mcp.visa_manager import VisaError
     visa = MagicMock()
 
     async def q(*a, **kw):

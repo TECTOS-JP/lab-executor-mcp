@@ -16,8 +16,8 @@ from lab_executor import safety as sf
 
 if TYPE_CHECKING:
     # v1.11: backend layer top-level import 排除 (型ヒントのみ)
-    from visa_mcp.session_manager import SessionManager
-    from visa_mcp.visa_manager import VisaManager
+    from lab_visa_mcp.session_manager import SessionManager
+    from lab_visa_mcp.visa_manager import VisaManager
 
 logger = logging.getLogger(__name__)
 

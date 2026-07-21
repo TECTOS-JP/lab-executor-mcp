@@ -37,8 +37,8 @@ if TYPE_CHECKING:
     # v1.11: backend / session 系は型ヒントだけ。実体は JobManager から
     # 注入 (`visa: VisaManager`, `session_resolver: Callable[..., InstrumentSession | None]`)。
     # v2.0 で `InstrumentBackend` Protocol 経由に置換予定。
-    from visa_mcp.session_manager import InstrumentSession
-    from visa_mcp.visa_manager import VisaManager
+    from lab_visa_mcp.session_manager import InstrumentSession
+    from lab_visa_mcp.visa_manager import VisaManager
 
 logger = logging.getLogger(__name__)
 

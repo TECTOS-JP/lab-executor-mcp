@@ -6,7 +6,7 @@ import pytest
 
 from lab_executor.models.instrument_def import InstrumentDefinition
 from lab_executor.recipe_executor import execute_recipe, recipe_to_plan
-from visa_mcp.session_manager import InstrumentSession
+from lab_visa_mcp.session_manager import InstrumentSession
 
 
 PRIMARY = "TEST::PSU"

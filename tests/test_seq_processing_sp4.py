@@ -27,7 +27,7 @@ from lab_executor.experiment_ir import PauseStep
 from lab_executor.utils.seq_expression import (
     SeqExpressionError, interpolate_string, string_expr_parts,
 )
-from visa_mcp.session_manager import InstrumentSession
+from lab_visa_mcp.session_manager import InstrumentSession
 
 RESOURCE = "TEST::INSTR"
 

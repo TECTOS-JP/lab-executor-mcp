@@ -12,7 +12,7 @@ from lab_executor.audit import AuditStore, summarize_for_audit
 from lab_executor.job import JobManager, JobStore
 from lab_executor.job.state_machine import JobStatus
 from lab_executor.models.instrument_def import InstrumentDefinition
-from visa_mcp.session_manager import InstrumentSession
+from lab_visa_mcp.session_manager import InstrumentSession
 from lab_executor.system_config import SystemConfig, InstrumentBinding
 
 

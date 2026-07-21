@@ -26,7 +26,7 @@ from lab_executor.experiment_ir import (
 )
 from lab_executor.utils.seq_expression import SeqExpressionError
 from lab_executor.ui.views import dryrun_view
-from visa_mcp.session_manager import InstrumentSession
+from lab_visa_mcp.session_manager import InstrumentSession
 
 
 SAMPLE_YAML = """

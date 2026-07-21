@@ -399,7 +399,7 @@ def test_extension_verify_package_rejects_executable_true(temp_pack,
 
 def _run_cli(*args: str) -> tuple[int, str, str]:
     result = subprocess.run(
-        [sys.executable, "-m", "visa_mcp.cli", *args],
+        [sys.executable, "-m", "lab_visa_mcp.cli", *args],
         capture_output=True, text=True, cwd=str(ROOT),
     )
     return result.returncode, result.stdout, result.stderr

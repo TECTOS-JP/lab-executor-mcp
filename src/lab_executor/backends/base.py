@@ -8,7 +8,7 @@ contract**。runtime module は本 Protocol にのみ依存し、PyVISA 等の
 実装:
 - `lab_executor.backends.mock_backend.MockBackend`
   (lab-executor-mcp 同梱、PyVISA 非依存、benchmark / dry-run 用)
-- `visa_mcp.backends.pyvisa_backend.PyVisaBackend`
+- `lab_visa_mcp.backends.pyvisa_backend.PyVisaBackend`
   (visa-mcp 同梱、PyVISA 透過 adapter、実機通信用)
 
 Protocol は **意図的に最小**: `backend_id` / `list_resources` /
@@ -30,7 +30,7 @@ class InstrumentBackend(Protocol):
     """機器との通信を抽象化する backend (v2.0 公開境界)
 
     既存実装 (v1.11 時点):
-      - ``visa_mcp.backends.pyvisa_backend.PyVisaBackend``
+      - ``lab_visa_mcp.backends.pyvisa_backend.PyVisaBackend``
         (visa-mcp owner、`VisaManager` を包む)
       - ``lab_executor.backends.mock_backend.MockBackend``
         (lab-executor-mcp owner、`MockVisaManager` を包む)

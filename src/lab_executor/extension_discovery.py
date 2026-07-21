@@ -13,7 +13,7 @@
 - YAML が読めない場合は `invalid_extension_metadata` /
   `missing_extension_yaml` として errors / warnings に分けて報告。
 
-PyVISA / `visa_mcp` への依存は一切持たない (CI gate あり)。
+PyVISA / `lab_visa_mcp` への依存は一切持たない (CI gate あり)。
 """
 from __future__ import annotations
 import json
