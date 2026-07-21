@@ -50,6 +50,12 @@ ui = ["fastapi>=0.110", "uvicorn>=0.29", "jinja2>=3.1"]
 dev = [
     "pytest", "pytest-asyncio", "pyyaml",
     "fastapi>=0.110", "uvicorn>=0.29", "jinja2>=3.1", "httpx",
+    # 44 個のテストモジュールが VISA backend との統合を検証しており、これが
+    # 無いと収集段階で落ちる。runtime 自体は lab-visa-mcp に依存しない
+    # (遅延 import) ため、必須依存ではなく dev に置く。
+    # lab-visa-mcp は lab-executor-mcp に依存するが、editable install が
+    # 先に要求を満たすため循環しない。
+    "lab-visa-mcp>=2.8.1",
 ]
 
 [project.scripts]
