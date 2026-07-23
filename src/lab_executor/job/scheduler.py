@@ -180,25 +180,49 @@ class ResourceScheduler:
                     startable.append(candidate)
             return startable
 
-    async def cancel_queued(self, job_id: str) -> bool:
+    async def cancel_queued(self, job_id: str) -> list[str]:
         """
         queued 状態の Job を queue から取り除く (cancel 用)。
         active な Job には触れない (それは Job 側の cancel フローで処理)。
-        返り値: 取り除いた = True / 該当なし = False
+
+        返り値: **取り除いた結果、新たに起動可能になった Job の id**。
+        呼び出し側はそれらを running へ遷移させること。
+
+        通常は終端処理 (`on_terminal`) が後続を起こすが、`_run_job` の
+        coroutine が一度も走らないうちに Task が cancel されると finally
+        自体が実行されず、後続は誰にも起こされないまま queue に残る
+        (複数 resource を待つ Job の後ろに、その一部だけを使う Job が
+        並んでいる場合に顕在化する)。取り除いた本人が後続を返すことで、
+        終端処理の実行有無に依存しないようにする。
         """
         async with self._lock:
             resources = self._job_resources.get(job_id)
             if not resources:
-                return False
+                return []
             removed_any = False
             for r in resources:
                 q = self._queues.get(r)
                 if q and job_id in q:
                     q.remove(job_id)
                     removed_any = True
-            if removed_any:
-                self._job_resources.pop(job_id, None)
-            return removed_any
+            if not removed_any:
+                return []
+            self._job_resources.pop(job_id, None)
+
+            # 解放により起動可能になった Job を探す (on_terminal と同じ判定)
+            startable: list[str] = []
+            seen: set[str] = set()
+            for r in resources:
+                q = self._queues.get(r)
+                if not q:
+                    continue
+                candidate = q[0]
+                if candidate in seen:
+                    continue
+                seen.add(candidate)
+                if self._can_start(candidate):
+                    startable.append(candidate)
+            return startable
 
     async def get_scheduling_info(self, job_id: str) -> dict:
         """

@@ -726,13 +726,36 @@ class JobManager:
                 result={"success": False, "error": "InternalError", "message": str(e)},
             )
         finally:
-            try:
-                next_jobs = await self._scheduler.on_terminal(job_id, required_resources)
-                for nj_id in next_jobs:
-                    self._wake_queued_job(nj_id)
-            except Exception:
-                pass
+            await self._release_and_wake(job_id, required_resources)
             self._runtimes.pop(job_id, None)
+
+    async def _release_and_wake(
+        self, job_id: str, required_resources: list[str]
+    ) -> None:
+        """終端 Job の resource 占有を解放し、それで起動可能になった Job を起こす。
+
+        全ての終端経路がこれを通る。ここが失敗すると resource が使用中の
+        まま残り、以後その機器を使う Job が永久に待たされるため、例外は
+        握りつぶさず記録する (以前は 5 箇所に重複し、4 箇所が無条件に
+        捨てていたので、機器が塞がった原因を追跡できなかった)。
+        """
+        try:
+            next_jobs = await self._scheduler.on_terminal(job_id, required_resources)
+        except Exception:
+            logger.exception(
+                "scheduler.on_terminal に失敗 (job=%s): resource が使用中のまま "
+                "残る可能性があります", job_id,
+            )
+            return
+        self._wake_all(next_jobs)
+
+    def _wake_all(self, job_ids: list[str]) -> None:
+        """起動可能になった Job を起こす。1 件の失敗で他を巻き込まない。"""
+        for next_id in job_ids:
+            try:
+                self._wake_queued_job(next_id)
+            except Exception:
+                logger.exception("queued job の起動に失敗 (job=%s)", next_id)
 
     # =====================================================================
     # v0.8.0: Experiment DSL Job
@@ -1235,12 +1258,7 @@ class JobManager:
                         "plan_id": plan_id},
             )
         finally:
-            try:
-                next_jobs = await self._scheduler.on_terminal(job_id, required_resources)
-                for nj_id in next_jobs:
-                    self._wake_queued_job(nj_id)
-            except Exception:
-                pass
+            await self._release_and_wake(job_id, required_resources)
             self._runtimes.pop(job_id, None)
 
     async def _start_experiment_with_parallel(
@@ -1740,12 +1758,7 @@ class JobManager:
                 result={"success": False, "error": "InternalError", "message": str(e)},
             )
         finally:
-            try:
-                next_jobs = await self._scheduler.on_terminal(job_id, required_resources)
-                for nj_id in next_jobs:
-                    self._wake_queued_job(nj_id)
-            except Exception:
-                pass
+            await self._release_and_wake(job_id, required_resources)
             self._runtimes.pop(job_id, None)
 
     # =====================================================================
@@ -2246,12 +2259,7 @@ class JobManager:
                 result={"success": False, "error": "InternalError", "message": str(e)},
             )
         finally:
-            try:
-                next_jobs = await self._scheduler.on_terminal(job_id, required_resources)
-                for nj_id in next_jobs:
-                    self._wake_queued_job(nj_id)
-            except Exception:
-                pass
+            await self._release_and_wake(job_id, required_resources)
             self._runtimes.pop(job_id, None)
 
     # =====================================================================
@@ -2304,7 +2312,11 @@ class JobManager:
 
         # v0.5.0.2: queued の場合は scheduler から取り除き、直接 cancelled へ遷移
         if rec.status == JobStatus.QUEUED:
-            await self._scheduler.cancel_queued(job_id)
+            # 取り除いた結果で起動可能になった Job は、ここで起こす。
+            # 下の task.cancel() に任せると、_run_job が一度も走っていない
+            # 場合に finally 自体が実行されず、後続が queue に残り続ける。
+            startable = await self._scheduler.cancel_queued(job_id)
+            self._wake_all(startable)
             # 待機中の _wait_until_scheduled を抜けさせる (v0.5.0.3: event は常に存在)
             runtime._start_event.set()
             try:
@@ -2727,12 +2739,7 @@ class JobManager:
             )
         finally:
             # 終端 Job の resource 解放と次 Job 起動
-            try:
-                next_jobs = await self._scheduler.on_terminal(job_id, required_resources)
-                for nj_id in next_jobs:
-                    self._wake_queued_job(nj_id)
-            except Exception as e:
-                logger.warning("scheduler on_terminal で例外: %s", e)
+            await self._release_and_wake(job_id, required_resources)
             # v0.5.0.1 fix: 終端 Job の Task 参照を解放してメモリリークを防ぐ
             self._runtimes.pop(job_id, None)
 

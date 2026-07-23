@@ -85,6 +85,22 @@ def _clear_policy_env(monkeypatch):
     monkeypatch.setenv("VISA_MCP_SAFETY_MODE", "permissive")
 
 
+@pytest.fixture
+def allow_python(tmp_path, monkeypatch):
+    """python 実行を明示的に許可する。
+
+    既定は deny なので、コード実行そのものを検証するテストは、運用時と同じく
+    ポリシーで明示的に許可する必要がある。許可を書かずに動いてしまうと、
+    既定が緩んだことに誰も気付けない。
+    """
+    _write_policy(tmp_path, """
+        code_execution:
+          python: allow
+    """)
+    monkeypatch.setenv("LAB_EXECUTOR_POLICY_DIR", str(tmp_path))
+    return tmp_path
+
+
 PY_CODE_RECIPE = {
     "pycalc": {
         "steps": [
@@ -110,7 +126,7 @@ PY_CODE_RECIPE = {
 # ============================================================
 
 @pytest.mark.asyncio
-async def test_py_code_outputs_and_filtering():
+async def test_py_code_outputs_and_filtering(allow_python):
     defn = _defn(PY_CODE_RECIPE)
     plan = recipe_to_plan(defn.recipes["pycalc"], {}, definition=defn)
     ps = plan.steps[1]
@@ -129,7 +145,7 @@ async def test_py_code_outputs_and_filtering():
 
 
 @pytest.mark.asyncio
-async def test_py_error_and_missing_output():
+async def test_py_error_and_missing_output(allow_python):
     defn = _defn({
         "pyerr": {
             "steps": [
@@ -157,7 +173,7 @@ async def test_py_error_and_missing_output():
 
 
 @pytest.mark.asyncio
-async def test_py_timeout():
+async def test_py_timeout(allow_python):
     defn = _defn({
         "pyslow": {
             "steps": [
@@ -359,15 +375,17 @@ async def test_adjacent_policy_is_reloaded_for_runtime_recheck(tmp_path):
     assert result["error"] == "policy_violation"
 
 
-def test_policy_dll_default_effectively_deny():
-    # 既定ポリシー: dll=dir_allowlist + dll_dirs 空 = 事実上 deny
+def test_policy_defaults_are_closed():
+    # 既定ポリシー: python=deny / dll=dir_allowlist + dll_dirs 空 = 事実上 deny。
+    # ポリシー未設定の環境で、取り込んだ定義中のコードが走らないこと。
     pol = load_policy(None)
-    assert pol.python == "allow"
+    assert pol.python == "deny"
     assert pol.dll == "dir_allowlist" and pol.dll_dirs == []
     with pytest.raises(CodePolicyError, match="dll_dirs"):
         check_dll(pol, path=Path(MSVCRT), sha256="0" * 64)
-    # python は既定 allow
-    check_python(pol, file_path=None, sha256="0" * 64)
+    # python も既定で拒否される (以前は allow だった)
+    with pytest.raises(CodePolicyError, match="python=deny"):
+        check_python(pol, file_path=None, sha256="0" * 64)
 
 
 # ============================================================
@@ -456,7 +474,7 @@ async def test_dll_missing_function_and_type_decl_required(tmp_path, monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_worker_crash_is_recovered(tmp_path, monkeypatch):
+async def test_worker_crash_is_recovered(tmp_path, monkeypatch, allow_python):
     # py コードでワーカーを即死させる (os._exit) → worker_crashed で回収
     defn = _defn({
         "pycrash": {
@@ -668,3 +686,19 @@ async def test_backward_compat_no_code_steps():
     assert _detect_contains_code(
         {"definition": {"steps": defn.recipes["plain"].model_dump()["steps"]}}
     ) is None
+
+
+@pytest.mark.asyncio
+async def test_python_is_refused_when_no_policy_file_exists():
+    """ポリシー未設定の環境で、定義に含まれる Python が実行されないこと。
+
+    外部から受け取った機器定義や extension を取り込む運用では、これが
+    任意コード実行の入口になる。実行環境は隔離サンドボックスではないため、
+    既定は拒否でなければならない (v2.38.0 で allow から変更)。
+    """
+    defn = _defn(PY_CODE_RECIPE)
+    res = await execute_recipe(_visa("3.0"), _session(defn), "pycalc", {})
+    assert res["success"] is False
+    # コンパイル段階で拒否されるため、1 ステップも実行されない
+    assert res["steps_executed"] == []
+    assert "python=deny" in res["message"]
