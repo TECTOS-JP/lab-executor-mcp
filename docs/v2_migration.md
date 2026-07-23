@@ -131,8 +131,11 @@ v2.0 で完全に削除された API は無い。`DeprecationWarning` のみ。
 `lab-executor-mcp` 単独 install ではこれは正常。実機を使うなら:
 
 ```bash
-pip install visa-mcp
+pip install lab-visa-mcp
 ```
+
+> v2.37.0 で `visa-mcp` は **`lab-visa-mcp`** へ改名されました。
+> 旧配布名は PyPI から削除済みで `pip install visa-mcp` は失敗します。
 
 ### v2.0 で動作しなくなった
 

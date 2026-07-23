@@ -505,9 +505,10 @@ capture は同名変数への上書きになる (最後の値のみ残る)。
 > subprocess 分離は**安定性のため**であり、**サンドボックスではない**。
 > 信頼境界は「レシピの作者」。制御は「実行可否」と「来歴の完全記録」で行う。
 
-`_policy.yaml` (instruments dir。無ければ既定):
+`_policy.yaml` (instruments dir。**無ければ既定 = python は deny**):
 
 ```yaml
+# 記述例。既定値ではなく「明示的に許可する」書き方である点に注意
 code_execution:
   python: "allow"          # allow | scripts_dir_only | hash_pinned | deny
   scripts_dir: "./scripts"
@@ -516,11 +517,16 @@ code_execution:
   pinned_hashes: [ "sha256:..." ]
 ```
 
-- 既定: python=allow / dll=dir_allowlist (dll_dirs 空 = 事実上 deny)。
+- **既定: python=deny / dll=dir_allowlist (dll_dirs 空 = 事実上 deny)。**
+  v2.38.0 で python の既定を allow から deny へ変更した。実行環境は隔離
+  サンドボックスではないため、既定が許可では「信頼できる作成者だけが使う」
+  前提を強制できない。**`py` ステップを使うには `_policy.yaml` で明示的に
+  許可する。**
 - **コンパイル時 + 実行直前の二段検証** (実行直前に sha256 を再照合 —
-  TOCTOU 対策)。deny / ポリシー不適合は明確なエラー。
-- **外部から受け取った資産の実行時は python/dll とも既定 deny を推奨**
-  (他人のコードを明示的な許可なく走らせない)。
+  TOCTOU 対策)。deny / ポリシー不適合は明確なエラー。deny の場合は
+  コンパイル段階で弾かれ、1 ステップも実行されない。
+- 外部から受け取った資産を扱う運用では、既定のまま (deny) が安全である。
+  許可する場合も `scripts_dir_only` / `hash_pinned` で範囲を絞ること。
 
 ### 資産との接続
 

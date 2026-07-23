@@ -5,10 +5,17 @@
 Backend-independent **experiment execution runtime** for AI agents.
 Split from `visa-mcp` at v2.0.
 
-> **⚠ Upgrading from visa-mcp v1.x?**
-> **First read [`docs/v2_migration.md`](docs/v2_migration.md).**
-> 実機 backend が必要な既存利用者は **`pip install --upgrade visa-mcp`** が
-> 互換経路 (v2.0 では visa-mcp v2.0 release を待つ必要あり)。
+> **⚠ VISA backend を使う場合の名称変更 (v2.37.0)**
+> VISA backend は **`lab-visa-mcp`** へ改名されました (import 名も
+> `lab_visa_mcp`)。**旧配布名 `visa-mcp` は PyPI から削除済みで、
+> `pip install visa-mcp` は失敗します。**
+>
+> ```bash
+> pip install lab-visa-mcp     # 旧 visa-mcp
+> ```
+>
+> v1.x からの移行は **[`docs/v2_migration.md`](docs/v2_migration.md)** を
+> 参照してください。
 
 > **Line-ending / raw display note** (v2.5.1 強化):
 >
@@ -52,11 +59,14 @@ MCP API の安定性ポリシー (Stable / Experimental tool の区分、depreca
 pip install lab-executor-mcp
 ```
 
-PyVISA は **必須ではない**。実機 backend が必要な場合は
-`visa-mcp` を install すると自動的に `lab-executor-mcp` も入る。
+PyVISA は **必須ではない**。実機 backend が必要な場合は、使う通信方式の
+backend を install すると `lab-executor-mcp` も自動的に入る。
 
 ```bash
-pip install visa-mcp     # PyVISA backend + lab-executor-mcp runtime
+pip install lab-visa-mcp     # VISA (GPIB / USB / TCPIP / ASRL)
+pip install lab-modbus-mcp   # Modbus RTU / TCP
+pip install lab-ble-mcp      # BLE 環境センサー (読み取り専用)
+pip install lab-nidaq-mcp    # NI-DAQmx
 ```
 
 ## Extension path behavior (v2.4)
