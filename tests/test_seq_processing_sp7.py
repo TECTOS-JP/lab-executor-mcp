@@ -371,7 +371,16 @@ def test_dryrun_expands_call():
     assert row["type"] == "call"
 
 
-def test_call_rejects_code_pause_that_nested_runtime_cannot_service():
+def test_call_rejects_code_pause_that_nested_runtime_cannot_service(
+    tmp_path, monkeypatch
+):
+    # 検証したいのは on_error=pause の拒否。python 実行は既定 deny なので、
+    # 許可しておかないとその手前のポリシー拒否で止まってしまう。
+    (tmp_path / "_policy.yaml").write_text(
+        "code_execution:\n  python: allow\n", encoding="utf-8",
+    )
+    monkeypatch.setenv("LAB_EXECUTOR_POLICY_DIR", str(tmp_path))
+
     doc = yaml.safe_load(textwrap.dedent(SAMPLE_YAML))
     doc["sequences"]["pausing_code"] = {
         "returns": [],

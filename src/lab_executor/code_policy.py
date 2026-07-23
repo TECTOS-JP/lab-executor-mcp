@@ -46,7 +46,12 @@ class CodePolicyError(ValueError):
 
 @dataclass
 class CodePolicy:
-    python: str = "allow"
+    # 既定は deny。ポリシー未設定の環境で、取り込んだ機器定義や
+    # extension に含まれる Python が無制限に実行されるのを防ぐ。
+    # この実行環境は隔離サンドボックスではないため、既定を許可に
+    # すると「信頼できる作成者だけが使う」前提を強制できない。
+    # コード実行が必要な運用は _policy.yaml で明示的に許可する。
+    python: str = "deny"
     scripts_dir: Path | None = None
     dll: str = "dir_allowlist"
     dll_dirs: list[Path] = field(default_factory=list)

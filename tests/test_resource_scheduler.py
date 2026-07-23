@@ -65,8 +65,9 @@ async def test_cancel_queued():
     await s.on_running("job_1")
     await s.enqueue("job_2", ["psu1"])
 
-    removed = await s.cancel_queued("job_2")
-    assert removed is True
+    # job_1 が psu1 を握っているので、job_2 を取り除いても起動できるものはない
+    startable = await s.cancel_queued("job_2")
+    assert startable == []
     # 残っているのは job_1 のみ。job_1 終端で次に起動するものはない
     next_jobs = await s.on_terminal("job_1", ["psu1"])
     assert next_jobs == []
@@ -75,8 +76,29 @@ async def test_cancel_queued():
 @pytest.mark.asyncio
 async def test_cancel_queued_nonexistent():
     s = ResourceScheduler()
-    removed = await s.cancel_queued("nonexistent")
-    assert removed is False
+    assert await s.cancel_queued("nonexistent") == []
+
+
+@pytest.mark.asyncio
+async def test_cancel_queued_returns_the_successor_it_unblocks():
+    """取り除いた本人が後続を返さないと、誰もそれを起こさない。
+
+    複数 resource を待つ Job の後ろに、その一部だけを使う Job がいる形。
+    前者を queued のまま取り消すと後者が起動可能になるが、`_run_job` が
+    一度も走っていなければ終端処理は実行されないため、この戻り値だけが
+    後続を起こす手がかりになる。
+    """
+    s = ResourceScheduler()
+    await s.enqueue("holder", ["psu1"])
+    await s.on_running("holder")
+
+    # psu1 と psu2 の両方を待つ job。psu1 が塞がっているので起動できない
+    await s.enqueue("waits_for_both", ["psu1", "psu2"])
+    # psu2 だけを使う job。上の job が psu2 の queue 先頭を占めるため待たされる
+    await s.enqueue("needs_psu2_only", ["psu2"])
+
+    startable = await s.cancel_queued("waits_for_both")
+    assert startable == ["needs_psu2_only"]
 
 
 @pytest.mark.asyncio
