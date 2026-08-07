@@ -24,6 +24,10 @@ health / cancel / pause-response / start-recipe しか持たなかったため�
 - `JobManager.backend` プロパティを追加 (既存の `session_manager` と同じ公開アクセサ)。
 - `create_control_app(..., mcp=...)` を追加。省略時は従来どおり動き、機器の詳細は
   503 を返す。
+- `list_commands` も許可リストに加え、機器詳細に含める。`describe_instrument` の
+  `capabilities.commands` はコマンド名の羅列だけで、どれが機器を操作するのかが
+  分からない。操作系と読み取り系の区別は UI が必ず示すべき情報なので、種別を持つ
+  一覧を取得する。
 - 未知のリソースは 404 (`error: unknown_instrument`) を返す。ツールは未知の機器に
   対して例外ではなく **エラー内容を含む応答** を返すため、そのままでは 200 に
   見えてしまう。応答の形はツールによって 2 種類あり

@@ -118,6 +118,7 @@ def _now_iso() -> str:
 _READ_ONLY_TOOLS: frozenset[str] = frozenset({
     "describe_instrument",
     "get_instrument_info",
+    "list_commands",
     "list_safety_constraints",
     "get_state",
 })
@@ -500,6 +501,10 @@ def create_control_app(
         for key, tool in (
             ("description", "describe_instrument"),
             ("info", "get_instrument_info"),
+            # describe_instrument lists command names only, with no indication
+            # of which ones operate the instrument. A console has to show that
+            # distinction, so the detailed list is fetched too.
+            ("commands", "list_commands"),
             ("safety_constraints", "list_safety_constraints"),
         ):
             value = await _read_only_tool(tool, {"resource_name": name})
