@@ -110,6 +110,19 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+# The only MCP tools the control plane may invoke. Every one of these reads:
+# the first three answer from loaded instrument definitions, and get_state runs
+# the definition's declared state_query. Nothing here can change an instrument,
+# and there is no endpoint that accepts a tool name from the caller, so this
+# list is the whole of what a browser can reach.
+_READ_ONLY_TOOLS: frozenset[str] = frozenset({
+    "describe_instrument",
+    "get_instrument_info",
+    "list_safety_constraints",
+    "get_state",
+})
+
+
 # ============================================================
 # Starlette app
 # ============================================================
@@ -122,6 +135,7 @@ def create_control_app(
     backend_id: str = "mock",
     pid: int | None = None,
     started_at: str | None = None,
+    mcp: Any = None,
 ) -> "Starlette":
     """コントロールプレーンの Starlette app を生成する。
 
@@ -413,8 +427,117 @@ def create_control_app(
         # レシピ定義なし等の即時 failed も 200 で返す (UI 側で status を見て表示)。
         return JSONResponse(data)
 
+    # ---------- instruments (read-only) ----------
+    # A Web UI needs to show which devices exist, what they can be told to do,
+    # and what state they are in. None of that is in the state DB, and a UI that
+    # opened its own connections would fight the serve process for exclusive
+    # transports (GPIB, serial, BLE) while an agent is mid-experiment. So the
+    # serve process — the one owner of the hardware — answers these instead.
+    #
+    # Only the frozen BEF surface and an explicit allowlist of read-only MCP
+    # tools are reachable here. There is deliberately no passthrough that could
+    # invoke an arbitrary tool or send an arbitrary command.
+
+    async def _read_only_tool(name: str, arguments: dict) -> Any:
+        """Invoke one allowlisted read-only MCP tool, or return None if absent.
+
+        Going through the same tool the agent calls is the point: the human and
+        the agent then read one description of the instrument, not two that can
+        disagree. A server composed without that tool simply omits the section.
+        """
+        if mcp is None or name not in _READ_ONLY_TOOLS:
+            return None
+        try:
+            result = await mcp.call_tool(name, arguments)
+        except Exception:  # noqa: BLE001 - an absent or failing tool is not fatal
+            return None
+        data = getattr(result, "structured_content", None)
+        if isinstance(data, dict) and set(data) == {"result"}:
+            return data["result"]
+        return data if data is not None else getattr(result, "data", None)
+
+    async def instruments(request: Request) -> JSONResponse:
+        if not _token_ok(request):
+            return _unauthorized()
+        backend = getattr(job_mgr, "backend", None)
+        if backend is None:
+            return JSONResponse(
+                {"error": "no_backend", "detail": "this server has no backend"},
+                status_code=503,
+            )
+        try:
+            names = await backend.list_resources()
+        except Exception as exc:  # noqa: BLE001 - report, never crash the plane
+            return JSONResponse(
+                {"error": "list_failed", "detail": str(exc)}, status_code=502
+            )
+        return JSONResponse({
+            "backend_id": backend_id,
+            "resources": [{"resource_name": n} for n in names],
+        })
+
+    async def instrument_detail(request: Request) -> JSONResponse:
+        if not _token_ok(request):
+            return _unauthorized()
+        name = request.path_params["resource_name"]
+        payload: dict[str, Any] = {"resource_name": name}
+        for key, tool in (
+            ("description", "describe_instrument"),
+            ("info", "get_instrument_info"),
+            ("safety_constraints", "list_safety_constraints"),
+        ):
+            value = await _read_only_tool(tool, {"resource_name": name})
+            if value is not None:
+                payload[key] = value
+        if len(payload) == 1:
+            return JSONResponse(
+                {
+                    "error": "not_available",
+                    "detail": (
+                        "this server exposes no instrument description tools"
+                    ),
+                },
+                status_code=503,
+            )
+        return JSONResponse(payload)
+
+    async def instrument_state(request: Request) -> JSONResponse:
+        """Read the device's current state.
+
+        Unlike the two endpoints above, this one talks to the instrument: it
+        runs the definition's ``state_query`` commands. It is therefore audited
+        and meant for an explicit user action, not background polling.
+        """
+        if not _token_ok(request):
+            return _unauthorized()
+        name = request.path_params["resource_name"]
+        audit.record_event(
+            "instrument_state_requested",
+            severity="info",
+            owner=request.query_params.get("owner") or "web-ui",
+            client_id="control-plane",
+            tool_name="control.get_state",
+            resource=name,
+        )
+        value = await _read_only_tool("get_state", {"resource_name": name})
+        if value is None:
+            return JSONResponse(
+                {"error": "not_available", "detail": "get_state is unavailable"},
+                status_code=503,
+            )
+        return JSONResponse({"resource_name": name, "state": value})
+
     routes = [
         Route("/control/health", health, methods=["GET"]),
+        Route("/control/instruments", instruments, methods=["GET"]),
+        Route(
+            "/control/instruments/{resource_name:path}/state",
+            instrument_state, methods=["GET"],
+        ),
+        Route(
+            "/control/instruments/{resource_name:path}",
+            instrument_detail, methods=["GET"],
+        ),
         Route(
             "/control/jobs/{job_id}/cancel", cancel_job, methods=["POST"]
         ),
@@ -497,7 +620,7 @@ async def run_mcp_with_control(
     token = secrets.token_hex(32)
     pid = os.getpid()
     app = create_control_app(
-        job_mgr, token=token, backend_id=backend_id, pid=pid,
+        job_mgr, token=token, backend_id=backend_id, pid=pid, mcp=mcp,
     )
     config = uvicorn.Config(
         app, host="127.0.0.1", port=control_port, log_level="warning",

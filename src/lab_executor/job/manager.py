@@ -243,6 +243,18 @@ class JobManager:
         return self._sessions
 
     @property
+    def backend(self):
+        """Public accessor for the InstrumentBackend.
+
+        The control plane enumerates instruments through this, so a Web UI shows
+        the same devices the MCP tools operate on rather than opening its own
+        connections. Only the frozen BEF surface (``list_resources`` and the
+        rest of :class:`InstrumentBackend`) may be relied on here, because every
+        backend in the ecosystem satisfies exactly that much.
+        """
+        return self._visa
+
+    @property
     def scheduler(self) -> ResourceScheduler:
         return self._scheduler
 

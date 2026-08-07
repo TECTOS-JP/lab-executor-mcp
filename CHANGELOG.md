@@ -8,7 +8,31 @@ maintainer がリリース時にこの見出しを `## vX.Y.Z — <タイトル>
 
 ## Unreleased
 
-(なし)
+### コントロールプレーンに読み取り専用の機器エンドポイントを追加
+
+Web UI から「どの機器があり、何ができ、今どういう状態か」を見えるようにする。
+state DB には機器のテーブルが無く、従来のコントロールプレーンも
+health / cancel / pause-response / start-recipe しか持たなかったため、
+これまで UI から機器を知る経路が存在しなかった。
+
+- `GET /control/instruments` — BEF 契約の `backend.list_resources()` で列挙する。
+  すべての backend (VISA / Modbus / BLE / NI-DAQ) が満たす契約だけに依存する。
+- `GET /control/instruments/{resource_name}` — `describe_instrument` /
+  `get_instrument_info` / `list_safety_constraints` の結果をまとめて返す。
+- `GET /control/instruments/{resource_name}/state` — `get_state` を実行する。
+  これだけは実機に問い合わせるため audit に記録し、明示操作向けとする。
+- `JobManager.backend` プロパティを追加 (既存の `session_manager` と同じ公開アクセサ)。
+- `create_control_app(..., mcp=...)` を追加。省略時は従来どおり動き、機器の詳細は
+  503 を返す。
+
+設計の要点は、UI が自前で機器を開かないこと。GPIB / シリアル / BLE は排他接続で、
+エージェントが実験している最中に UI が同じ機器を開けば衝突する。機器を持っている
+serve プロセスが答えることで所有者を 1 つに保ち、かつ人間とエージェントが
+同じツールの応答を読むことになる。
+
+呼び出せるのは読み取り専用ツールの固定許可リスト
+(`describe_instrument` / `get_instrument_info` / `list_safety_constraints` /
+`get_state`) のみで、ツール名を呼び出し側が指定できる経路は作っていない。
 
 ## v2.38.0 — 既定を閉じ、取り消しで止まった Job を残さない
 

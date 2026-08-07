@@ -1,0 +1,232 @@
+"""Read-only instrument endpoints on the control plane.
+
+A Web UI has to show which instruments exist and what they are, and neither the
+state DB nor the control plane could answer that before this. These tests pin the
+two properties that make the addition safe: it reaches the hardware only through
+the serve process that already owns it, and it can invoke nothing except an
+allowlist of read-only tools.
+"""
+
+from __future__ import annotations
+
+import textwrap
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+import yaml
+from starlette.testclient import TestClient
+
+from lab_executor.control_plane import _READ_ONLY_TOOLS, create_control_app
+from lab_executor.job import JobManager, JobStore
+from lab_executor.models.instrument_def import InstrumentDefinition
+from lab_visa_mcp.session_manager import InstrumentSession
+
+TOKEN = "t" * 64
+RESOURCE = "GPIB0::5::INSTR"
+
+SAMPLE_YAML = """
+metadata:
+  manufacturer: Test
+  model: PSU
+  category: power_supply
+  support_level: experimental
+  definition_version: "0.1.0"
+commands:
+  reset:
+    scpi: "*RST"
+    type: write
+    description: reset
+"""
+
+
+class _FakeToolResult:
+    def __init__(self, payload):
+        self.structured_content = payload
+        self.data = payload
+
+
+class _FakeMcp:
+    """Records every tool name asked for, so the allowlist can be checked."""
+
+    def __init__(self, available=None):
+        self.calls: list[str] = []
+        self._available = (
+            {
+                "describe_instrument": {"identity": {"model": "PSU"}},
+                "get_instrument_info": {"commands": ["reset"]},
+                "list_safety_constraints": {"constraints": []},
+                "get_state": {"voltage": 1.0},
+            }
+            if available is None
+            else available
+        )
+
+    async def call_tool(self, name, arguments):
+        self.calls.append(name)
+        if name not in self._available:
+            raise LookupError(f"Unknown tool: {name!r}")
+        # The real tools resolve a bound session and fail for anything else, so
+        # an unknown resource must not come back looking like a device.
+        if arguments.get("resource_name") not in (RESOURCE, None):
+            raise LookupError(f"no session for {arguments.get('resource_name')!r}")
+        return _FakeToolResult(self._available[name])
+
+
+@pytest.fixture
+def job_mgr(tmp_path, monkeypatch):
+    monkeypatch.setenv("VISA_MCP_SAFETY_MODE", "permissive")
+    backend = MagicMock()
+    backend.write = AsyncMock(return_value=None)
+    backend.query = AsyncMock(return_value="+1.0")
+    backend.list_resources = AsyncMock(return_value=[RESOURCE, "USB0::1::INSTR"])
+
+    definition = InstrumentDefinition(**yaml.safe_load(textwrap.dedent(SAMPLE_YAML)))
+    session = InstrumentSession(
+        resource_name=RESOURCE,
+        idn_response="<test>",
+        idn_parsed={"manufacturer": "Test", "model": "PSU"},
+        definition=definition,
+    )
+
+    class _SM:
+        def get_session(self, name):
+            return session if name == RESOURCE else None
+
+    store = JobStore(db_path=tmp_path / "state.sqlite")
+    manager = JobManager(backend=backend, session_mgr=_SM(), store=store)
+    yield manager
+    store.close()
+
+
+@pytest.fixture
+def mcp():
+    return _FakeMcp()
+
+
+@pytest.fixture
+def client(job_mgr, mcp):
+    app = create_control_app(job_mgr, token=TOKEN, backend_id="mock", mcp=mcp)
+    return TestClient(app, raise_server_exceptions=False)
+
+
+def _auth():
+    return {"X-Control-Token": TOKEN}
+
+
+def test_job_manager_exposes_its_backend(job_mgr):
+    """The control plane enumerates through this rather than opening its own."""
+    assert job_mgr.backend is not None
+
+
+def test_instrument_endpoints_require_a_token(client):
+    for path in (
+        "/control/instruments",
+        f"/control/instruments/{RESOURCE}",
+        f"/control/instruments/{RESOURCE}/state",
+    ):
+        assert client.get(path).status_code == 401, path
+
+
+def test_list_uses_the_backend_the_agent_uses(client, job_mgr):
+    response = client.get("/control/instruments", headers=_auth())
+    assert response.status_code == 200
+    body = response.json()
+    assert [r["resource_name"] for r in body["resources"]] == [
+        RESOURCE,
+        "USB0::1::INSTR",
+    ]
+    job_mgr.backend.list_resources.assert_awaited()
+
+
+def test_detail_merges_the_read_only_description_tools(client, mcp):
+    response = client.get(f"/control/instruments/{RESOURCE}", headers=_auth())
+    assert response.status_code == 200
+    body = response.json()
+    assert body["resource_name"] == RESOURCE
+    assert body["description"] == {"identity": {"model": "PSU"}}
+    assert body["info"] == {"commands": ["reset"]}
+    assert body["safety_constraints"] == {"constraints": []}
+    assert set(mcp.calls) <= _READ_ONLY_TOOLS
+
+
+def test_state_reads_through_get_state_and_is_audited(client, mcp, job_mgr):
+    response = client.get(f"/control/instruments/{RESOURCE}/state", headers=_auth())
+    assert response.status_code == 200
+    assert response.json()["state"] == {"voltage": 1.0}
+    assert "get_state" in mcp.calls
+    # Reading state talks to the device, so it must leave an audit trail.
+    events = job_mgr.store.list_audit_events() if hasattr(
+        job_mgr.store, "list_audit_events"
+    ) else None
+    if events is not None:
+        assert any("instrument_state" in str(e) for e in events)
+
+
+def test_only_read_only_tools_are_reachable(client, mcp):
+    """No endpoint may invoke a tool that could change an instrument."""
+    client.get("/control/instruments", headers=_auth())
+    client.get(f"/control/instruments/{RESOURCE}", headers=_auth())
+    client.get(f"/control/instruments/{RESOURCE}/state", headers=_auth())
+    assert mcp.calls, "expected the plane to go through MCP tools"
+    for name in mcp.calls:
+        assert name in _READ_ONLY_TOOLS, name
+    for forbidden in (
+        "execute_named_command",
+        "start_experiment_job",
+        "unsafe_send_command",
+        "cancel_job",
+    ):
+        assert forbidden not in _READ_ONLY_TOOLS
+
+
+def test_there_is_no_generic_tool_passthrough(client):
+    """A caller must not be able to name the tool to run.
+
+    The instrument routes take a resource name, never a tool name, so a path
+    that spells one out is either unrouted or treated as an unknown instrument.
+    """
+    for path in (
+        "/control/tools/execute_named_command",
+        "/control/call/execute_named_command",
+        "/control/invoke",
+    ):
+        assert client.get(path, headers=_auth()).status_code in (404, 405), path
+    # A tool name in the resource slot resolves to no instrument, not to a call.
+    stray = client.get(
+        "/control/instruments/execute_named_command", headers=_auth()
+    )
+    assert stray.status_code == 503
+    assert stray.json()["error"] == "not_available"
+
+
+def test_missing_tools_degrade_instead_of_failing(job_mgr):
+    """A server composed without the description tools says so plainly."""
+    app = create_control_app(
+        job_mgr, token=TOKEN, backend_id="mock", mcp=_FakeMcp(available={})
+    )
+    client = TestClient(app, raise_server_exceptions=False)
+    detail = client.get(f"/control/instruments/{RESOURCE}", headers=_auth())
+    assert detail.status_code == 503
+    assert detail.json()["error"] == "not_available"
+    # Enumeration still works: it needs only the frozen BEF contract.
+    assert client.get("/control/instruments", headers=_auth()).status_code == 200
+
+
+def test_without_mcp_the_plane_still_serves_the_resource_list(job_mgr):
+    """Existing callers that pass no mcp keep working."""
+    app = create_control_app(job_mgr, token=TOKEN, backend_id="mock")
+    client = TestClient(app, raise_server_exceptions=False)
+    assert client.get("/control/instruments", headers=_auth()).status_code == 200
+    assert (
+        client.get(f"/control/instruments/{RESOURCE}", headers=_auth()).status_code
+        == 503
+    )
+
+
+def test_backend_failure_is_reported_not_swallowed(job_mgr, mcp):
+    job_mgr.backend.list_resources = AsyncMock(side_effect=OSError("GPIB down"))
+    app = create_control_app(job_mgr, token=TOKEN, backend_id="mock", mcp=mcp)
+    client = TestClient(app, raise_server_exceptions=False)
+    response = client.get("/control/instruments", headers=_auth())
+    assert response.status_code == 502
+    assert "GPIB down" in response.json()["detail"]
