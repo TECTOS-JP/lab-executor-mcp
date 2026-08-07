@@ -65,10 +65,28 @@ class _FakeMcp:
         self.calls.append(name)
         if name not in self._available:
             raise LookupError(f"Unknown tool: {name!r}")
-        # The real tools resolve a bound session and fail for anything else, so
-        # an unknown resource must not come back looking like a device.
+        # Verified against a live pyvisa serve process: an unknown resource does
+        # not raise, and the tools do not share one response shape.
+        # describe_instrument answers {"status": "error", "errors": [...]};
+        # get_instrument_info and list_safety_constraints answer
+        # {"success": False, "error": "SessionNotFound"}. Both are reproduced
+        # here so a test cannot pass by only handling one of them.
         if arguments.get("resource_name") not in (RESOURCE, None):
-            raise LookupError(f"no session for {arguments.get('resource_name')!r}")
+            missing = arguments.get("resource_name")
+            if name == "describe_instrument":
+                return _FakeToolResult({
+                    "status": "error",
+                    "data": {},
+                    "errors": [{
+                        "error_class": "not_found",
+                        "message": f"{missing} は未識別です",
+                    }],
+                })
+            return _FakeToolResult({
+                "success": False,
+                "error": "SessionNotFound",
+                "message": f"{missing} は未識別です",
+            })
         return _FakeToolResult(self._available[name])
 
 
@@ -191,12 +209,44 @@ def test_there_is_no_generic_tool_passthrough(client):
         "/control/invoke",
     ):
         assert client.get(path, headers=_auth()).status_code in (404, 405), path
-    # A tool name in the resource slot resolves to no instrument, not to a call.
-    stray = client.get(
-        "/control/instruments/execute_named_command", headers=_auth()
-    )
-    assert stray.status_code == 503
-    assert stray.json()["error"] == "not_available"
+    # The instrument route takes a resource name, so a tool name lands there as
+    # an unknown instrument. Checked on hardware: a suffix like ".../write" is
+    # read the same way and performs no write, because no write route exists.
+    for stray_path in (
+        "/control/instruments/execute_named_command",
+        f"/control/instruments/{RESOURCE}/write",
+    ):
+        stray = client.get(stray_path, headers=_auth())
+        assert stray.status_code == 404, stray_path
+        assert stray.json()["error"] == "unknown_instrument"
+
+
+def test_unknown_instrument_is_404_with_the_tools_own_reason(client):
+    """A resource nobody knows must not look like a successful lookup."""
+    response = client.get("/control/instruments/GPIB0::99::INSTR", headers=_auth())
+    assert response.status_code == 404
+    body = response.json()
+    assert body["error"] == "unknown_instrument"
+    # The agent's own explanation is handed through, not replaced — in whichever
+    # shape each tool uses.
+    assert body["description"]["errors"][0]["error_class"] == "not_found"
+    assert body["info"]["error"] == "SessionNotFound"
+
+
+def test_both_tool_response_shapes_count_as_a_miss():
+    """Recognising only one envelope would let an unknown instrument look real.
+
+    This is the defect real hardware exposed: the first implementation checked
+    ``status == "error"`` alone, so the two tools using ``success: False`` kept
+    the response at 200.
+    """
+    from lab_executor.control_plane import _section_failed
+
+    assert _section_failed({"status": "error", "errors": []})
+    assert _section_failed({"success": False, "error": "SessionNotFound"})
+    assert not _section_failed({"status": "ok", "data": {}})
+    assert not _section_failed({"success": True, "data": {}})
+    assert not _section_failed(["not", "a", "mapping"])
 
 
 def test_missing_tools_degrade_instead_of_failing(job_mgr):

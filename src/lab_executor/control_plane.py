@@ -123,6 +123,22 @@ _READ_ONLY_TOOLS: frozenset[str] = frozenset({
 })
 
 
+def _section_failed(section: Any) -> bool:
+    """Did a tool report that it could not answer for this instrument?
+
+    Two response shapes are in use across the tool surface, confirmed against a
+    live pyvisa server: ``describe_instrument`` returns
+    ``{"status": "error", "errors": [...]}`` while ``get_instrument_info`` and
+    ``list_safety_constraints`` return ``{"success": False, "error": ...}``.
+    Both have to be recognised, or an unknown instrument looks like a hit.
+    """
+    if not isinstance(section, dict):
+        return False
+    if section.get("status") == "error":
+        return True
+    return section.get("success") is False
+
+
 # ============================================================
 # Starlette app
 # ============================================================
@@ -489,7 +505,8 @@ def create_control_app(
             value = await _read_only_tool(tool, {"resource_name": name})
             if value is not None:
                 payload[key] = value
-        if len(payload) == 1:
+        sections = [v for k, v in payload.items() if k != "resource_name"]
+        if not sections:
             return JSONResponse(
                 {
                     "error": "not_available",
@@ -499,6 +516,13 @@ def create_control_app(
                 },
                 status_code=503,
             )
+        # The tools answer an unknown resource with an error payload rather than
+        # raising, so a path naming no instrument would otherwise come back 200.
+        # Report 404 instead, while still handing over the tools' own reasons —
+        # the same ones the agent is given.
+        if all(_section_failed(s) for s in sections):
+            payload["error"] = "unknown_instrument"
+            return JSONResponse(payload, status_code=404)
         return JSONResponse(payload)
 
     async def instrument_state(request: Request) -> JSONResponse:
