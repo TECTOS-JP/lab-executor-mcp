@@ -8,6 +8,19 @@ maintainer がリリース時にこの見出しを `## vX.Y.Z — <タイトル>
 
 ## Unreleased
 
+### list_commands を runtime 自身が提供する
+
+stability matrix には以前から "Core / instrument" として載っていたが、実際に
+登録していたのは `visa-mcp` だけだった。そのため VISA 以外の backend では、
+機器のコマンドのうちどれが機器を操作し、どれが読み取るだけなのかを知る手段が
+無かった。UI がすべてを「操作」として表示すると、本当に危険なコマンドが安全な
+ものの中に埋もれる。
+
+`lab_executor/tools/definitions.py` を追加し、`compose_server` から登録する。
+実装は結び付いた定義を読むだけで、transport を必要としない。`visa-mcp` は
+独自に FastMCP を構築し `tools/discovery.py` の自前実装を登録するため、
+名前の衝突は起きない (実プロセスで確認済み)。
+
 ### コントロールプレーンに読み取り専用の機器エンドポイントを追加
 
 Web UI から「どの機器があり、何ができ、今どういう状態か」を見えるようにする。

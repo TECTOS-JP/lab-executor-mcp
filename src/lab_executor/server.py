@@ -113,6 +113,7 @@ def compose_server(
     from lab_executor.tools import (
         audit as t_audit,
         commands as t_commands,
+        definitions as t_definitions,
         dsl as t_dsl,
         export as t_export,
         groups as t_groups,
@@ -127,6 +128,7 @@ def compose_server(
 
     t_audit.register_tools(mcp, job_mgr)
     t_commands.register_tools(mcp, session_facade)
+    t_definitions.register_tools(mcp, session_facade)
     t_dsl.register_tools(mcp, session_facade, job_mgr)
     t_export.register_tools(mcp, job_mgr)
     t_groups.register_tools(mcp, job_mgr)
