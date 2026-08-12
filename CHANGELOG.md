@@ -8,6 +8,17 @@ maintainer がリリース時にこの見出しを `## vX.Y.Z — <タイトル>
 
 ## Unreleased
 
+### コントロールプレーンに読み取り専用の plan 検査を追加
+
+操作コンソールが、実機で動かす前に手順を確かめられるようにする。
+`POST /control/plans/validate` と `POST /control/plans/dry-run` を追加し、
+許可リストへ `validate_experiment_plan` / `dry_run_plan` を加えた。どちらも
+実機 I/O を行わないと明記されたツールで、機器の読み取りと同じ性質を保つ。
+
+手順を **開始** する経路はここには無い。ジョブ投入は従来どおり
+`/control/jobs/start-recipe` のみで、テストで plan 側から開始できないことを
+固定した。
+
 ### list_commands を runtime 自身が提供する
 
 stability matrix には以前から "Core / instrument" として載っていたが、実際に

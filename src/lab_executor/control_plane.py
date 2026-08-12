@@ -111,16 +111,20 @@ def _now_iso() -> str:
 
 
 # The only MCP tools the control plane may invoke. Every one of these reads:
-# the first three answer from loaded instrument definitions, and get_state runs
-# the definition's declared state_query. Nothing here can change an instrument,
-# and there is no endpoint that accepts a tool name from the caller, so this
-# list is the whole of what a browser can reach.
+# the instrument ones answer from loaded definitions, get_state runs the
+# definition's declared state_query, and the two plan tools are documented to
+# perform no instrument I/O at all — they render and check a plan against the
+# definitions. Nothing here can change an instrument, and there is no endpoint
+# that accepts a tool name from the caller, so this list is the whole of what a
+# browser can reach.
 _READ_ONLY_TOOLS: frozenset[str] = frozenset({
     "describe_instrument",
     "get_instrument_info",
     "list_commands",
     "list_safety_constraints",
     "get_state",
+    "validate_experiment_plan",
+    "dry_run_plan",
 })
 
 
@@ -556,8 +560,43 @@ def create_control_app(
             )
         return JSONResponse({"resource_name": name, "state": value})
 
+    # ---------- plans (read-only) ----------
+    # Checking and rendering a plan performs no instrument I/O, which is what
+    # makes it safe to expose here: an operator can see what a procedure would
+    # do before anything is sent. Starting one is a different matter and stays
+    # on the existing job routes.
+
+    async def _plan_tool(request: Request, tool: str) -> JSONResponse:
+        if not _token_ok(request):
+            return _unauthorized()
+        body = await _read_json(request)
+        plan = body.get("plan")
+        if not isinstance(plan, dict):
+            return JSONResponse(
+                {"error": "invalid_request", "detail": "plan は object が必要です"},
+                status_code=422,
+            )
+        result = await _read_only_tool(tool, {"plan": plan})
+        if result is None:
+            return JSONResponse(
+                {
+                    "error": "not_available",
+                    "detail": f"this server does not expose {tool}",
+                },
+                status_code=503,
+            )
+        return JSONResponse({"tool": tool, "result": result})
+
+    async def validate_plan(request: Request) -> JSONResponse:
+        return await _plan_tool(request, "validate_experiment_plan")
+
+    async def dry_run_plan(request: Request) -> JSONResponse:
+        return await _plan_tool(request, "dry_run_plan")
+
     routes = [
         Route("/control/health", health, methods=["GET"]),
+        Route("/control/plans/validate", validate_plan, methods=["POST"]),
+        Route("/control/plans/dry-run", dry_run_plan, methods=["POST"]),
         Route("/control/instruments", instruments, methods=["GET"]),
         Route(
             "/control/instruments/{resource_name:path}/state",
