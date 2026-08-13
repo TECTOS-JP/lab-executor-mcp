@@ -55,12 +55,20 @@ def register_tools(mcp: "FastMCP", session_mgr: Any) -> None:
                 # The caller decides how to present an operation versus a
                 # reading from this; it is the reason the tool exists.
                 "type": command.type,
+                # Everything the definition says about an argument travels
+                # with it. A caller that has to build the argument list -- an
+                # agent composing a plan, or a person filling in a form -- can
+                # then offer the allowed values instead of finding out from a
+                # validation failure which arguments existed.
                 "parameters": [
                     {
                         "name": p.name,
                         "type": p.type,
                         "required": p.required,
                         "description": p.description,
+                        "range": list(p.range) if p.range else None,
+                        "choices": list(p.choices) if p.choices else None,
+                        "default": p.default,
                     }
                     for p in command.parameters
                 ],

@@ -36,7 +36,18 @@ commands:
     type: write
     description: アナログ出力を設定する
     parameters:
-      - {name: value, type: float, required: true, description: 出力電圧}
+      - {name: value, type: float, required: true, description: 出力電圧,
+         range: [0, 5]}
+  acquire_ai0:
+    scpi: "ACQUIRE ai0 {samples} {rate_hz}"
+    type: query
+    description: 波形をまとめて取得する
+    parameters:
+      - {name: samples, type: integer, required: true, description: 取得点数}
+      - {name: rate_hz, type: float, required: false, description: 取得レート,
+         default: 1000.0}
+      - {name: coupling, type: enum, required: false, description: 結合,
+         choices: [dc, ac]}
 """
 
 
@@ -83,6 +94,40 @@ async def test_command_types_distinguish_reads_from_operations():
     assert commands["read_ai0"]["returns"]["unit"] == "V"
     assert commands["write_ao0"]["parameters"][0]["name"] == "value"
     assert body["data"]["instrument"] == "National Instruments USB-6009"
+
+
+@pytest.mark.asyncio
+async def test_a_caller_can_build_the_argument_list_from_this_alone():
+    """Otherwise the only way to learn an argument exists is to fail validation.
+
+    A person filling in a form and an agent composing a plan have the same
+    problem: which arguments does this command take, which must be given, and
+    what values are allowed. All of it comes from the definition, so all of it
+    is reported here.
+    """
+    mcp, job_mgr = compose_server(None, name="test")
+    job_mgr.session_manager.register_session("DAQ::Dev2", _Session(_definition()))
+
+    body = await _call(mcp, "list_commands", {"resource_name": "DAQ::Dev2"})
+    parameters = {
+        p["name"]: p for p in body["data"]["commands"]["acquire_ai0"]["parameters"]
+    }
+    assert parameters["samples"]["required"] is True
+    assert parameters["samples"]["type"] == "integer"
+    assert parameters["rate_hz"]["required"] is False
+    assert parameters["rate_hz"]["default"] == 1000.0
+    assert parameters["coupling"]["choices"] == ["dc", "ac"]
+
+    limits = body["data"]["commands"]["write_ao0"]["parameters"][0]
+    assert limits["range"] == [0, 5]
+
+
+@pytest.mark.asyncio
+async def test_a_command_without_arguments_reports_an_empty_list():
+    mcp, job_mgr = compose_server(None, name="test")
+    job_mgr.session_manager.register_session("DAQ::Dev2", _Session(_definition()))
+    body = await _call(mcp, "list_commands", {"resource_name": "DAQ::Dev2"})
+    assert body["data"]["commands"]["read_ai0"]["parameters"] == []
 
 
 @pytest.mark.asyncio
