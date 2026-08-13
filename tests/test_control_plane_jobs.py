@@ -188,3 +188,77 @@ def test_a_malformed_plan_is_refused_before_anything_runs(client, mcp):
             == 422
         )
     assert not mcp.calls
+
+
+# ---------- recorded measurements ----------
+
+_RESULTS_TOOLS = {
+    "get_experiment_results": {
+        "success": True,
+        "data": {"steps": [{"response": '{"artifact":"v1","name":"acq-a.npz"}'}]},
+    },
+    "get_monitor_data": {
+        "success": True,
+        "data": {"data": [{"instrument": "DAQ::Dev2", "value": 1.0}]},
+    },
+}
+
+
+@pytest.fixture
+def results_client(job_mgr):
+    mcp = _FakeMcp(available=_RESULTS_TOOLS)
+    app = create_control_app(job_mgr, token=TOKEN, backend_id="mock", mcp=mcp)
+    return TestClient(app, raise_server_exceptions=False), mcp
+
+
+def test_results_routes_require_a_token(results_client):
+    client, _mcp = results_client
+    assert client.get("/control/jobs/j1/results").status_code == 401
+    assert client.get("/control/jobs/j1/monitor").status_code == 401
+
+
+def test_recorded_results_come_back_for_a_job(results_client):
+    client, mcp = results_client
+    body = client.get("/control/jobs/j1/results", headers=_auth()).json()
+    assert body["result"]["data"]["steps"][0]["response"].startswith('{"artifact"')
+    assert mcp.calls == [("get_experiment_results", {"job_id": "j1"})]
+
+
+def test_recorded_monitor_samples_come_back_for_a_job(results_client):
+    client, mcp = results_client
+    body = client.get("/control/jobs/j1/monitor", headers=_auth()).json()
+    assert body["result"]["data"]["data"][0]["instrument"] == "DAQ::Dev2"
+    assert mcp.calls[0][1] == {"monitor_id": "j1", "limit": 1000}
+
+
+def test_a_monitor_limit_is_passed_through_and_a_bad_one_falls_back(results_client):
+    client, mcp = results_client
+    client.get("/control/jobs/j1/monitor?limit=50", headers=_auth())
+    assert mcp.calls[0][1]["limit"] == 50
+    client.get("/control/jobs/j1/monitor?limit=lots", headers=_auth())
+    assert mcp.calls[1][1]["limit"] == 1000
+
+
+def test_reading_results_only_uses_read_only_tools(results_client):
+    client, mcp = results_client
+    client.get("/control/jobs/j1/results", headers=_auth())
+    client.get("/control/jobs/j1/monitor", headers=_auth())
+    for name, _arguments in mcp.calls:
+        assert name in _READ_ONLY_TOOLS, name
+
+
+def test_a_runtime_without_the_results_tools_says_so_rather_than_failing(job_mgr):
+    """An older runtime has no results tools; that is a 503, not a crash."""
+    app = create_control_app(
+        job_mgr, token=TOKEN, backend_id="mock", mcp=_FakeMcp(available={})
+    )
+    client = TestClient(app, raise_server_exceptions=False)
+    assert client.get("/control/jobs/j1/results", headers=_auth()).status_code == 503
+    assert client.get("/control/jobs/j1/monitor", headers=_auth()).status_code == 503
+
+
+def test_a_results_path_is_not_swallowed_by_the_job_detail_route(results_client):
+    """``/jobs/{id}`` must not match ``/jobs/{id}/results`` and hide it."""
+    client, mcp = results_client
+    assert client.get("/control/jobs/j1/results", headers=_auth()).status_code == 200
+    assert mcp.calls[0][0] == "get_experiment_results"

@@ -133,6 +133,9 @@ _READ_ONLY_TOOLS: frozenset[str] = frozenset({
     "get_job_live_view",
     "get_job_summary",
     "get_experiment_timeline",
+    # Results. Recorded measurements, read back after the fact.
+    "get_monitor_data",
+    "get_experiment_results",
 })
 
 
@@ -682,6 +685,37 @@ def create_control_app(
             )
         return JSONResponse({"result": value})
 
+    async def job_monitor(request: Request) -> JSONResponse:
+        """Measurements a monitor recorded for this job, oldest first."""
+        if not _token_ok(request):
+            return _unauthorized()
+        job_id = request.path_params["job_id"]
+        try:
+            limit = int(request.query_params.get("limit", "1000"))
+        except ValueError:
+            limit = 1000
+        value = await _read_only_tool(
+            "get_monitor_data", {"monitor_id": job_id, "limit": limit}
+        )
+        if value is None:
+            return JSONResponse(
+                {"error": "not_available", "detail": "get_monitor_data is unavailable"},
+                status_code=503,
+            )
+        return JSONResponse({"result": value})
+
+    async def job_results(request: Request) -> JSONResponse:
+        if not _token_ok(request):
+            return _unauthorized()
+        job_id = request.path_params["job_id"]
+        value = await _read_only_tool("get_experiment_results", {"job_id": job_id})
+        if value is None:
+            return JSONResponse(
+                {"error": "not_available", "detail": "results are unavailable"},
+                status_code=503,
+            )
+        return JSONResponse({"result": value})
+
     async def job_detail(request: Request) -> JSONResponse:
         if not _token_ok(request):
             return _unauthorized()
@@ -707,6 +741,8 @@ def create_control_app(
         Route("/control/plans/dry-run", dry_run_plan, methods=["POST"]),
         Route("/control/plans/start", start_plan, methods=["POST"]),
         Route("/control/jobs", jobs, methods=["GET"]),
+        Route("/control/jobs/{job_id}/monitor", job_monitor, methods=["GET"]),
+        Route("/control/jobs/{job_id}/results", job_results, methods=["GET"]),
         Route("/control/jobs/{job_id}", job_detail, methods=["GET"]),
         Route("/control/instruments", instruments, methods=["GET"]),
         Route(
