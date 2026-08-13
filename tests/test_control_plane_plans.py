@@ -1,8 +1,8 @@
 """Read-only plan endpoints: check and render a procedure before running it.
 
 Both tools are documented to perform no instrument I/O, which is what lets them
-sit next to the instrument reads. Starting a plan is a different matter and is
-deliberately not reachable from here.
+sit next to the instrument reads. Starting a plan does touch the instruments, so
+it lives on its own route with its own discipline (see test_control_plane_jobs).
 """
 
 from __future__ import annotations
@@ -123,8 +123,13 @@ def test_a_missing_plan_is_refused(client):
         assert response.status_code == 422, body
 
 
-def test_there_is_no_route_that_starts_a_plan(client):
-    for path in ("/control/plans/start", "/control/plans/run", "/control/plans/execute"):
+def test_starting_a_plan_lives_on_its_own_route(client):
+    """Check and start are separate routes, so neither can be reached by accident.
+
+    ``/control/plans/start`` exists and is covered by its own tests; what must
+    not exist is a second way in.
+    """
+    for path in ("/control/plans/run", "/control/plans/execute"):
         response = client.post(path, json={"plan": PLAN}, headers=_auth())
         assert response.status_code in (404, 405), path
 

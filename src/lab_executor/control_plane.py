@@ -125,6 +125,14 @@ _READ_ONLY_TOOLS: frozenset[str] = frozenset({
     "get_state",
     "validate_experiment_plan",
     "dry_run_plan",
+    # Job observation. These read what a run has already recorded, so they are
+    # the one part of the surface that is safe to poll while an experiment is in
+    # progress — including one an agent started.
+    "list_jobs",
+    "get_job_status",
+    "get_job_live_view",
+    "get_job_summary",
+    "get_experiment_timeline",
 })
 
 
@@ -593,10 +601,113 @@ def create_control_app(
     async def dry_run_plan(request: Request) -> JSONResponse:
         return await _plan_tool(request, "dry_run_plan")
 
+    async def start_plan(request: Request) -> JSONResponse:
+        """Run a plan on the instruments. The one execution path for plans.
+
+        Mirrors the recipe route's discipline: ``override_safety`` is forced
+        False whatever the body says, the request and its outcome are audited,
+        and the runtime's own validation stays in front of the hardware.
+        """
+        if not _token_ok(request):
+            return _unauthorized()
+        body = await _read_json(request)
+        plan = body.get("plan")
+        if not isinstance(plan, dict):
+            return JSONResponse(
+                {"error": "invalid_request", "detail": "plan は object が必要です"},
+                status_code=422,
+            )
+        owner = body.get("owner") or "web-ui"
+        audit.record_event(
+            "plan_start_requested",
+            severity="warning",
+            owner=owner,
+            client_id="control-plane",
+            tool_name="control.start_experiment_job",
+            request={"name": plan.get("name", ""), "steps": len(plan.get("steps", []))},
+        )
+        if mcp is None:
+            return JSONResponse(
+                {"error": "not_available", "detail": "this server cannot start plans"},
+                status_code=503,
+            )
+        try:
+            # override_safety is deliberately not forwarded from the body: a
+            # browser must never be able to switch the safety layer off.
+            result = await mcp.call_tool(
+                "start_experiment_job",
+                {"plan": plan, "owner": owner, "override_safety": False},
+            )
+        except Exception as exc:  # noqa: BLE001 - report, never crash the plane
+            audit.record_event(
+                "plan_start_failed",
+                severity="error",
+                status="error",
+                owner=owner,
+                client_id="control-plane",
+                tool_name="control.start_experiment_job",
+                error_class="internal",
+                message=str(exc),
+            )
+            return JSONResponse(
+                {"error": "start_failed", "detail": str(exc)}, status_code=500
+            )
+        data = getattr(result, "structured_content", None)
+        if isinstance(data, dict) and set(data) == {"result"}:
+            data = data["result"]
+        if data is None:
+            data = getattr(result, "data", None)
+        audit.record_event(
+            "plan_started",
+            severity="info",
+            owner=owner,
+            client_id="control-plane",
+            tool_name="control.start_experiment_job",
+            response=data if isinstance(data, dict) else {},
+        )
+        return JSONResponse({"result": data})
+
+    async def jobs(request: Request) -> JSONResponse:
+        if not _token_ok(request):
+            return _unauthorized()
+        arguments: dict[str, Any] = {}
+        status = request.query_params.get("status")
+        if status:
+            arguments["status"] = status
+        value = await _read_only_tool("list_jobs", arguments)
+        if value is None:
+            return JSONResponse(
+                {"error": "not_available", "detail": "list_jobs is unavailable"},
+                status_code=503,
+            )
+        return JSONResponse({"result": value})
+
+    async def job_detail(request: Request) -> JSONResponse:
+        if not _token_ok(request):
+            return _unauthorized()
+        job_id = request.path_params["job_id"]
+        payload: dict[str, Any] = {"job_id": job_id}
+        for key, tool in (
+            ("status", "get_job_status"),
+            ("live_view", "get_job_live_view"),
+        ):
+            value = await _read_only_tool(tool, {"job_id": job_id})
+            if value is not None:
+                payload[key] = value
+        if len(payload) == 1:
+            return JSONResponse(
+                {"error": "not_available", "detail": "job tools are unavailable"},
+                status_code=503,
+            )
+        return JSONResponse(payload)
+
     routes = [
         Route("/control/health", health, methods=["GET"]),
         Route("/control/plans/validate", validate_plan, methods=["POST"]),
         Route("/control/plans/dry-run", dry_run_plan, methods=["POST"]),
+        Route("/control/plans/start", start_plan, methods=["POST"]),
+        Route("/control/jobs", jobs, methods=["GET"]),
+        Route("/control/jobs/{job_id}", job_detail, methods=["GET"]),
         Route("/control/instruments", instruments, methods=["GET"]),
         Route(
             "/control/instruments/{resource_name:path}/state",

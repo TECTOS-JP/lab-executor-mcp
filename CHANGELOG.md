@@ -8,6 +8,22 @@ maintainer がリリース時にこの見出しを `## vX.Y.Z — <タイトル>
 
 ## Unreleased
 
+### コントロールプレーンで実行を開始し、実行中のジョブを見られるようにする
+
+操作コンソールが実験を実行し、その様子を (エージェントが始めたものも含めて)
+見守れるようにする。
+
+- `POST /control/plans/start` — DSL plan を実行する。recipe 経路と同じ規律で、
+  `override_safety` は body に何が来ても **False 固定**、要求と結果の両方を
+  audit に記録する。
+- `GET /control/jobs` / `GET /control/jobs/{job_id}` — 実行中・実行済みの
+  ジョブを読む。許可リストへ `list_jobs` / `get_job_status` /
+  `get_job_live_view` / `get_job_summary` / `get_experiment_timeline` を加えた。
+  いずれも記録済みの状態を読むだけなので、実行中でも安全に繰り返し取得できる。
+
+検査 (validate / dry-run) と開始は別々の route に分けている。片方を叩いたつもりで
+もう片方に届くことがないようにするため。
+
 ### コントロールプレーンに読み取り専用の plan 検査を追加
 
 操作コンソールが、実機で動かす前に手順を確かめられるようにする。
