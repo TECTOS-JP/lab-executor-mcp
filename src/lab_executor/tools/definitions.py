@@ -68,7 +68,11 @@ def register_tools(mcp: "FastMCP", session_mgr: Any) -> None:
                         "description": p.description,
                         "range": list(p.range) if p.range else None,
                         "choices": list(p.choices) if p.choices else None,
+                        "choice_labels": dict(p.choice_labels)
+                        if p.choice_labels
+                        else None,
                         "default": p.default,
+                        "unit": p.unit,
                     }
                     for p in command.parameters
                 ],

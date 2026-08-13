@@ -101,8 +101,37 @@ measure_voltage:
 |--------|------|--------------|
 | `integer` | 整数 | `range: [min, max]` |
 | `float` | 浮動小数点 | `range: [min, max]` |
-| `enum` | 列挙値 | `choices: ["A", "B"]` |
+| `enum` | 列挙値 | `choices: ["A", "B"]`, `choice_labels` |
 | `string` | 任意文字列 | 通常不要 |
+
+どの型でも `description` / `unit` / `default` を付けられます。
+
+### パラメータの説明は必ず書く
+
+`list_commands` が返す内容が、その引数について呼ぶ側が知れることの全てです。
+説明がないと、引数が存在すること自体を検証の失敗で知ることになり、実験
+コンソールも「名前だけの入力欄」しか出せません。
+
+特に、機能をコード番号で指定する引数は `choice_labels` で各コードの意味を
+書いてください。番号だけでは選びようがありません。
+
+```yaml
+set_integration_time:
+  scpi: "IT{mode}"
+  type: "write"
+  description: "積分時間設定"
+  parameters:
+    - name: mode
+      type: "enum"
+      description: "1 回の測定にかける積分時間。長いほどノイズに強く、測定は遅くなる"
+      choices: ["3", "4"]
+      choice_labels:
+        "3": "20ms"
+        "4": "100ms"
+```
+
+意味が取扱説明書から確認できないコードは、**推測して書かない**こと。
+`choice_labels` を省けば、呼ぶ側にはコードがそのまま表示されます。
 
 ## マニュアル PDF からの自動抽出
 

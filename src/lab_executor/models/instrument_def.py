@@ -11,6 +11,11 @@ class ParameterDefinition(BaseModel):
     range: list[float] | None = None       # integer/float 用 [min, max]
     choices: list[str] | None = None       # enum 用
     default: Any = None
+    unit: str = ""                         # 値の単位 (V / Hz / degC など)
+    # enum の各コードが何を指すか (例: {"3": "20ms", "4": "100ms"})。
+    # 旧世代機のように機能をコード番号で指定する引数は、番号だけ見ても
+    # 意味が分からない。呼ぶ側が意味を並べて示せるようにするため持たせる。
+    choice_labels: dict[str, str] | None = None
 
 
 class ReturnDefinition(BaseModel):

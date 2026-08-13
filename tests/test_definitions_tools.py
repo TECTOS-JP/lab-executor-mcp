@@ -45,9 +45,19 @@ commands:
     parameters:
       - {name: samples, type: integer, required: true, description: 取得点数}
       - {name: rate_hz, type: float, required: false, description: 取得レート,
-         default: 1000.0}
+         default: 1000.0, unit: Hz}
       - {name: coupling, type: enum, required: false, description: 結合,
          choices: [dc, ac]}
+  set_integration_time:
+    scpi: "IT{mode}"
+    type: write
+    description: 積分時間設定
+    parameters:
+      - name: mode
+        type: enum
+        description: 積分時間をコードで指定する
+        choices: ["3", "4"]
+        choice_labels: {"3": "20ms", "4": "100ms"}
 """
 
 
@@ -120,6 +130,31 @@ async def test_a_caller_can_build_the_argument_list_from_this_alone():
 
     limits = body["data"]["commands"]["write_ao0"]["parameters"][0]
     assert limits["range"] == [0, 5]
+    assert parameters["rate_hz"]["unit"] == "Hz"
+
+
+@pytest.mark.asyncio
+async def test_what_a_function_code_means_travels_with_it():
+    """A legacy instrument selects a function by number; the number alone is
+    not usable by anyone who does not already have the manual open."""
+    mcp, job_mgr = compose_server(None, name="test")
+    job_mgr.session_manager.register_session("DAQ::Dev2", _Session(_definition()))
+
+    body = await _call(mcp, "list_commands", {"resource_name": "DAQ::Dev2"})
+    mode = body["data"]["commands"]["set_integration_time"]["parameters"][0]
+    assert mode["choices"] == ["3", "4"]
+    assert mode["choice_labels"] == {"3": "20ms", "4": "100ms"}
+
+
+@pytest.mark.asyncio
+async def test_a_definition_that_says_nothing_extra_still_answers():
+    """The added fields are optional; an older definition must stay loadable."""
+    mcp, job_mgr = compose_server(None, name="test")
+    job_mgr.session_manager.register_session("DAQ::Dev2", _Session(_definition()))
+    body = await _call(mcp, "list_commands", {"resource_name": "DAQ::Dev2"})
+    samples = body["data"]["commands"]["acquire_ai0"]["parameters"][0]
+    assert samples["choice_labels"] is None
+    assert samples["unit"] == ""
 
 
 @pytest.mark.asyncio
