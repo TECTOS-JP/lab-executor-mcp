@@ -280,3 +280,115 @@ def test_backend_failure_is_reported_not_swallowed(job_mgr, mcp):
     response = client.get("/control/instruments", headers=_auth())
     assert response.status_code == 502
     assert "GPIB down" in response.json()["detail"]
+
+
+# ---------- identification ----------
+
+
+UNBOUND = "USB0::1::INSTR"
+
+_IDENTIFY = {
+    "success": True,
+    "data": {
+        "resource_name": UNBOUND,
+        "manufacturer": "KIKUSUI",
+        "model": "PMX35-3A",
+        "definition_loaded": True,
+    },
+}
+
+
+class _IdentifyMcp(_FakeMcp):
+    """Identification is asked about a resource that has no session yet, so the
+    base stub's "unknown resource" branch must not stand in for the answer."""
+
+    async def call_tool(self, name, arguments):
+        self.calls.append(name)
+        if name not in self._available:
+            raise LookupError(f"Unknown tool: {name!r}")
+        return _FakeToolResult(self._available[name])
+
+
+@pytest.fixture
+def identifying_client(job_mgr):
+    mcp = _IdentifyMcp(available={"identify_instrument": _IDENTIFY})
+    app = create_control_app(job_mgr, token=TOKEN, backend_id="mock", mcp=mcp)
+    return TestClient(app, raise_server_exceptions=False), mcp
+
+
+def test_identifying_requires_a_token(identifying_client):
+    client, _mcp = identifying_client
+    assert client.post(f"/control/instruments/{UNBOUND}/identify").status_code == 401
+
+
+def test_a_connected_resource_can_be_identified(identifying_client):
+    """A resource the backend can see is not yet usable: without a session there
+    is no bound definition and therefore no commands, and nothing else on this
+    plane can create one."""
+    client, mcp = identifying_client
+    response = client.post(
+        f"/control/instruments/{UNBOUND}/identify", headers=_auth()
+    )
+    assert response.status_code == 200
+    assert response.json()["result"]["data"]["model"] == "PMX35-3A"
+    assert mcp.calls == ["identify_instrument"]
+
+
+def test_identifying_is_audited_like_a_state_read(identifying_client, job_mgr):
+    from lab_executor.audit import AuditStore
+
+    client, _mcp = identifying_client
+    client.post(f"/control/instruments/{UNBOUND}/identify", headers=_auth())
+    events, _cursor = AuditStore(job_mgr.store).query(
+        event_type="instrument_identify_requested", limit=10
+    )
+    assert events
+
+
+def test_identifying_is_not_on_the_read_only_surface():
+    """It sends *IDN? and records a session, so it must not be pollable."""
+    assert "identify_instrument" not in _READ_ONLY_TOOLS
+
+
+def test_a_backend_without_identification_says_so(job_mgr):
+    """Only instruments that announce themselves can be identified at all."""
+    app = create_control_app(
+        job_mgr, token=TOKEN, backend_id="nidaq", mcp=_FakeMcp(available={})
+    )
+    client = TestClient(app, raise_server_exceptions=False)
+    response = client.post(
+        f"/control/instruments/{UNBOUND}/identify", headers=_auth()
+    )
+    assert response.status_code == 503
+    assert response.json()["error"] == "not_available"
+
+
+def test_an_instrument_that_does_not_answer_is_reported(job_mgr):
+    failing = _IdentifyMcp(
+        available={
+            "identify_instrument": {
+                "success": False,
+                "error": "IdentifyFailed",
+                "message": "応答がありません",
+            }
+        }
+    )
+    app = create_control_app(job_mgr, token=TOKEN, backend_id="mock", mcp=failing)
+    client = TestClient(app, raise_server_exceptions=False)
+    response = client.post(
+        f"/control/instruments/{UNBOUND}/identify", headers=_auth()
+    )
+    assert response.status_code == 502
+    assert "応答がありません" in response.json()["result"]["message"]
+
+
+def test_the_identify_path_is_not_swallowed_by_the_detail_route(identifying_client):
+    """``{resource_name:path}`` is greedy; declaration order is what saves it."""
+    client, mcp = identifying_client
+    assert (
+        client.post(
+            f"/control/instruments/{UNBOUND}/identify", headers=_auth()
+        ).status_code
+        == 200
+    )
+    assert mcp.calls == ["identify_instrument"]

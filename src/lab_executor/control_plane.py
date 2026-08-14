@@ -139,6 +139,14 @@ _READ_ONLY_TOOLS: frozenset[str] = frozenset({
 })
 
 
+def _tool_value(result: Any) -> Any:
+    """Unwrap what an MCP tool returned, whichever shape the client used."""
+    data = getattr(result, "structured_content", None)
+    if isinstance(data, dict) and set(data) == {"result"}:
+        return data["result"]
+    return data if data is not None else getattr(result, "data", None)
+
+
 def _section_failed(section: Any) -> bool:
     """Did a tool report that it could not answer for this instrument?
 
@@ -483,10 +491,7 @@ def create_control_app(
             result = await mcp.call_tool(name, arguments)
         except Exception:  # noqa: BLE001 - an absent or failing tool is not fatal
             return None
-        data = getattr(result, "structured_content", None)
-        if isinstance(data, dict) and set(data) == {"result"}:
-            return data["result"]
-        return data if data is not None else getattr(result, "data", None)
+        return _tool_value(result)
 
     async def instruments(request: Request) -> JSONResponse:
         if not _token_ok(request):
@@ -570,6 +575,62 @@ def create_control_app(
                 status_code=503,
             )
         return JSONResponse({"resource_name": name, "state": value})
+
+    async def identify_instrument(request: Request) -> JSONResponse:
+        """Ask a connected instrument what it is.
+
+        A resource the backend can see is not yet an instrument the runtime can
+        use: until something has identified it, there is no session, no bound
+        definition, and therefore no commands. Nothing else on this plane can
+        create that session, which left a person who had just plugged a device
+        in with a screen that could only say the model was unknown.
+
+        This is deliberately not on the read-only allowlist. It sends ``*IDN?``
+        and records a session, so it is an explicit action -- audited like a
+        state read -- rather than something a page may poll. What it cannot do
+        is operate the instrument: identification asks a question and binds a
+        definition, and every command still goes through the job routes.
+        """
+        if not _token_ok(request):
+            return _unauthorized()
+        if mcp is None:
+            return JSONResponse(
+                {"error": "not_available", "detail": "this server has no tools"},
+                status_code=503,
+            )
+        name = request.path_params["resource_name"]
+        body = await _read_json(request)
+        audit.record_event(
+            "instrument_identify_requested",
+            severity="info",
+            owner=body.get("owner") or "web-ui",
+            client_id="control-plane",
+            tool_name="control.identify_instrument",
+            resource=name,
+        )
+        try:
+            result = await mcp.call_tool(
+                "identify_instrument", {"resource_name": name}
+            )
+        except LookupError:
+            # Only backends whose instruments announce themselves have this.
+            return JSONResponse(
+                {
+                    "error": "not_available",
+                    "detail": "this server does not expose identify_instrument",
+                },
+                status_code=503,
+            )
+        except Exception as exc:  # noqa: BLE001 - report, never crash the plane
+            return JSONResponse(
+                {"error": "identify_failed", "detail": str(exc)}, status_code=502
+            )
+        value = _tool_value(result)
+        if _section_failed(value):
+            return JSONResponse(
+                {"resource_name": name, "result": value}, status_code=502
+            )
+        return JSONResponse({"resource_name": name, "result": value})
 
     # ---------- plans (read-only) ----------
     # Checking and rendering a plan performs no instrument I/O, which is what
@@ -748,6 +809,10 @@ def create_control_app(
         Route(
             "/control/instruments/{resource_name:path}/state",
             instrument_state, methods=["GET"],
+        ),
+        Route(
+            "/control/instruments/{resource_name:path}/identify",
+            identify_instrument, methods=["POST"],
         ),
         Route(
             "/control/instruments/{resource_name:path}",
