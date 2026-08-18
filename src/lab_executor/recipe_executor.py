@@ -1438,6 +1438,7 @@ async def execute_recipe(
     override_safety: bool = False,
     override_reason: str = "",
     session_resolver: SessionResolver | None = None,
+    recipe_library: Any = None,
 ) -> dict:
     """
     指定の recipe を実行する。
@@ -1453,7 +1454,12 @@ async def execute_recipe(
             "message": "機器定義が読み込まれていません",
         }
 
-    recipe: RecipeDefinition | None = session.definition.recipes.get(recipe_name)
+    # v2.39.0: 定義のレシピを優先し、無ければ利用者のライブラリを見る。
+    from lab_executor.recipe_library import resolve_recipe
+
+    recipe: RecipeDefinition | None = resolve_recipe(
+        recipe_name, session.definition, recipe_library,
+    )
     if recipe is None:
         return {
             "success": False,

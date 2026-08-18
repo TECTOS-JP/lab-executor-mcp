@@ -50,7 +50,8 @@ def _make_session_manager_for_backend(backend: "InstrumentBackend"):
 
 def _make_job_manager(backend: "InstrumentBackend",
                        session_facade: Any,
-                       store_path: Any = None):
+                       store_path: Any = None,
+                       recipe_dir: Any = None):
     """v2.1: JobManager を MockBackend と組み合わせて生成。
 
     JobManager は `visa: VisaManager` を要求する設計だが、v2.1 の
@@ -63,13 +64,19 @@ def _make_job_manager(backend: "InstrumentBackend",
     """
     # 遅延 import (PyVISA 不要)
     from lab_executor.job import JobManager, JobStore
+    from lab_executor.recipe_library import RecipeLibrary, default_recipe_dir
+
     store = JobStore(store_path) if store_path else JobStore(":memory:")
+    # v2.39.0: 利用者が書いたレシピの置き場。既定の場所を常に見る (無ければ
+    # 空として扱われる) ので、どの backend から serve しても同じレシピが使える。
+    library = RecipeLibrary(recipe_dir or default_recipe_dir())
     # v2.2.0: `backend=` keyword 推奨経路で渡す (`visa=` は
     # DeprecationWarning 経路、v3 で削除候補)。
     job_mgr = JobManager(
         backend=backend,
         session_mgr=session_facade,
         store=store,
+        recipe_library=library,
     )
     return job_mgr
 
@@ -80,6 +87,7 @@ def compose_server(
     name: str = "lab-executor",
     enable_experimental: bool = True,
     store_path: Any = None,
+    recipe_dir: Any = None,
 ) -> "tuple[FastMCP, Any]":
     """v2.23.0 (Web UI M4): MCP server と JobManager を合成して返す。
 
@@ -106,7 +114,8 @@ def compose_server(
     mcp = FastMCP(name=name)
     session_facade = _make_session_manager_for_backend(backend)
     job_mgr = _make_job_manager(backend, session_facade,
-                                 store_path=store_path)
+                                 store_path=store_path,
+                                 recipe_dir=recipe_dir)
 
     # tools/* を順に register。各 register_tools は v1.0 凍結の MCP
     # tool 名 / 引数 / response を expose する。

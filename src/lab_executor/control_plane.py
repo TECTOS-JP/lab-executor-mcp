@@ -190,6 +190,7 @@ def create_control_app(
     from lab_executor.audit import AuditStore
     from lab_executor.job import CancelMode
     from lab_executor.job.state_machine import is_terminal
+    from lab_executor.recipe_library import RecipeLibraryError, parse_recipe
 
     _pid = pid if pid is not None else os.getpid()
     _started_at = started_at or _now_iso()
@@ -371,6 +372,163 @@ def create_control_app(
             response=result,
         )
         return JSONResponse(result)
+
+    # ---------- recipe library ----------
+    # Recipes an operator wrote live in files the serve process owns, so that
+    # the runtime which will execute one is also the thing that parses and
+    # validates it. Editing them is not instrument I/O; running one is, and
+    # that still goes through start-recipe below.
+
+    def _library():
+        return getattr(job_mgr, "recipe_library", None)
+
+    def _reserved_names() -> set[str]:
+        """Recipe names the instrument definitions already use."""
+        names: set[str] = set()
+        sessions = getattr(job_mgr, "session_manager", None)
+        lister = getattr(sessions, "list_sessions", None)
+        getter = getattr(sessions, "get_session", None)
+        if lister is None or getter is None:
+            return names
+        try:
+            for resource in lister():
+                session = getter(resource)
+                definition = getattr(session, "definition", None)
+                names |= set(getattr(definition, "recipes", None) or {})
+        except Exception:  # noqa: BLE001 - naming guard, never fatal
+            return names
+        return names
+
+    async def recipes(request: Request) -> JSONResponse:
+        if not _token_ok(request):
+            return _unauthorized()
+        library = _library()
+        if library is None:
+            return JSONResponse(
+                {"error": "not_available", "detail": "この serve はレシピ置き場を持ちません"},
+                status_code=503,
+            )
+        return JSONResponse({
+            "directory": str(library.directory),
+            "recipes": [
+                {
+                    "name": r.name,
+                    "description": r.description,
+                    "step_count": r.step_count,
+                    "parameters": list(r.parameters),
+                    "error": r.error,
+                }
+                for r in library.list()
+            ],
+        })
+
+    async def recipe_detail(request: Request) -> JSONResponse:
+        if not _token_ok(request):
+            return _unauthorized()
+        library = _library()
+        if library is None:
+            return JSONResponse(
+                {"error": "not_available", "detail": "この serve はレシピ置き場を持ちません"},
+                status_code=503,
+            )
+        name = request.path_params["name"]
+        try:
+            text = library.read_text(name)
+        except RecipeLibraryError as exc:
+            return JSONResponse({"error": "not_found", "detail": str(exc)}, 404)
+        return JSONResponse({"name": name, "text": text})
+
+    async def recipe_save(request: Request) -> JSONResponse:
+        """Write a recipe, but only one the runtime has agreed it can run."""
+        if not _token_ok(request):
+            return _unauthorized()
+        library = _library()
+        if library is None:
+            return JSONResponse(
+                {"error": "not_available", "detail": "この serve はレシピ置き場を持ちません"},
+                status_code=503,
+            )
+        name = request.path_params["name"]
+        body = await _read_json(request)
+        text = body.get("text")
+        if not isinstance(text, str) or not text.strip():
+            return JSONResponse(
+                {"error": "invalid_request", "detail": "text は必須です"},
+                status_code=422,
+            )
+        try:
+            library.save(name, text, reserved=_reserved_names())
+        except RecipeLibraryError as exc:
+            return JSONResponse(
+                {"error": "invalid_recipe", "detail": str(exc)}, status_code=422
+            )
+        audit.record_event(
+            "recipe_saved",
+            severity="info",
+            owner=body.get("owner") or "web-ui",
+            client_id="control-plane",
+            tool_name="control.recipe_save",
+            request={"name": name},
+        )
+        return JSONResponse({"name": name, "saved": True})
+
+    async def recipe_check(request: Request) -> JSONResponse:
+        """Read a recipe without writing it, so an editor can show problems."""
+        if not _token_ok(request):
+            return _unauthorized()
+        body = await _read_json(request)
+        text = body.get("text")
+        if not isinstance(text, str):
+            return JSONResponse(
+                {"error": "invalid_request", "detail": "text は必須です"},
+                status_code=422,
+            )
+        try:
+            recipe = parse_recipe(text)
+        except RecipeLibraryError as exc:
+            return JSONResponse({"valid": False, "detail": str(exc)})
+        return JSONResponse({
+            "valid": True,
+            "description": recipe.description,
+            "step_count": len(recipe.steps),
+            "parameters": [
+                {
+                    "name": p.name,
+                    "type": p.type,
+                    "required": p.required,
+                    "description": p.description,
+                    "default": p.default,
+                    "unit": getattr(p, "unit", ""),
+                }
+                for p in recipe.parameters
+            ],
+        })
+
+    async def recipe_delete(request: Request) -> JSONResponse:
+        if not _token_ok(request):
+            return _unauthorized()
+        library = _library()
+        if library is None:
+            return JSONResponse(
+                {"error": "not_available", "detail": "この serve はレシピ置き場を持ちません"},
+                status_code=503,
+            )
+        name = request.path_params["name"]
+        try:
+            removed = library.delete(name)
+        except RecipeLibraryError as exc:
+            return JSONResponse({"error": "invalid_name", "detail": str(exc)}, 422)
+        if not removed:
+            return JSONResponse({"error": "not_found", "detail": name}, status_code=404)
+        audit.record_event(
+            "recipe_deleted",
+            severity="warning",
+            owner="web-ui",
+            client_id="control-plane",
+            tool_name="control.recipe_delete",
+            request={"name": name},
+        )
+        return JSONResponse({"name": name, "deleted": True})
 
     async def start_recipe(request: Request) -> JSONResponse:
         if not _token_ok(request):
@@ -828,6 +986,11 @@ def create_control_app(
         Route(
             "/control/jobs/start-recipe", start_recipe, methods=["POST"]
         ),
+        Route("/control/recipes", recipes, methods=["GET"]),
+        Route("/control/recipes/check", recipe_check, methods=["POST"]),
+        Route("/control/recipes/{name}", recipe_detail, methods=["GET"]),
+        Route("/control/recipes/{name}", recipe_save, methods=["PUT"]),
+        Route("/control/recipes/{name}", recipe_delete, methods=["DELETE"]),
     ]
     return Starlette(routes=routes)
 

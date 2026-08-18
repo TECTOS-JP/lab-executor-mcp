@@ -49,6 +49,7 @@ from lab_executor.job.scheduler import (
     QueuePolicy,
 )
 from lab_executor.recipe_executor import recipe_to_plan
+from lab_executor.recipe_library import RecipeLibrary, resolve_recipe
 from lab_executor.step_executor import execute_command_step, execute_wait_step
 from lab_executor.polling_executor import (
     execute_wait_until,
@@ -149,6 +150,7 @@ class JobManager:
         system_config: SystemConfig | None = None,
         *,
         backend: "VisaManager | None" = None,
+        recipe_library: "RecipeLibrary | None" = None,
     ) -> None:
         # v2.2.0: `backend=` keyword を推奨。`visa=` は互換維持
         # (lab-executor-mcp v3.x で削除候補)。
@@ -183,6 +185,9 @@ class JobManager:
         self._scheduler = scheduler or ResourceScheduler()
         # v0.6.0: SystemConfig (alias/bus/groups/units 解決用)
         self._system_config = system_config or SystemConfig()
+        # v2.39.0: 利用者が書いたレシピの置き場 (定義に無いレシピの解決先)。
+        # None なら従来どおり機器定義のレシピだけを見る。
+        self._recipe_library = recipe_library
         # 起動時に running/waiting/cancelling/queued を interrupted に遷移
         self._store.mark_interrupted_on_startup()
         # v0.9.3: AuditStore + stale lock 解放
@@ -241,6 +246,15 @@ class JobManager:
     def session_manager(self) -> SessionManager:
         """Public accessor for the SessionManager (v0.8.2.1, used by Observation API)."""
         return self._sessions
+
+    @property
+    def recipe_library(self):
+        """Where recipes an operator wrote are kept, or ``None``.
+
+        The control plane edits through this so that the runtime which will
+        execute a recipe is the one that parses and validates it.
+        """
+        return self._recipe_library
 
     @property
     def backend(self):
@@ -357,7 +371,9 @@ class JobManager:
                 error_class="not_found",
                 summary=f"{resource_name} は未識別、または YAML 定義がありません。",
             )
-        recipe = session.definition.recipes.get(recipe_name)
+        recipe = resolve_recipe(
+            recipe_name, session.definition, self._recipe_library,
+        )
         if recipe is None:
             return self._record_immediate_failure(
                 resource_name, recipe_name, parameters,
@@ -1987,7 +2003,10 @@ class JobManager:
                             f"{primary_alias} (→ {primary_resource}) は未識別です"
                         ),
                     )
-                recipe = primary_session.definition.recipes.get(recipe_name)
+                recipe = resolve_recipe(
+                    recipe_name, primary_session.definition,
+                    self._recipe_library,
+                )
                 if recipe is None:
                     return self._record_immediate_failure(
                         resource_name="", recipe_name=f"<map:{recipe_name}>",
@@ -2812,7 +2831,9 @@ class JobManager:
             )
             return
 
-        recipe = session.definition.recipes.get(rec.recipe)
+        recipe = resolve_recipe(
+            rec.recipe, session.definition, self._recipe_library,
+        )
         if recipe is None:
             self._store.transition_status(
                 job_id, JobStatus.FAILED,
