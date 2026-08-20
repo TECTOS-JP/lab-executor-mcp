@@ -388,6 +388,19 @@ class _StepConverter:
                     f"{spath}: ネストしたシーケンス内の {st} は未対応です"
                 )
 
+            if st == "sweep":
+                # v2.40.0: 掃引。値の数だけ body を複製する compile 時展開なので、
+                # IR にも実行器にも新しい概念を持ち込まない。展開後は
+                # 普通のリテラル引数になるため、安全検査も通常の引数と
+                # 同じ経路 (safety_validator) で行われる。
+                expanded, est = self._convert_sweep(
+                    rs, defined_steps, defined_vars, env_names,
+                    branch_depth, spath, nested,
+                )
+                out.extend(expanded)
+                estimate += est
+                continue
+
             if st == "compute":
                 out.append(self._convert_compute(
                     rs, defined_steps, defined_vars, env_names, spath,
@@ -996,6 +1009,78 @@ class _StepConverter:
 
         step = BranchStep(cases=cases, description=rs.description)
         return step, 1 + (max(case_estimates) if case_estimates else 0)
+
+    def _convert_sweep(
+        self, rs, defined_steps, defined_vars, env_names,
+        branch_depth, spath, nested,
+    ):
+        """掃引を、値の数だけ複製した平らなステップ列に展開する。
+
+        反復 (repeat) との違いは解決の時点にある。掃引の値は
+        **コンパイル時に確定する**ので、body の中では通常のパラメータ
+        (``$name``) として参照でき、展開後は普通のリテラル引数になる。
+        実行時に決まる ``${...}`` のように範囲宣言を要求しないのは、
+        値が実行前に確定していて dry-run でそのまま読めるからである
+        (検査そのものは通常の引数と同じ safety_validator が行う)。
+
+        戻り値は (展開済みステップ列, 静的見積り)。
+        """
+        from lab_executor.dsl.schema import MAX_SWEEP_POINTS, SweepValues
+
+        sw = rs.sweep or {}
+        parameter = sw.get("parameter")
+        if not isinstance(parameter, str) or not parameter:
+            raise SeqExpressionError(f"{spath}: sweep には parameter が必要です")
+        if parameter in ("params", "steps", "vars", "env", "value", "np"):
+            raise SeqExpressionError(
+                f"{spath}: sweep.parameter に予約語は使えません: {parameter}"
+            )
+        raw_steps = sw.get("steps")
+        if not isinstance(raw_steps, list) or not raw_steps:
+            raise SeqExpressionError(f"{spath}: sweep には steps が必要です")
+
+        try:
+            values = SweepValues(**(sw.get("values") or {})).expand()
+        except Exception as exc:  # noqa: BLE001 - 検証理由をそのまま伝える
+            raise SeqExpressionError(f"{spath}: sweep.values が不正です: {exc}")
+        if len(values) > MAX_SWEEP_POINTS:
+            raise SeqExpressionError(
+                f"{spath}: sweep の展開点数 {len(values)} が上限 "
+                f"{MAX_SWEEP_POINTS} を超えています"
+            )
+
+        # 掃引変数は body の中だけで有効。同名のパラメータがあれば退避して戻す。
+        had_previous = parameter in self.variables
+        previous = self.variables.get(parameter)
+
+        expanded: list = []
+        estimate = 0
+        try:
+            for index, value in enumerate(values):
+                self.variables[parameter] = value
+                steps, est = self.convert(
+                    raw_steps,
+                    defined_steps=defined_steps,
+                    defined_vars=defined_vars,
+                    env_names=env_names,
+                    branch_depth=branch_depth,
+                    nested=nested,
+                    path=f"{spath}/sweep[{index}]",
+                )
+                expanded.extend(steps)
+                estimate += est
+        finally:
+            if had_previous:
+                self.variables[parameter] = previous
+            else:
+                self.variables.pop(parameter, None)
+
+        if estimate > MAX_TOTAL_STEPS_ESTIMATE:
+            raise SeqExpressionError(
+                f"{spath}: sweep 展開後のステップ数 {estimate} が上限 "
+                f"{MAX_TOTAL_STEPS_ESTIMATE} を超えています"
+            )
+        return expanded, estimate
 
     def _convert_repeat(
         self, rs: RecipeStep,

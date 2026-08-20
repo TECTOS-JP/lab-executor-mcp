@@ -290,6 +290,10 @@ class RecipeStep(BaseModel):
     wait_for_stable: dict[str, Any] | None = None
     # v0.6.1: barrier (Map/Group Job 内 target 間同期)
     barrier: dict[str, Any] | None = None    # {"name": "...", "timeout_s": 60.0}
+    # v2.40.0: sweep (値を振りながら body を繰り返す)。DSL の sweep と同じ形。
+    # コンパイル時に値の数だけ body を複製して展開する。
+    # {"parameter": "v", "values": {...}, "steps": [...]}
+    sweep: dict[str, Any] | None = None
 
     @model_validator(mode="after")
     def _exactly_one_step_type(self) -> "RecipeStep":
@@ -300,6 +304,7 @@ class RecipeStep(BaseModel):
             "wait_for_condition": self.wait_for_condition is not None,
             "wait_for_stable":    self.wait_for_stable is not None,
             "barrier":            self.barrier is not None,
+            "sweep":              self.sweep is not None,
             "compute":            self.compute is not None,
             "branch":             self.branch is not None,
             "repeat":             self.repeat is not None,
@@ -313,8 +318,9 @@ class RecipeStep(BaseModel):
         if len(active) > 1:
             raise ValueError(
                 f"RecipeStep には command / wait / wait_until / wait_for_condition / "
-                f"wait_for_stable / barrier / compute / branch / repeat / guard / pause / "
-                f"py / dll のうち 1 つだけを指定してください (検出: {active})"
+                f"wait_for_stable / barrier / sweep / compute / branch / repeat / "
+                f"guard / pause / py / dll のうち 1 つだけを指定してください "
+                f"(検出: {active})"
             )
         if not active:
             raise ValueError(
@@ -548,6 +554,7 @@ class RecipeStep(BaseModel):
         if self.wait_for_condition is not None: return "wait_for_condition"
         if self.wait_for_stable is not None: return "wait_for_stable"
         if self.barrier is not None: return "barrier"
+        if self.sweep is not None: return "sweep"
         if self.compute is not None: return "compute"
         if self.branch is not None: return "branch"
         if self.repeat is not None: return "repeat"
